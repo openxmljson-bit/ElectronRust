@@ -751,16 +751,30 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     let node = node_arg(doc, req, "node")?;
     let mut budget = geti(req, "budget", 50_000).clamp(100, 300_000);
 
+    // On budget exhaustion, show what was built plus a marker rather than
+    // failing or dumping raw bytes — a formatted preview beats a wall of text.
+    fn finish(mut out: String, res: Result<(), String>, lang: &str) -> Result<Value, String> {
+        match res {
+            Ok(()) => Ok(json!({"text": out, "language": lang, "truncated": false})),
+            Err(e) if !out.is_empty() => {
+                out.push_str("\n\n… truncated preview — select a smaller node to see its full source");
+                let _ = e;
+                Ok(json!({"text": out, "language": lang, "truncated": true}))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     // XML and CSV need reconstruction (their windows don't span subtrees).
     if doc.format == Format::Xml {
         let mut out = String::new();
-        build_xml_mem(doc, node, &mut out, 0, &mut budget)?;
-        return Ok(json!({"text": out, "language": "xml", "truncated": false}));
+        let r = build_xml_mem(doc, node, &mut out, 0, &mut budget);
+        return finish(out, r, "xml");
     }
     if matches!(doc.format, Format::Csv | Format::Tsv) {
         let mut out = String::new();
-        build_csv_json(doc, node, &mut out, 0, &mut budget)?;
-        return Ok(json!({"text": out, "language": "json", "truncated": false}));
+        let r = build_csv_json(doc, node, &mut out, 0, &mut budget);
+        return finish(out, r, "json");
     }
 
     // JSON: container windows cover the entire subtree — slice the source.
@@ -777,6 +791,12 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     };
     let t = doc.index.node(target);
     if t.len > SUBTREE_MAX_BYTES {
+        // Too big to show raw — containers still get a formatted preview.
+        if matches!(t.kind, NodeKind::Object | NodeKind::Array | NodeKind::Document) {
+            let mut out = String::new();
+            let r = build_json_mem(doc, target, &mut out, 0, &mut budget);
+            return finish(out, r, "json");
+        }
         return Err(String::from("subtree too large to render as source"));
     }
     let mut text = match t.kind {
@@ -795,9 +815,8 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
         && looks_minified(&text)
     {
         let mut out = String::new();
-        if build_json_mem(doc, target, &mut out, 0, &mut budget).is_ok() {
-            text = out;
-        } // on budget overflow, fall back to the raw (minified) slice
+        let r = build_json_mem(doc, target, &mut out, 0, &mut budget);
+        return finish(out, r, "json");
     }
     Ok(json!({"text": text, "language": "json", "truncated": false}))
 }
