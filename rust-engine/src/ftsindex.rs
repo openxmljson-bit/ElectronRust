@@ -80,6 +80,8 @@ pub fn run(dbp: &str) -> Result<(), String> {
         );
         flush();
     }
+    println!("{}", json!({"event":"phase","phase":"optimize"}));
+    flush();
     let _ = conn.execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('optimize');");
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('fts_built','1')",

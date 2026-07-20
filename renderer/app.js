@@ -1123,6 +1123,8 @@ window.oxj.onIndexProgress((m) => {
   if (m.event === 'progress' && m.total > 0) {
     const pct = Math.min(100, (m.done / m.total) * 100).toFixed(0);
     $('index-note').textContent = 'Building index… ' + pct + '%';
+  } else if (m.event === 'phase' && m.phase === 'optimize') {
+    $('index-note').textContent = 'Finalizing index (optimize)… this can take a few minutes';
   }
 });
 
