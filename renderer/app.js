@@ -374,6 +374,14 @@ async function refreshCacheInfo() {
   addRow('Cache size', fmtBytes(info.totalBytes));
   addRow('Search indexes', info.indexCount ? fmtInt(info.indexCount) + ' · ' + fmtBytes(info.indexBytes) : 'None');
   addRow('Size limit', info.limitGb === 0 ? 'Unlimited' : info.limitGb + ' GB');
+  if (info.ramTotal) {
+    addRow('Free RAM', fmtBytes(info.ramFree) + ' of ' + fmtBytes(info.ramTotal));
+    const mode = info.engineMode || 'auto';
+    addRow('RAM mode',
+      mode === 'db' ? 'Off (always database)'
+      : mode === 'memory' ? 'Always on'
+      : 'Files up to ' + fmtBytes(info.memModeLimit));
+  }
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
 

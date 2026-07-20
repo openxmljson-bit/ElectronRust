@@ -1077,6 +1077,10 @@ app.whenReady().then(() => {
       tempCount,
       indexBytes,
       indexCount,
+      ramFree: os.freemem(),
+      ramTotal: os.totalmem(),
+      memModeLimit: Math.min(MEM_MAX_BYTES, os.freemem() * MEM_FREE_FRACTION),
+      engineMode: getSettings().engineMode || 'auto',
     };
   });
 
