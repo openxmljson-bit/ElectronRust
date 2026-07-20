@@ -799,7 +799,7 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
         }
         return Err(String::from("subtree too large to render as source"));
     }
-    let mut text = match t.kind {
+    let text = match t.kind {
         NodeKind::String => doc.raw_text(target), // includes quotes
         NodeKind::Null => String::from("null"),
         _ => doc.raw_text(target),
