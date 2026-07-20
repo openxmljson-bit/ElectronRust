@@ -677,6 +677,13 @@ function createWindow() {
   return win;
 }
 
+// "verylongfilename…part_1.json" — keeps the extension visible.
+function middleTruncate(s, max) {
+  if (s.length <= max) return s;
+  const tail = Math.min(16, Math.floor(max / 3));
+  return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
+}
+
 function sendMenu(bw, action, arg) {
   const w = bw || BrowserWindow.getFocusedWindow();
   if (w && !w.isDestroyed()) w.webContents.send('menu', { action, arg });
@@ -699,7 +706,8 @@ function buildMenu() {
           label: 'Open Recent',
           submenu: [
             ...recents.map((r) => ({
-              label: r.path,
+              label: middleTruncate(path.basename(r.path), 56),
+              toolTip: r.path,
               click: (mi, bw) => sendMenu(bw, 'open-path', r.path),
             })),
             { type: 'separator' },

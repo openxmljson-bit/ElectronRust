@@ -294,6 +294,12 @@ function toast(msg, info) {
   toast._t = setTimeout(() => t.classList.add('hidden'), info ? 3500 : 6000);
 }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
+// Middle-ellipsis so the extension always stays visible.
+function middleTruncate(s, max) {
+  if (s.length <= max) return s;
+  const tail = Math.min(16, Math.floor(max / 3));
+  return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
+}
 function cleanErr(err) {
   return String((err && err.message) || err).replace(/^.*Error:\s*/, '');
 }
@@ -312,7 +318,7 @@ async function refreshRecents() {
     item.title = r.path; // full path on hover
     const name = document.createElement('span');
     name.className = 'recent-name';
-    name.textContent = baseName(r.path);
+    name.textContent = middleTruncate(baseName(r.path), 42);
     const size = document.createElement('span');
     size.className = 'recent-size';
     size.textContent = fmtBytes(r.size);
