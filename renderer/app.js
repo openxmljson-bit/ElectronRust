@@ -147,8 +147,6 @@ function renderTabs() {
   }
 }
 
-$('btn-new-tab').addEventListener('click', () => newTab(true));
-
 // ---------- screen switching ----------
 function renderScreen() {
   const t = cur;
