@@ -20,24 +20,34 @@
   "build": {
     "appId": "com.openxmljson.app",
     "productName": "OPENXMLJSON",
+    "directories": {
+      "buildResources": "build"
+    },
     "files": [
       "main.js",
       "preload.js",
-      "renderer/**",
-      "node_modules/monaco-editor/min/**"
-    ],
-    "extraResources": [
-      {
-        "from": "rust-engine/target/release/openjsonxml-engine",
-        "to": "engine/openjsonxml-engine"
-      }
+      "renderer/**"
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "extraResources": [
+        {
+          "from": "rust-engine/target/release/openjsonxml-engine",
+          "to": "engine/openjsonxml-engine"
+        }
+      ]
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "rust-engine/target/release/openjsonxml-engine.exe",
+          "to": "engine/openjsonxml-engine.exe"
+        }
+      ]
     }
   },
   "allowScripts": {
