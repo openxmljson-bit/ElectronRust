@@ -742,7 +742,7 @@ function buildMenu() {
       ],
     },
     {
-      label: 'Cache',
+      label: 'Cache Manager',
       submenu: [
         { label: 'Cache Size: ' + fmtBytes(cacheTotalSize()), enabled: false },
         { type: 'separator' },
