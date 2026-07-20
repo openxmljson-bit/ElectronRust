@@ -305,7 +305,8 @@ body {
 /* Watermark (welcome screen, bottom-right, theme-aware) */
 .watermark {
   position: absolute;
-  right: 26px;
+  right: 18px;           /* flush with the side cards */
+  margin-right: -10px;   /* cancel the trailing letter-spacing gap */
   bottom: 14px;
   font-size: 80px;
   font-weight: 800;
