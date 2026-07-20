@@ -864,7 +864,12 @@ function activeScroller() {
 }
 function updateTopBtn() {
   const sc = activeScroller();
-  $('btn-top').classList.toggle('hidden', !sc || sc.scrollTop < 600);
+  const btn = $('btn-top');
+  btn.classList.toggle('hidden', !sc || sc.scrollTop < 600);
+  // Anchor inside whichever view is active, so it hugs the tree/table edge
+  // rather than floating over the Source panel.
+  const wrap = cur && cur.view === 'table' ? $('table-wrap') : $('tree-wrap');
+  if (btn.parentElement !== wrap) wrap.appendChild(btn);
 }
 $('btn-top').addEventListener('click', () => {
   const sc = activeScroller();
