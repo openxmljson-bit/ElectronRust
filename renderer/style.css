@@ -307,9 +307,9 @@ body {
   position: absolute;
   right: 26px;
   bottom: 14px;
-  font-size: 40px;
+  font-size: 80px;
   font-weight: 800;
-  letter-spacing: 6px;
+  letter-spacing: 10px;
   color: var(--fg);
   opacity: .07;
   pointer-events: none;
