@@ -657,6 +657,96 @@ fn build_csv_json(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &
     Ok(())
 }
 
+// Pretty-print JSON from the index using raw token windows: key order,
+// escapes and number formatting stay exactly as authored.
+fn build_json_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
+    *budget -= 1;
+    if *budget < 0 {
+        return Err(String::from("subtree too large to render as source"));
+    }
+    if indent > 512 {
+        return Err(String::from("subtree too deep"));
+    }
+    let n = doc.index.node(id);
+    let pad = "  ".repeat(indent + 1);
+    let pad_end = "  ".repeat(indent);
+    match n.kind {
+        NodeKind::Document => {
+            let kids: Vec<u32> = doc.index.children(id).collect();
+            if kids.len() == 1 {
+                build_json_mem(doc, kids[0], out, indent, budget)?;
+            } else {
+                out.push_str("[\n");
+                for (i, k) in kids.iter().enumerate() {
+                    out.push_str(&pad);
+                    build_json_mem(doc, *k, out, indent + 1, budget)?;
+                    if i + 1 < kids.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad_end);
+                out.push(']');
+            }
+        }
+        NodeKind::Object => {
+            let kids: Vec<u32> = doc.index.children(id).collect();
+            if kids.is_empty() {
+                out.push_str("{}");
+                return Ok(());
+            }
+            out.push_str("{\n");
+            for (i, k) in kids.iter().enumerate() {
+                *budget -= 1;
+                out.push_str(&pad);
+                out.push_str(&doc.raw_text(*k)); // key window includes quotes
+                out.push_str(": ");
+                let v = doc.index.node(*k).first_child;
+                if v == NIL {
+                    out.push_str("null");
+                } else {
+                    build_json_mem(doc, v, out, indent + 1, budget)?;
+                }
+                if i + 1 < kids.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad_end);
+            out.push('}');
+        }
+        NodeKind::Array => {
+            let kids: Vec<u32> = doc.index.children(id).collect();
+            if kids.is_empty() {
+                out.push_str("[]");
+                return Ok(());
+            }
+            out.push_str("[\n");
+            for (i, k) in kids.iter().enumerate() {
+                out.push_str(&pad);
+                build_json_mem(doc, *k, out, indent + 1, budget)?;
+                if i + 1 < kids.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad_end);
+            out.push(']');
+        }
+        NodeKind::Key => {
+            let v = n.first_child;
+            if v == NIL {
+                out.push_str("null");
+            } else {
+                build_json_mem(doc, v, out, indent, budget)?;
+            }
+        }
+        NodeKind::Null => out.push_str("null"),
+        _ => out.push_str(&doc.raw_text(id)), // scalars: raw token (strings keep quotes)
+    }
+    Ok(())
+}
+
 fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     let node = node_arg(doc, req, "node")?;
     let mut budget = geti(req, "budget", 50_000).clamp(100, 300_000);
@@ -689,11 +779,22 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     if t.len > SUBTREE_MAX_BYTES {
         return Err(String::from("subtree too large to render as source"));
     }
-    let text = match t.kind {
+    let mut text = match t.kind {
         NodeKind::String => doc.raw_text(target), // includes quotes
         NodeKind::Null => String::from("null"),
         _ => doc.raw_text(target),
     };
+    // Minified container (typical for API responses): rebuild pretty from
+    // the index. Already-formatted sources keep their original layout.
+    if matches!(t.kind, NodeKind::Object | NodeKind::Array | NodeKind::Document)
+        && text.len() > 120
+        && !text.contains('\n')
+    {
+        let mut out = String::new();
+        if build_json_mem(doc, target, &mut out, 0, &mut budget).is_ok() {
+            text = out;
+        } // on budget overflow, fall back to the raw (minified) slice
+    }
     Ok(json!({"text": text, "language": "json", "truncated": false}))
 }
 
