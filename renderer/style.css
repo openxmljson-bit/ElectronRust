@@ -626,17 +626,15 @@ body.light {
 }
 .index-note { color: var(--accent); font-size: 11.5px; }
 
-/* Amber highlight for search matches in the tree */
-.trow.match { background: rgba(230, 165, 86, .14); }
-.trow.match.zebra { background: rgba(230, 165, 86, .18); }
-.trow.match .tval, .trow.match .tkey {
-  background: rgba(230, 165, 86, .38);
+/* Search matches: only the matched substring is chipped */
+.trow.match { box-shadow: inset 2px 0 0 rgba(230, 165, 86, .8); }
+.hl {
+  background: rgba(230, 165, 86, .45);
   border-radius: 3px;
-  padding: 0 3px;
+  padding: 0 1px;
+  color: inherit;
 }
-body.light .trow.match { background: rgba(214, 138, 40, .14); }
-body.light .trow.match.zebra { background: rgba(214, 138, 40, .18); }
-body.light .trow.match .tval, body.light .trow.match .tkey { background: rgba(214, 138, 40, .30); }
+body.light .hl { background: rgba(214, 138, 40, .35); }
 .trow.match.selected { background: var(--sel); }
 
 .search-results { flex: 1; overflow-y: auto; }

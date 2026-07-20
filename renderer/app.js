@@ -802,6 +802,26 @@ function kindBadge(e) {
   return '';
 }
 
+// Append text with occurrences of `q` wrapped in .hl spans (case-insensitive).
+function appendHighlighted(el, text, q) {
+  if (!q) { el.textContent = text; return; }
+  const lower = text.toLowerCase();
+  const ql = q.toLowerCase();
+  let from = 0;
+  let i;
+  let guard = 0;
+  while (guard < 50 && (i = lower.indexOf(ql, from)) !== -1) {
+    if (i > from) el.appendChild(document.createTextNode(text.slice(from, i)));
+    const m = document.createElement('span');
+    m.className = 'hl';
+    m.textContent = text.slice(i, i + q.length);
+    el.appendChild(m);
+    from = i + q.length;
+    guard++;
+  }
+  el.appendChild(document.createTextNode(text.slice(from)));
+}
+
 function buildRow(t, e, idx) {
   const row = document.createElement('div');
   row.className = 'trow' + (idx % 2 ? ' zebra' : '') + (idx === t.selectedIdx ? ' selected' : '') +
@@ -843,9 +863,14 @@ function buildRow(t, e, idx) {
   tw.textContent = e.expanded ? '▼' : '▶';
   row.appendChild(tw);
 
+  const nav = matchNav && matchNav.tabId === t.id ? matchNav : null;
+  const isMatch = nav && t.matchSet && t.matchSet.has(e.id);
+
   const key = document.createElement('span');
   key.className = 'tkey' + (e.kind === K.ELEM ? ' xml' : '') + (e.kind === K.ATTR ? ' attr' : '');
-  key.textContent = e.kind === K.ELEM ? '<' + e.label + '>' : e.kind === K.ATTR ? '@' + e.label : e.label;
+  const keyText = e.kind === K.ELEM ? '<' + e.label + '>' : e.kind === K.ATTR ? '@' + e.label : e.label;
+  if (isMatch && nav.scope !== 'values') appendHighlighted(key, keyText, nav.q);
+  else key.textContent = keyText;
   row.appendChild(key);
 
   if (e.kind === K.OBJ || e.kind === K.ARR || (e.kind === K.ELEM && e.n > 0)) {
@@ -870,7 +895,8 @@ function buildRow(t, e, idx) {
     else if (e.kind === K.TEXT || e.kind === K.ATTR) cls += ' str';
     if (text.length > 500) text = text.slice(0, 500) + '…';
     val.className = cls;
-    val.textContent = text;
+    if (isMatch && nav.scope !== 'keys') appendHighlighted(val, text, nav.q);
+    else val.textContent = text;
     row.appendChild(val);
     if (e.vlen > 4096) {
       const note = document.createElement('span');
