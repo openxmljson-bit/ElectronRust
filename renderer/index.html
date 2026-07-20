@@ -91,7 +91,10 @@
           <option value="keys">Keys</option>
           <option value="values">Values</option>
         </select>
-        <input id="search-box" type="search" placeholder="Search… (Enter)" title='Substring search. Wrap in "double quotes" for an exact match.' spellcheck="false" />
+        <input id="search-box" type="search" placeholder="Find" title='Substring search. Wrap in "double quotes" for an exact match. Enter = next match.' spellcheck="false" />
+        <button id="btn-find" class="btn-tool" title="Run search">Find</button>
+        <button id="match-prev" class="btn-tool" title="Previous match (⇧F3 / ⇧⌘G)">▲</button>
+        <button id="match-next" class="btn-tool" title="Next match (F3 / ⌘G / Enter)">▼</button>
       </div>
 
       <div id="jq-bar" class="jq-bar hidden">
@@ -107,8 +110,6 @@
       </div>
 
       <div id="match-bar" class="match-bar hidden">
-        <button id="match-prev" class="btn-tool" title="Previous match (⇧F3 / ⇧⌘G)">‹</button>
-        <button id="match-next" class="btn-tool" title="Next match (F3 / ⌘G)">›</button>
         <span id="match-count" class="match-count"></span>
         <div class="spacer"></div>
         <span id="index-note" class="index-note hidden"></span>

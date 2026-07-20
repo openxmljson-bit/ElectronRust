@@ -164,6 +164,9 @@ function renderScreen() {
     if (!jqApplicable(t)) $('jq-bar').classList.add('hidden');
     $('search-scope').classList.toggle('hidden', plain);
     $('search-box').classList.toggle('hidden', plain);
+    $('btn-find').classList.toggle('hidden', plain);
+    $('match-prev').classList.toggle('hidden', plain);
+    $('match-next').classList.toggle('hidden', plain);
     $('text-wrap').classList.toggle('hidden', !plain);
     if (plain) {
       $('view-toggle').classList.add('hidden');
@@ -932,9 +935,29 @@ let matchNav = null; // { tabId, q, scope, exact, ids, total, cur, after, hasMor
 const MATCH_PAGE = 500;
 const INDEX_SUGGEST_NODES = 2000000;
 
+// Enter behaves like the classic find bar: first press runs the search,
+// every following press steps to the next match (until the query changes).
+function currentQueryMatchesNav() {
+  if (!matchNav || !cur || matchNav.tabId !== cur.id) return false;
+  let q = $('search-box').value.trim();
+  let exact = false;
+  if (q.length > 2 && q.startsWith('"') && q.endsWith('"')) {
+    exact = true;
+    q = q.slice(1, -1);
+  }
+  return matchNav.q === q && matchNav.exact === exact && matchNav.scope === $('search-scope').value;
+}
+
 $('search-box').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') startSearch();
+  if (ev.key === 'Enter') {
+    if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
+    else startSearch();
+  }
   if (ev.key === 'Escape') { ev.target.value = ''; closeSearch(); }
+});
+$('btn-find').addEventListener('click', () => {
+  if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
+  else startSearch();
 });
 // Fires when the X inside the field is clicked (or the field is emptied).
 $('search-box').addEventListener('search', (ev) => {
