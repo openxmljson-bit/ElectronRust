@@ -477,6 +477,10 @@ window.addEventListener('drop', (e) => {
 // ---------- ingest progress ----------
 function updateProgressDom(t) {
   const pr = t.progress || {};
+  $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
+  $('prog-phase').textContent = pr.mem
+    ? 'Indexing in memory — no database needed, this is quick…'
+    : 'Building index… this can take a while on large files';
   $('prog-file').textContent = t.file || '';
   const total = pr.total || 1;
   const pct = Math.min(100, ((pr.bytes || 0) / total) * 100);
@@ -496,7 +500,8 @@ window.oxj.onProgress((msg) => {
   const pr = t.progress;
   if (msg.event === 'start') {
     pr.total = msg.total_bytes;
-    pr.startedMsg = 'Parsing (' + (msg.format || '') + ')…';
+    pr.mem = msg.format === 'memory';
+    pr.startedMsg = pr.mem ? 'Reading file into memory…' : 'Parsing (' + (msg.format || '') + ')…';
   } else if (msg.event === 'phase') {
     pr.indexing = true;
   } else if (msg.event === 'progress') {
