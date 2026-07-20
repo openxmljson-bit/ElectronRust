@@ -11,7 +11,8 @@
     "dist": "electron-builder"
   },
   "dependencies": {
-    "monaco-editor": "^0.45.0"
+    "monaco-editor": "^0.45.0",
+    "systeminformation": "^5.22.0"
   },
   "devDependencies": {
     "electron": "^31.0.0"

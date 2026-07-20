@@ -10,6 +10,19 @@ const readline = require('readline');
 const https = require('https');
 const http = require('http');
 const os = require('os');
+const si = require('systeminformation');
+
+// macOS uses "free" RAM aggressively for file caching, so os.freemem() is
+// near-useless as an availability signal. systeminformation's mem.available
+// (free + reclaimable cache) matches Activity Monitor's practical headroom.
+async function availableMemBytes() {
+  try {
+    const m = await si.mem();
+    return m.available || m.free || os.freemem();
+  } catch {
+    return os.freemem();
+  }
+}
 
 const MAX_RECENTS = 15;
 
@@ -392,13 +405,14 @@ function killIngest(tabId, deleteDb) {
 const MEM_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
 const MEM_FREE_FRACTION = 0.7;                 // ≤70% of currently free RAM
 
-function decideMode(filePath) {
+async function decideMode(filePath) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
   try {
     const size = fs.statSync(filePath).size;
-    if (size <= MEM_MAX_BYTES && size <= os.freemem() * MEM_FREE_FRACTION) return 'memory';
+    const avail = await availableMemBytes();
+    if (size <= MEM_MAX_BYTES && size <= avail * MEM_FREE_FRACTION) return 'memory';
   } catch {}
   return 'db';
 }
@@ -498,7 +512,7 @@ async function loadFile(wc, tabId, filePath, force) {
   addRecent(filePath);
 
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if (decideMode(filePath) === 'memory') {
+  if ((await decideMode(filePath)) === 'memory') {
     try {
       let size = 0;
       try { size = fs.statSync(filePath).size; } catch {}
@@ -1086,9 +1100,9 @@ app.whenReady().then(() => {
       tempCount,
       indexBytes,
       indexCount,
-      ramFree: os.freemem(),
+      ramFree: await availableMemBytes(),
       ramTotal: os.totalmem(),
-      memModeLimit: Math.min(MEM_MAX_BYTES, os.freemem() * MEM_FREE_FRACTION),
+      memModeLimit: Math.min(MEM_MAX_BYTES, (await availableMemBytes()) * MEM_FREE_FRACTION),
       engineMode: getSettings().engineMode || 'auto',
     };
   });
