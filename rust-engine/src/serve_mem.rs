@@ -491,8 +491,189 @@ fn op_search(doc: &Doc, req: &Value) -> Result<Value, String> {
 
 const SUBTREE_MAX_BYTES: u32 = 30 * 1024 * 1024;
 
+// XML: element windows only cover the tag name, so markup must be rebuilt
+// from the index. Raw windows are used for text/attribute values, keeping
+// the original escaping intact.
+fn build_xml_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
+    *budget -= 1;
+    if *budget < 0 {
+        return Err(String::from("subtree too large to render as source"));
+    }
+    if indent > 512 {
+        return Err(String::from("subtree too deep"));
+    }
+    let n = doc.index.node(id);
+    let pad = "  ".repeat(indent);
+    match n.kind {
+        NodeKind::Document => {
+            for ch in doc.index.children(id) {
+                build_xml_mem(doc, ch, out, indent, budget)?;
+            }
+        }
+        NodeKind::ElementOpen => {
+            let name = doc.raw_text(id);
+            out.push_str(&pad);
+            out.push('<');
+            out.push_str(&name);
+            let mut content: Vec<u32> = Vec::new();
+            for ch in doc.index.children(id) {
+                let c = doc.index.node(ch);
+                if c.kind == NodeKind::Attribute {
+                    *budget -= 1;
+                    let av = c.first_child;
+                    out.push(' ');
+                    out.push_str(&doc.raw_text(ch));
+                    out.push_str("=\"");
+                    if av != NIL {
+                        out.push_str(&doc.raw_text(av));
+                    }
+                    out.push('"');
+                } else {
+                    content.push(ch);
+                }
+            }
+            if content.is_empty() {
+                out.push_str("/>\n");
+            } else if content.len() == 1
+                && matches!(
+                    doc.index.node(content[0]).kind,
+                    NodeKind::Text | NodeKind::CData
+                )
+            {
+                out.push('>');
+                let c = content[0];
+                if doc.index.node(c).kind == NodeKind::CData {
+                    out.push_str("<![CDATA[");
+                    out.push_str(&doc.raw_text(c));
+                    out.push_str("]]>");
+                } else {
+                    out.push_str(doc.raw_text(c).trim());
+                }
+                out.push_str("</");
+                out.push_str(&name);
+                out.push_str(">\n");
+            } else {
+                out.push_str(">\n");
+                for c in content {
+                    build_xml_mem(doc, c, out, indent + 1, budget)?;
+                }
+                out.push_str(&pad);
+                out.push_str("</");
+                out.push_str(&name);
+                out.push_str(">\n");
+            }
+        }
+        NodeKind::Text => {
+            out.push_str(&pad);
+            out.push_str(doc.raw_text(id).trim());
+            out.push('\n');
+        }
+        NodeKind::CData => {
+            out.push_str(&pad);
+            out.push_str("<![CDATA[");
+            out.push_str(&doc.raw_text(id));
+            out.push_str("]]>\n");
+        }
+        NodeKind::Attribute => {
+            let av = n.first_child;
+            out.push_str(&pad);
+            out.push_str(&doc.raw_text(id));
+            out.push_str("=\"");
+            if av != NIL {
+                out.push_str(&doc.raw_text(av));
+            }
+            out.push_str("\"\n");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// CSV: record windows are the raw line, so rows are presented as JSON
+// objects ({header: value}) exactly like DB mode.
+fn build_csv_json(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
+    *budget -= 1;
+    if *budget < 0 {
+        return Err(String::from("subtree too large to render as source"));
+    }
+    let n = doc.index.node(id);
+    let pad = "  ".repeat(indent + 1);
+    let pad_end = "  ".repeat(indent);
+    match n.kind {
+        NodeKind::Document => {
+            let kids: Vec<u32> = doc.index.children(id).collect();
+            if kids.is_empty() {
+                out.push_str("[]");
+                return Ok(());
+            }
+            out.push_str("[\n");
+            for (i, rec) in kids.iter().enumerate() {
+                out.push_str(&pad);
+                build_csv_json(doc, *rec, out, indent + 1, budget)?;
+                if i + 1 < kids.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad_end);
+            out.push(']');
+        }
+        NodeKind::Object => {
+            let kids: Vec<u32> = doc.index.children(id).collect();
+            if kids.is_empty() {
+                out.push_str("{}");
+                return Ok(());
+            }
+            out.push_str("{\n");
+            for (i, k) in kids.iter().enumerate() {
+                *budget -= 1;
+                out.push_str(&pad);
+                out.push_str(&serde_json::to_string(&doc.key_name(*k)).unwrap_or_default());
+                out.push_str(": ");
+                let v = doc.index.node(*k).first_child;
+                if v == NIL {
+                    out.push_str("null");
+                } else {
+                    out.push_str(&serde_json::to_string(&doc.scalar_value(v)).unwrap_or_default());
+                }
+                if i + 1 < kids.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad_end);
+            out.push('}');
+        }
+        NodeKind::Key => {
+            let v = n.first_child;
+            if v == NIL {
+                out.push_str("null");
+            } else {
+                out.push_str(&serde_json::to_string(&doc.scalar_value(v)).unwrap_or_default());
+            }
+        }
+        _ => out.push_str(&serde_json::to_string(&doc.scalar_value(id)).unwrap_or_default()),
+    }
+    Ok(())
+}
+
 fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     let node = node_arg(doc, req, "node")?;
+    let mut budget = geti(req, "budget", 50_000).clamp(100, 300_000);
+
+    // XML and CSV need reconstruction (their windows don't span subtrees).
+    if doc.format == Format::Xml {
+        let mut out = String::new();
+        build_xml_mem(doc, node, &mut out, 0, &mut budget)?;
+        return Ok(json!({"text": out, "language": "xml", "truncated": false}));
+    }
+    if matches!(doc.format, Format::Csv | Format::Tsv) {
+        let mut out = String::new();
+        build_csv_json(doc, node, &mut out, 0, &mut budget)?;
+        return Ok(json!({"text": out, "language": "json", "truncated": false}));
+    }
+
+    // JSON: container windows cover the entire subtree — slice the source.
     let n = doc.index.node(node);
     let target = match n.kind {
         NodeKind::Key | NodeKind::Attribute => {
@@ -508,16 +689,12 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     if t.len > SUBTREE_MAX_BYTES {
         return Err(String::from("subtree too large to render as source"));
     }
-    let language = if doc.format == Format::Xml { "xml" } else { "json" };
     let text = match t.kind {
-        NodeKind::String if doc.format == Format::Json => doc.raw_text(target), // includes quotes
-        NodeKind::String => {
-            serde_json::to_string(&doc.scalar_value(target)).unwrap_or_default()
-        }
+        NodeKind::String => doc.raw_text(target), // includes quotes
         NodeKind::Null => String::from("null"),
         _ => doc.raw_text(target),
     };
-    Ok(json!({"text": text, "language": language, "truncated": false}))
+    Ok(json!({"text": text, "language": "json", "truncated": false}))
 }
 
 fn op_stats(doc: &Doc, req: &Value) -> Result<Value, String> {
