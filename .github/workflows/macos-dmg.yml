@@ -1,0 +1,107 @@
+name: macOS DMG (universal)
+
+on:
+  push:
+    tags: ["v*"]           # build/publish on version tags
+  workflow_dispatch: {}     # and on-demand from the Actions tab
+
+permissions:
+  contents: write           # attach the DMG to a Release on tags
+
+env:
+  HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+  HAS_NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD != '' }}
+
+jobs:
+  build:
+    runs-on: macos-14       # Apple Silicon host; cross-builds the x86_64 half
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (both architectures)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Build engine (universal via lipo)
+        run: |
+          set -euo pipefail
+          cd rust-engine
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create \
+            target/aarch64-apple-darwin/release/openjsonxml-engine \
+            target/x86_64-apple-darwin/release/openjsonxml-engine \
+            -output target/release/openjsonxml-engine
+          lipo -info target/release/openjsonxml-engine
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      # ---- signing (only when the cert secrets are configured) ----
+      - name: Import signing certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN=$RUNNER_TEMP/build.keychain-db
+          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import $RUNNER_TEMP/cert.p12 -k "$KEYCHAIN" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Sign engine binary
+        if: env.HAS_CERT == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "$SIGN_IDENTITY" \
+            rust-engine/target/release/openjsonxml-engine
+          codesign -dv rust-engine/target/release/openjsonxml-engine
+
+      # ---- package (signs the app; notarizes when notary secrets exist) ----
+      - name: Build DMG
+        env:
+          APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ARGS="--mac --universal"
+          if [ "$HAS_CERT" != "true" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false   # unsigned dev build
+          fi
+          if [ "$HAS_NOTARY" != "true" ] || [ "$HAS_CERT" != "true" ]; then
+            ARGS="$ARGS -c.mac.notarize=false"
+          fi
+          npx electron-builder $ARGS
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OPENXMLJSON-dmg
+          path: dist/*.dmg
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg

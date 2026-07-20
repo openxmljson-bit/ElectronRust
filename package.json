@@ -15,7 +15,8 @@
     "systeminformation": "^5.22.0"
   },
   "devDependencies": {
-    "electron": "^43.1.1"
+    "electron": "^43.1.1",
+    "electron-builder": "^26.0.12"
   },
   "build": {
     "appId": "com.openxmljson.app",
@@ -32,6 +33,9 @@
       "target": "dmg",
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
       "extraResources": [
         {
           "from": "rust-engine/target/release/openjsonxml-engine",
