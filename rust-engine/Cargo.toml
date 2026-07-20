@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde_json = "1.0"
+oxj-core = { path = "oxj-core" }
+regex = "1.10"
 
 [profile.release]
 opt-level = 3

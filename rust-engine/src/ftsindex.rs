@@ -14,6 +14,29 @@ fn e2s(e: rusqlite::Error) -> String {
     e.to_string()
 }
 
+/// Remove the FTS index from a database and reclaim its disk space.
+pub fn remove(dbp: &str) -> Result<(), String> {
+    let conn = Connection::open(dbp).map_err(e2s)?;
+    let _ = conn.execute_batch("PRAGMA busy_timeout=60000;");
+    let had: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    let _ = conn.execute("DELETE FROM meta WHERE key='fts_built'", []);
+    if had {
+        conn.execute_batch("DROP TABLE nodes_fts;").map_err(e2s)?;
+        // VACUUM rewrites the file so the freed pages actually shrink it.
+        conn.execute_batch("VACUUM;").map_err(e2s)?;
+    }
+    println!("{}", json!({"event":"done","removed": had}));
+    flush();
+    Ok(())
+}
+
 pub fn run(dbp: &str) -> Result<(), String> {
     let conn = Connection::open(dbp).map_err(e2s)?;
     conn.execute_batch(
@@ -26,6 +49,9 @@ pub fn run(dbp: &str) -> Result<(), String> {
     println!("{}", json!({"event":"start"}));
     flush();
 
+    // Clear the completion stamp first: if this run is interrupted, searches
+    // must fall back to the scan path rather than a partial index.
+    let _ = conn.execute("DELETE FROM meta WHERE key='fts_built'", []);
     conn.execute_batch("DROP TABLE IF EXISTS nodes_fts;").map_err(e2s)?;
     conn.execute_batch(
         "CREATE VIRTUAL TABLE nodes_fts USING fts5(\
@@ -54,6 +80,8 @@ pub fn run(dbp: &str) -> Result<(), String> {
         );
         flush();
     }
+    println!("{}", json!({"event":"phase","phase":"optimize"}));
+    flush();
     let _ = conn.execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('optimize');");
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('fts_built','1')",

@@ -10,7 +10,6 @@
   <!-- ============ Tab bar (always visible) ============ -->
   <div id="tabbar" class="tabbar">
     <div id="tabs" class="tabs"></div>
-    <button id="btn-new-tab" class="tab-add" title="New tab (max 12)">+</button>
   </div>
 
   <div id="content" class="content">
@@ -40,11 +39,11 @@
       </div>
       <div class="side-col">
         <div id="stats-wrap" class="stats hidden">
-          <div class="stats-head">Files Served</div>
+          <div class="stats-head">File Activity</div>
           <div id="stats-list"></div>
         </div>
         <div id="cache-wrap" class="stats hidden">
-          <div class="stats-head">Cache</div>
+          <div class="stats-head">Cache Manager</div>
           <div id="cache-list"></div>
           <div class="cache-actions">
             <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
@@ -52,12 +51,13 @@
         </div>
       </div>
       </div>
+      <div class="watermark">NARIK</div>
     </div>
 
     <!-- ============ Ingest progress screen ============ -->
     <div id="screen-progress" class="screen hidden">
       <div class="progress-card">
-        <div class="progress-title">Loading into database</div>
+        <div id="prog-title" class="progress-title">Loading into database</div>
         <div id="prog-file" class="progress-file"></div>
         <div class="bar-outer"><div id="bar-inner" class="bar-inner"></div></div>
         <div class="progress-stats">
@@ -87,11 +87,14 @@
         <button id="btn-jq" class="btn-tool" title="Run a jq program (JSON documents)">jq</button>
         <div class="spacer"></div>
         <select id="search-scope" title="Search scope">
-          <option value="all">Keys + Values</option>
+          <option value="all" selected>All</option>
           <option value="keys">Keys</option>
           <option value="values">Values</option>
         </select>
-        <input id="search-box" type="search" placeholder="Search… (Enter)" title='Substring search. Wrap in "double quotes" for an exact match.' spellcheck="false" />
+        <input id="search-box" type="search" placeholder="Find" title='Substring search. Wrap in "double quotes" for an exact match. Enter = next match.' spellcheck="false" />
+        <button id="btn-find" class="btn-tool" title="Run search">Find</button>
+        <button id="match-prev" class="btn-tool" title="Previous match (⇧F3 / ⇧⌘G)">▲</button>
+        <button id="match-next" class="btn-tool" title="Next match (F3 / ⌘G / Enter)">▼</button>
       </div>
 
       <div id="jq-bar" class="jq-bar hidden">
@@ -108,6 +111,7 @@
 
       <div class="main-area">
         <div id="tree-wrap" class="tree-wrap">
+          <button id="btn-top" class="btn-top hidden" title="Back to top">▲ Top</button>
           <div id="tree-scroll" class="tree-scroll">
             <div id="tree-spacer" class="tree-spacer">
               <div id="tree-rows"></div>
@@ -131,19 +135,6 @@
           </div>
         </div>
 
-        <div id="search-panel" class="search-panel hidden">
-          <div class="panel-head">
-            <span id="search-title">Results</span>
-            <button id="btn-close-search" class="link-btn">✕</button>
-          </div>
-          <div id="index-banner" class="index-banner hidden">
-            <span id="index-note">Large document — build a one-time search index for instant results.</span>
-            <button id="btn-build-index" class="btn-secondary">⚡ Build Index</button>
-          </div>
-          <div id="search-results" class="search-results"></div>
-          <button id="btn-search-more" class="btn-secondary hidden">Load more</button>
-        </div>
-
         <div id="source-panel" class="source-panel hidden">
           <div id="source-resizer" class="v-resizer" title="Drag to resize"></div>
           <div class="panel-head source-head">
@@ -159,7 +150,11 @@
 
       <div class="statusbar">
         <span id="status-doc"></span>
+        <span id="match-count" class="match-count"></span>
+        <span id="index-note" class="index-note hidden"></span>
+        <button id="btn-build-index" class="link-btn hidden">⚡ Build Index</button>
         <div class="spacer"></div>
+        <span id="status-load" title="Load time"></span>
         <span id="status-type"></span>
         <span id="status-path" title=""></span>
       </div>

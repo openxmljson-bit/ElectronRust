@@ -9,6 +9,20 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 const https = require('https');
 const http = require('http');
+const os = require('os');
+const si = require('systeminformation');
+
+// macOS uses "free" RAM aggressively for file caching, so os.freemem() is
+// near-useless as an availability signal. systeminformation's mem.available
+// (free + reclaimable cache) matches Activity Monitor's practical headroom.
+async function availableMemBytes() {
+  try {
+    const m = await si.mem();
+    return m.available || m.free || os.freemem();
+  } catch {
+    return os.freemem();
+  }
+}
 
 const MAX_RECENTS = 15;
 
@@ -131,14 +145,23 @@ function indexTouch(dbPath, source) {
   const ix = readCacheIndex();
   const key = path.basename(dbPath);
   const prev = ix[key] || {};
-  ix[key] = { source: source || prev.source || null, lastUsed: Date.now() };
+  ix[key] = { ...prev, source: source || prev.source || null, lastUsed: Date.now() };
+  writeCacheIndex(ix);
+}
+
+// Record how much a built FTS index added to a DB (measured as file growth).
+function setIndexBytes(dbPath, bytes) {
+  const ix = readCacheIndex();
+  const key = path.basename(dbPath);
+  const prev = ix[key] || {};
+  ix[key] = { ...prev, indexBytes: Math.max(0, Math.round(bytes)) };
   writeCacheIndex(ix);
 }
 
 function inUseDbs() {
   const s = new Set();
-  for (const [, v] of sessions) s.add(v.dbPath);
-  for (const [, v] of ingests) s.add(v.dbPath);
+  for (const [, v] of sessions) { if (v.dbPath) s.add(v.dbPath); }
+  for (const [, v] of ingests) { if (v.dbPath) s.add(v.dbPath); }
   return s;
 }
 
@@ -254,6 +277,41 @@ function clearCache() {
   return freed;
 }
 
+// Strip FTS search indexes from every cached DB (engine drops + VACUUMs).
+async function deleteSearchIndexes(bw) {
+  const win = bw || BrowserWindow.getFocusedWindow();
+  const res = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['Delete Indexes', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    message: 'Delete all search indexes?',
+    detail:
+      'Removes the full-text search index from every cached document and reclaims its disk space. ' +
+      'Searches fall back to the (parallel) scan; indexes can be rebuilt any time from the search bar.',
+  });
+  if (res.response !== 0) return;
+  const bin = engineBin();
+  if (!bin) return;
+  const before = cacheTotalSize();
+  for (const d of listCacheDbs()) {
+    await new Promise((resolve) => {
+      const proc = spawn(bin, ['deindex', '--db', d.path]);
+      const timer = setTimeout(() => { try { proc.kill(); } catch {} resolve(); }, 600000);
+      proc.on('exit', () => { clearTimeout(timer); resolve(); });
+      proc.on('error', () => { clearTimeout(timer); resolve(); });
+    });
+    setIndexBytes(d.path, 0);
+  }
+  const freed = Math.max(0, before - cacheTotalSize());
+  buildMenu();
+  dialog.showMessageBox(win, {
+    type: 'info',
+    message: 'Search indexes deleted',
+    detail: freed > 0 ? 'Freed ' + fmtBytes(freed) + '.' : 'No indexes were present.',
+  });
+}
+
 async function clearCacheInteractive(bw) {
   const win = bw || BrowserWindow.getFocusedWindow();
   const total = cacheTotalSize();
@@ -314,6 +372,7 @@ function getStats() {
 }
 function bumpStat(format) {
   const key = String(format || 'json').toUpperCase();
+  if (['XLSX', 'XLS', 'XLSM', 'XLTX', 'XLSB'].includes(key)) return; // Excel unsupported
   const s = getStats();
   s[key] = (s[key] || 0) + 1;
   try { fs.writeFileSync(statsPath(), JSON.stringify(s)); } catch {}
@@ -340,15 +399,36 @@ function killIngest(tabId, deleteDb) {
   }
 }
 
-function startServe(tabId, dbPath, wc, file) {
+// Hybrid engine decision ("like the previous app"): files that comfortably
+// fit in RAM open with the mmap-based in-memory engine (no ingest at all);
+// bigger ones stream into SQLite.
+const MEM_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
+const MEM_FREE_FRACTION = 0.7;                 // ≤70% of currently free RAM
+
+async function decideMode(filePath) {
+  const pref = getSettings().engineMode || 'auto'; // auto | db | memory
+  if (pref === 'db') return 'db';
+  if (pref === 'memory') return 'memory';
+  try {
+    const size = fs.statSync(filePath).size;
+    const avail = await availableMemBytes();
+    if (size <= MEM_MAX_BYTES && size <= avail * MEM_FREE_FRACTION) return 'memory';
+  } catch {}
+  return 'db';
+}
+
+function startServe(tabId, dbPath, wc, file, mode) {
   return new Promise((resolve, reject) => {
     killSession(tabId);
     const bin = engineBin();
     if (!bin) return reject(new Error('Engine binary not found. Run: npm run build:engine'));
-    const proc = spawn(bin, ['serve', '--db', dbPath], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const s = { proc, pending: new Map(), file, dbPath, wc };
+    const args = mode === 'memory'
+      ? ['serve-mem', '--file', file]
+      : ['serve', '--db', dbPath];
+    const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const s = { proc, pending: new Map(), file, dbPath, wc, mode: mode || 'db' };
     sessions.set(tabId, s);
-    lastDb.set(tabId, { dbPath, file, wc });
+    lastDb.set(tabId, { dbPath, file, wc, mode: mode || 'db' });
     const rl = readline.createInterface({ input: proc.stdout });
     let ready = false;
     rl.on('line', (line) => {
@@ -382,7 +462,8 @@ function startServe(tabId, dbPath, wc, file) {
       }
       if (!ready) reject(new Error('engine exited during startup'));
     });
-    setTimeout(() => { if (!ready) reject(new Error('engine start timeout')); }, 20000);
+    // Memory mode parses the whole file before 'ready' — allow generous time.
+    setTimeout(() => { if (!ready) reject(new Error('engine start timeout')); }, mode === 'memory' ? 300000 : 20000);
   });
 }
 
@@ -393,9 +474,10 @@ function startServe(tabId, dbPath, wc, file) {
 async function query(tabId, payload) {
   if (!sessions.get(tabId)) {
     const info = lastDb.get(tabId);
-    if (info && fs.existsSync(info.dbPath) && !info.wc.isDestroyed()) {
+    const source = info && (info.mode === 'memory' ? info.file : info.dbPath);
+    if (info && source && fs.existsSync(source) && !info.wc.isDestroyed()) {
       if (!reviving.has(tabId)) {
-        const p = startServe(tabId, info.dbPath, info.wc, info.file)
+        const p = startServe(tabId, info.dbPath, info.wc, info.file, info.mode)
           .finally(() => reviving.delete(tabId));
         reviving.set(tabId, p);
       }
@@ -422,6 +504,7 @@ function queryRaw(tabId, payload) {
 }
 
 async function loadFile(wc, tabId, filePath, force) {
+  const t0 = Date.now();
   const bin = engineBin();
   if (!bin) throw new Error('Engine binary not found. Run: npm run build:engine');
   if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
@@ -429,15 +512,36 @@ async function loadFile(wc, tabId, filePath, force) {
   killSession(tabId);
   addRecent(filePath);
 
+  // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
+  if ((await decideMode(filePath)) === 'memory') {
+    try {
+      let size = 0;
+      try { size = fs.statSync(filePath).size; } catch {}
+      if (!wc.isDestroyed()) {
+        wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
+        wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
+      }
+      await startServe(tabId, null, wc, filePath, 'memory');
+      const meta = await query(tabId, { op: 'meta' });
+      bumpStat(meta.format);
+      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
+      return;
+    } catch (memErr) {
+      // Parse/memory failure: fall through to the robust DB path.
+      engineLog('serve-mem failed, falling back to DB: ' + String((memErr && memErr.message) || memErr));
+      killSession(tabId);
+    }
+  }
+
   const dbPath = dbPathFor(filePath);
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
     indexTouch(dbPath, filePath); // refresh LRU timestamp
-    await startServe(tabId, dbPath, wc, filePath);
+    await startServe(tabId, dbPath, wc, filePath, 'db');
     const meta = await query(tabId, { op: 'meta' });
     bumpStat(meta.format);
-    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath });
+    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
     return;
   }
 
@@ -460,11 +564,11 @@ async function loadFile(wc, tabId, filePath, force) {
       indexTouch(dbPath, filePath);
       setTimeout(() => { try { pruneCache(); buildMenu(); } catch {} }, 500); // enforce cap after new data lands
       try {
-        await startServe(tabId, dbPath, wc, filePath);
+        await startServe(tabId, dbPath, wc, filePath, 'db');
         const meta = await query(tabId, { op: 'meta' });
         bumpStat(meta.format);
         if (!wc.isDestroyed()) {
-          wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, nodes: msg.nodes, elapsed_ms: msg.elapsed_ms });
+          wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, nodes: msg.nodes, elapsed_ms: msg.elapsed_ms, loadMs: Date.now() - t0 });
         }
       } catch (e) {
         if (!wc.isDestroyed()) wc.send('ingest-error', { tabId, message: String((e && e.message) || e) });
@@ -588,6 +692,13 @@ function createWindow() {
   return win;
 }
 
+// "verylongfilename…part_1.json" — keeps the extension visible.
+function middleTruncate(s, max) {
+  if (s.length <= max) return s;
+  const tail = Math.min(16, Math.floor(max / 3));
+  return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
+}
+
 function sendMenu(bw, action, arg) {
   const w = bw || BrowserWindow.getFocusedWindow();
   if (w && !w.isDestroyed()) w.webContents.send('menu', { action, arg });
@@ -610,7 +721,8 @@ function buildMenu() {
           label: 'Open Recent',
           submenu: [
             ...recents.map((r) => ({
-              label: r.path,
+              label: middleTruncate(path.basename(r.path), 56),
+              toolTip: r.path,
               click: (mi, bw) => sendMenu(bw, 'open-path', r.path),
             })),
             { type: 'separator' },
@@ -654,7 +766,7 @@ function buildMenu() {
       ],
     },
     {
-      label: 'Cache',
+      label: 'Cache Manager',
       submenu: [
         { label: 'Cache Size: ' + fmtBytes(cacheTotalSize()), enabled: false },
         { type: 'separator' },
@@ -672,6 +784,7 @@ function buildMenu() {
             });
           },
         },
+        { label: 'Delete Search Indexes…', click: (mi, bw) => deleteSearchIndexes(bw) },
         { type: 'separator' },
         {
           label: 'Size Limit',
@@ -690,6 +803,20 @@ function buildMenu() {
               pruneCache();
               buildMenu();
             },
+          })),
+        },
+        { type: 'separator' },
+        {
+          label: 'Engine Mode',
+          submenu: [
+            { v: 'auto', label: 'Auto (RAM under 10 GB, DB above)' },
+            { v: 'memory', label: 'Always Memory' },
+            { v: 'db', label: 'Always Database' },
+          ].map((o) => ({
+            label: o.label,
+            type: 'radio',
+            checked: (getSettings().engineMode || 'auto') === o.v,
+            click: () => { saveSetting('engineMode', o.v); buildMenu(); },
           })),
         },
         { type: 'separator' },
@@ -818,6 +945,9 @@ app.whenReady().then(() => {
       const sa = sessions.get(tabA);
       const sb = sessions.get(tabB);
       if (!sa || !sb) throw new Error('both tabs must have loaded documents');
+      if (sa.mode === 'memory' || sb.mode === 'memory') {
+        throw new Error('Compare needs database mode — set Cache → Engine Mode → Always Database and reload both tabs');
+      }
       const bin = engineBin();
       const out = await new Promise((resolve, reject) => {
         const proc = spawn(bin, ['diff', '--a', sa.dbPath, '--b', sb.dbPath, '--limit', '5000']);
@@ -906,9 +1036,12 @@ app.whenReady().then(() => {
     try {
       const info = sessions.get(tabId) || lastDb.get(tabId);
       if (!info) throw new Error('no document loaded');
+      if (!info.dbPath) throw new Error('memory-mode documents need no search index — search is already parallel');
       const bin = engineBin();
       if (!bin) throw new Error('engine binary not found');
       const wc = e.sender;
+      let sizeBefore = 0;
+      try { sizeBefore = fs.statSync(info.dbPath).size; } catch {}
       await new Promise((resolve, reject) => {
         const proc = spawn(bin, ['index', '--db', info.dbPath]);
         const rl = readline.createInterface({ input: proc.stdout });
@@ -930,6 +1063,8 @@ app.whenReady().then(() => {
           }
         });
       });
+      try { setIndexBytes(info.dbPath, fs.statSync(info.dbPath).size - sizeBefore); } catch {}
+      buildMenu(); // refresh cache size display
       return ok(true);
     } catch (err) { return fail(err); }
   });
@@ -948,12 +1083,28 @@ app.whenReady().then(() => {
         } catch {}
       }
     } catch {}
+    const ix = readCacheIndex();
+    let indexBytes = 0;
+    let indexCount = 0;
+    for (const d of dbs) {
+      const entry = ix[d.file];
+      if (entry && entry.indexBytes > 0) {
+        indexBytes += entry.indexBytes;
+        indexCount++;
+      }
+    }
     return {
       totalBytes: dbs.reduce((s, d) => s + d.size, 0),
       count: dbs.length,
       limitGb: getSettings().cacheLimitGb ?? 20,
       tempBytes,
       tempCount,
+      indexBytes,
+      indexCount,
+      ramFree: await availableMemBytes(),
+      ramTotal: os.totalmem(),
+      memModeLimit: Math.min(MEM_MAX_BYTES, (await availableMemBytes()) * MEM_FREE_FRACTION),
+      engineMode: getSettings().engineMode || 'auto',
     };
   });
 

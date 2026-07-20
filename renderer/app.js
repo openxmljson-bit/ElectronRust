@@ -17,8 +17,6 @@ let monacoEditor = null;
 let monacoReady = false;
 let uiTheme = 'dark';
 let sourceOpen = false;
-let lastSearch = null;
-let searchOffset = 0;
 
 function makeTab() {
   return {
@@ -99,6 +97,9 @@ function setCurrent(t) {
 }
 
 function renderTabs() {
+  // A single empty tab (the welcome screen) needs no tab strip.
+  const showBar = tabs.length > 1 || tabs.some((t) => t.phase !== 'empty');
+  $('tabbar').classList.toggle('hidden', !showBar);
   const host = $('tabs');
   host.textContent = '';
   for (const t of tabs) {
@@ -146,8 +147,6 @@ function renderTabs() {
   }
 }
 
-$('btn-new-tab').addEventListener('click', () => newTab(true));
-
 // ---------- screen switching ----------
 function renderScreen() {
   const t = cur;
@@ -161,20 +160,28 @@ function renderScreen() {
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
-    $('btn-tools').classList.toggle('hidden', plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
+    const memMode = t.meta && t.meta.mode === 'memory';
+    $('btn-tools').classList.toggle('hidden',
+      plain || memMode || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
     $('btn-jq').classList.toggle('hidden', !jqApplicable(t));
     if (!jqApplicable(t)) $('jq-bar').classList.add('hidden');
     $('search-scope').classList.toggle('hidden', plain);
     $('search-box').classList.toggle('hidden', plain);
+    $('btn-find').classList.toggle('hidden', plain);
+    $('match-prev').classList.toggle('hidden', plain);
+    $('match-next').classList.toggle('hidden', plain);
     $('text-wrap').classList.toggle('hidden', !plain);
     if (plain) {
       $('view-toggle').classList.add('hidden');
       $('tree-wrap').classList.add('hidden');
       $('table-wrap').classList.add('hidden');
       closeSource();
+      closeSearch();
+      $('btn-top').classList.add('hidden');
       showPlain(t);
       $('status-doc').textContent =
         baseName(t.file) + ' · ' + t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
+      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
       $('status-type').textContent = 'Read-only · ⌘F to find';
       $('status-path').textContent = '';
       return;
@@ -183,11 +190,13 @@ function renderScreen() {
     $('view-toggle').classList.toggle('hidden', !isCsv);
     setView(t.view);
     $('status-doc').textContent =
-      baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes);
+      baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes) + (memMode ? ' · RAM' : '');
     if (isCsv) buildTableHead(t);
+    $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
     renderTree();
     treeScroll.scrollTop = t.treeScrollTop || 0;
     renderTree();
+    updateTopBtn();
     updateStatusForSelection();
     if (sourceOpen) scheduleSourceUpdate();
   }
@@ -237,9 +246,11 @@ async function openPlainPath(p, tab, lang) {
   t.progress = { startedMsg: 'Reading file…' };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
+  const t0 = performance.now();
   try {
     const res = await window.oxj.loadText(p);
     if (!tabAlive(t)) return;
+    t.loadMs = Math.round(performance.now() - t0);
     t.plain = {
       language: lang,
       label: String(p).split('.').pop().toUpperCase(),
@@ -288,6 +299,12 @@ function toast(msg, info) {
   toast._t = setTimeout(() => t.classList.add('hidden'), info ? 3500 : 6000);
 }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
+// Middle-ellipsis so the extension always stays visible.
+function middleTruncate(s, max) {
+  if (s.length <= max) return s;
+  const tail = Math.min(16, Math.floor(max / 3));
+  return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
+}
 function cleanErr(err) {
   return String((err && err.message) || err).replace(/^.*Error:\s*/, '');
 }
@@ -306,7 +323,7 @@ async function refreshRecents() {
     item.title = r.path; // full path on hover
     const name = document.createElement('span');
     name.className = 'recent-name';
-    name.textContent = baseName(r.path);
+    name.textContent = middleTruncate(baseName(r.path), 42);
     const size = document.createElement('span');
     size.className = 'recent-size';
     size.textContent = fmtBytes(r.size);
@@ -316,35 +333,62 @@ async function refreshRecents() {
   }
 }
 
-// ---------- files-served stats ----------
+// ---------- file activity donut chart ----------
+const STAT_PALETTE = ['#4da3ff', '#e0764a', '#7ee0a3', '#c586c0', '#e2b93b', '#8b91a3', '#66c2cd', '#d16d6d', '#9a86e8'];
+
 async function refreshStats() {
   let s = {};
   try { s = await window.oxj.stats(); } catch {}
-  const entries = Object.entries(s).sort((a, b) => b[1] - a[1]);
+  const hidden = ['XLSX', 'XLS', 'XLSM', 'XLTX', 'XLSB'];
+  const entries = Object.entries(s)
+    .filter(([k]) => !hidden.includes(k.toUpperCase()))
+    .sort((a, b) => b[1] - a[1]);
   const wrap = $('stats-wrap');
   const list = $('stats-list');
   list.textContent = '';
   if (!entries.length) { wrap.classList.add('hidden'); return; }
   wrap.classList.remove('hidden');
-  const max = entries[0][1] || 1;
-  for (const [fmt, count] of entries) {
-    const row = document.createElement('div');
-    row.className = 'stat-row';
-    const label = document.createElement('span');
-    label.className = 'stat-label';
-    label.textContent = fmt;
-    const track = document.createElement('div');
-    track.className = 'stat-track';
-    const bar = document.createElement('div');
-    bar.className = 'stat-bar';
-    bar.style.width = Math.max(4, Math.round((count / max) * 100)) + '%';
-    track.appendChild(bar);
+  const total = entries.reduce((sum, [, v]) => sum + v, 0) || 1;
+
+  const chart = document.createElement('div');
+  chart.className = 'stats-chart';
+
+  // Donut via conic-gradient — compact, fixed height.
+  const donut = document.createElement('div');
+  donut.className = 'donut';
+  let acc = 0;
+  const stops = entries.map(([, v], i) => {
+    const from = (acc / total) * 360;
+    acc += v;
+    const to = (acc / total) * 360;
+    return STAT_PALETTE[i % STAT_PALETTE.length] + ' ' + from.toFixed(2) + 'deg ' + to.toFixed(2) + 'deg';
+  }).join(', ');
+  donut.style.background = 'conic-gradient(' + stops + ')';
+  const center = document.createElement('div');
+  center.className = 'donut-center';
+  center.innerHTML = '<b>' + fmtInt(total) + '</b><span>files</span>';
+  donut.appendChild(center);
+
+  const legend = document.createElement('div');
+  legend.className = 'stat-legend';
+  entries.forEach(([fmt, count], i) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'legend-dot';
+    dot.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
+    const name = document.createElement('span');
+    name.className = 'legend-name';
+    name.textContent = fmt;
     const num = document.createElement('span');
-    num.className = 'stat-count';
+    num.className = 'legend-count';
     num.textContent = fmtInt(count);
-    row.append(label, track, num);
-    list.appendChild(row);
-  }
+    item.append(dot, name, num);
+    legend.appendChild(item);
+  });
+
+  chart.append(donut, legend);
+  list.appendChild(chart);
 }
 
 // ---------- cache info box ----------
@@ -366,7 +410,16 @@ async function refreshCacheInfo() {
   };
   addRow('Cached documents', fmtInt(info.count));
   addRow('Cache size', fmtBytes(info.totalBytes));
+  addRow('Search indexes', info.indexCount ? fmtInt(info.indexCount) + ' · ' + fmtBytes(info.indexBytes) : 'None');
   addRow('Size limit', info.limitGb === 0 ? 'Unlimited' : info.limitGb + ' GB');
+  if (info.ramTotal) {
+    addRow('Available RAM', fmtBytes(info.ramFree));
+    const mode = info.engineMode || 'auto';
+    addRow('RAM mode',
+      mode === 'db' ? 'Off (always database)'
+      : mode === 'memory' ? 'Always on'
+      : '~' + fmtBytes(info.memModeLimit));
+  }
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
 
@@ -387,7 +440,14 @@ function targetTabForOpen() {
   return newTab(true);
 }
 
+const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
+
 async function openPath(p, tab, force) {
+  const ext = String(p).split('.').pop().toLowerCase();
+  if (BLOCKED_EXTS.includes(ext)) {
+    toast('Excel files are not supported — export to CSV or JSON first');
+    return;
+  }
   const lang = plainLangFor(p);
   if (lang) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();
@@ -472,6 +532,10 @@ window.addEventListener('drop', (e) => {
 // ---------- ingest progress ----------
 function updateProgressDom(t) {
   const pr = t.progress || {};
+  $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
+  $('prog-phase').textContent = pr.mem
+    ? 'Indexing in memory — no database needed, this is quick…'
+    : 'Building index… this can take a while on large files';
   $('prog-file').textContent = t.file || '';
   const total = pr.total || 1;
   const pct = Math.min(100, ((pr.bytes || 0) / total) * 100);
@@ -491,7 +555,8 @@ window.oxj.onProgress((msg) => {
   const pr = t.progress;
   if (msg.event === 'start') {
     pr.total = msg.total_bytes;
-    pr.startedMsg = 'Parsing (' + (msg.format || '') + ')…';
+    pr.mem = msg.format === 'memory';
+    pr.startedMsg = pr.mem ? 'Reading file into memory…' : 'Parsing (' + (msg.format || '') + ')…';
   } else if (msg.event === 'phase') {
     pr.indexing = true;
   } else if (msg.event === 'progress') {
@@ -538,6 +603,7 @@ window.oxj.onIngestError((m) => {
 window.oxj.onDocReady(async (m) => {
   const t = tabById(m.tabId);
   if (!t) return;
+  t.loadMs = m.loadMs != null ? m.loadMs : m.elapsed_ms;
   t.meta = m.meta || {};
   t.docFormat = t.meta.format || 'json';
   t.rootId = parseInt(t.meta.root_id || '1', 10);
@@ -742,9 +808,30 @@ function kindBadge(e) {
   return '';
 }
 
+// Append text with occurrences of `q` wrapped in .hl spans (case-insensitive).
+function appendHighlighted(el, text, q) {
+  if (!q) { el.textContent = text; return; }
+  const lower = text.toLowerCase();
+  const ql = q.toLowerCase();
+  let from = 0;
+  let i;
+  let guard = 0;
+  while (guard < 50 && (i = lower.indexOf(ql, from)) !== -1) {
+    if (i > from) el.appendChild(document.createTextNode(text.slice(from, i)));
+    const m = document.createElement('span');
+    m.className = 'hl';
+    m.textContent = text.slice(i, i + q.length);
+    el.appendChild(m);
+    from = i + q.length;
+    guard++;
+  }
+  el.appendChild(document.createTextNode(text.slice(from)));
+}
+
 function buildRow(t, e, idx) {
   const row = document.createElement('div');
-  row.className = 'trow' + (idx % 2 ? ' zebra' : '') + (idx === t.selectedIdx ? ' selected' : '');
+  row.className = 'trow' + (idx % 2 ? ' zebra' : '') + (idx === t.selectedIdx ? ' selected' : '') +
+    (!e.pseudo && t.matchSet && t.matchSet.has(e.id) ? ' match' : '');
   row.style.top = idx * ROW_H + 'px';
   row.dataset.idx = idx;
 
@@ -782,9 +869,14 @@ function buildRow(t, e, idx) {
   tw.textContent = e.expanded ? '▼' : '▶';
   row.appendChild(tw);
 
+  const nav = matchNav && matchNav.tabId === t.id ? matchNav : null;
+  const isMatch = nav && t.matchSet && t.matchSet.has(e.id);
+
   const key = document.createElement('span');
   key.className = 'tkey' + (e.kind === K.ELEM ? ' xml' : '') + (e.kind === K.ATTR ? ' attr' : '');
-  key.textContent = e.kind === K.ELEM ? '<' + e.label + '>' : e.kind === K.ATTR ? '@' + e.label : e.label;
+  const keyText = e.kind === K.ELEM ? '<' + e.label + '>' : e.kind === K.ATTR ? '@' + e.label : e.label;
+  if (isMatch && nav.scope !== 'values') appendHighlighted(key, keyText, nav.q);
+  else key.textContent = keyText;
   row.appendChild(key);
 
   if (e.kind === K.OBJ || e.kind === K.ARR || (e.kind === K.ELEM && e.n > 0)) {
@@ -809,7 +901,8 @@ function buildRow(t, e, idx) {
     else if (e.kind === K.TEXT || e.kind === K.ATTR) cls += ' str';
     if (text.length > 500) text = text.slice(0, 500) + '…';
     val.className = cls;
-    val.textContent = text;
+    if (isMatch && nav.scope !== 'keys') appendHighlighted(val, text, nav.q);
+    else val.textContent = text;
     row.appendChild(val);
     if (e.vlen > 4096) {
       const note = document.createElement('span');
@@ -835,7 +928,27 @@ function renderTree() {
   treeRows.appendChild(frag);
 }
 
-treeScroll.addEventListener('scroll', () => renderTree());
+// Back-to-top button: appears after scrolling down in tree or table view.
+function activeScroller() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) return null;
+  return t.view === 'table' ? tableScroll : treeScroll;
+}
+function updateTopBtn() {
+  const sc = activeScroller();
+  const btn = $('btn-top');
+  btn.classList.toggle('hidden', !sc || sc.scrollTop < 600);
+  // Anchor inside whichever view is active, so it hugs the tree/table edge
+  // rather than floating over the Source panel.
+  const wrap = cur && cur.view === 'table' ? $('table-wrap') : $('tree-wrap');
+  if (btn.parentElement !== wrap) wrap.appendChild(btn);
+}
+$('btn-top').addEventListener('click', () => {
+  const sc = activeScroller();
+  if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+treeScroll.addEventListener('scroll', () => { renderTree(); updateTopBtn(); });
 window.addEventListener('resize', () => renderTree());
 
 treeRows.addEventListener('click', async (ev) => {
@@ -925,21 +1038,65 @@ async function updateStatusForSelection() {
   } catch {}
 }
 
-// ---------- search ----------
+// ---------- search: match stepping with amber highlights ----------
+// No results panel: matches are highlighted in the tree; a compact bar shows
+// "Match N of M" with prev/next stepping (F3 / Cmd+G).
+let matchNav = null; // { tabId, q, scope, exact, ids, total, cur, after, hasMore, fetching }
+const MATCH_PAGE = 500;
+const INDEX_SUGGEST_NODES = 2000000;
+
+// Enter behaves like the classic find bar: first press runs the search,
+// every following press steps to the next match (until the query changes).
+function currentQueryMatchesNav() {
+  if (!matchNav || !cur || matchNav.tabId !== cur.id) return false;
+  let q = $('search-box').value.trim();
+  let exact = false;
+  if (q.length > 2 && q.startsWith('"') && q.endsWith('"')) {
+    exact = true;
+    q = q.slice(1, -1);
+  }
+  return matchNav.q === q && matchNav.exact === exact && matchNav.scope === $('search-scope').value;
+}
+
 $('search-box').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') startSearch();
+  if (ev.key === 'Enter') {
+    if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
+    else startSearch();
+  }
   if (ev.key === 'Escape') { ev.target.value = ''; closeSearch(); }
 });
-// Fires when the ✕ inside the field is clicked (or the field is emptied).
+$('btn-find').addEventListener('click', () => {
+  if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
+  else startSearch();
+});
+// Fires when the X inside the field is clicked (or the field is emptied).
 $('search-box').addEventListener('search', (ev) => {
   if (!ev.target.value) closeSearch();
 });
-$('btn-close-search').addEventListener('click', closeSearch);
-$('btn-search-more').addEventListener('click', () => runSearch(false));
+$('match-prev').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur - 1));
+$('match-next').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur + 1));
+
+// F3 / Cmd+G step forward, with Shift step back.
+document.addEventListener('keydown', (ev) => {
+  if (!matchNav || !matchNav.ids.length) return;
+  if (ev.key === 'F3' || ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'g')) {
+    ev.preventDefault();
+    gotoMatch(matchNav.cur + (ev.shiftKey ? -1 : 1));
+  }
+});
 
 function closeSearch() {
-  $('search-panel').classList.add('hidden');
-  lastSearch = null;
+  $('match-count').textContent = '';
+  $('index-note').classList.add('hidden');
+  $('btn-build-index').classList.add('hidden');
+  if (matchNav) {
+    const t = tabById(matchNav.tabId);
+    if (t) {
+      t.matchSet = null;
+      if (t === cur) renderTree();
+    }
+  }
+  matchNav = null;
 }
 
 function startSearch() {
@@ -953,94 +1110,119 @@ function startSearch() {
     exact = true;
     q = q.slice(1, -1);
   }
-  lastSearch = { q, scope: $('search-scope').value, exact, tabId: t.id, after: 0 };
-  searchOffset = 0;
-  $('search-results').textContent = '';
-  $('search-title').textContent = 'Searching…';
-  $('search-panel').classList.remove('hidden');
-  runSearch(true);
+  closeSearch();
+  matchNav = {
+    tabId: t.id, q, scope: $('search-scope').value, exact,
+    ids: [], total: null, cur: -1, after: 0, hasMore: false, fetching: false,
+  };
+  $('match-count').textContent = 'Searching…';
+  fetchMatchPage(false).then(() => {
+    if (!matchNav || matchNav.tabId !== t.id) return;
+    if (!matchNav.ids.length) {
+      $('match-count').textContent = 'No matches';
+      return;
+    }
+    gotoMatch(0);
+  });
 }
 
-async function runSearch(fresh, retried) {
-  if (!lastSearch) return;
-  const t = tabById(lastSearch.tabId);
+async function fetchMatchPage(retried) {
+  const nav = matchNav;
+  if (!nav || nav.fetching) return;
+  const t = tabById(nav.tabId);
   if (!t) return;
+  nav.fetching = true;
   try {
     const res = await window.oxj.query(t.id, {
-      op: 'search', q: lastSearch.q, scope: lastSearch.scope, exact: !!lastSearch.exact,
-      offset: searchOffset, after: lastSearch.after || 0, limit: 100,
+      op: 'search', q: nav.q, scope: nav.scope, exact: !!nav.exact,
+      offset: nav.ids.length, after: nav.after, limit: MATCH_PAGE,
+      total: nav.total == null,
     });
-    if (!lastSearch || tabById(lastSearch.tabId) !== t) return;
-    searchOffset += res.items.length;
-    if (res.items.length) lastSearch.after = res.items[res.items.length - 1].id;
-    updateIndexBanner(t, res);
-    const el = $('search-results');
-    for (const it of res.items) {
-      const item = document.createElement('div');
-      item.className = 'sr-item';
-      const k = document.createElement('span');
-      k.className = 'sr-key';
-      k.textContent = it.name != null ? it.name : '(value)';
-      const v = document.createElement('span');
-      v.className = 'sr-val';
-      v.textContent = it.value != null ? it.value : '';
-      item.append(k, v);
-      item.addEventListener('click', () => revealNode(t, it.id));
-      el.appendChild(item);
-    }
-    $('search-title').textContent = fmtInt(searchOffset) + (res.hasMore ? '+' : '') + ' results';
-    $('btn-search-more').classList.toggle('hidden', !res.hasMore);
-    if (fresh && !res.items.length) $('search-title').textContent = 'No results';
+    if (matchNav !== nav) return;
+    for (const it of res.items) nav.ids.push(it.id);
+    if (res.items.length) nav.after = res.items[res.items.length - 1].id;
+    nav.hasMore = !!res.hasMore;
+    if (res.total != null) nav.total = res.total;
+    t.matchSet = new Set(nav.ids);
+    if (t === cur) renderTree();
+    updateIndexUi(t, res);
   } catch (e) {
     const msg = cleanErr(e);
-    // The engine auto-revives on the next query — retry once for transient deaths.
+    // The engine auto-revives on the next query - retry once for transient deaths.
     if (!retried && /engine stopped|no document loaded/i.test(msg)) {
-      return runSearch(fresh, true);
+      nav.fetching = false;
+      return fetchMatchPage(true);
     }
-    $('search-title').textContent = 'Search failed';
+    if (matchNav === nav) $('match-count').textContent = 'Search failed';
     toast(msg);
+  } finally {
+    nav.fetching = false;
   }
 }
 
-// ---------- search index (FTS) banner ----------
-const INDEX_SUGGEST_NODES = 2000000;
+async function gotoMatch(i) {
+  const nav = matchNav;
+  if (!nav || !nav.ids.length) return;
+  const t = tabById(nav.tabId);
+  if (!t || t !== cur) return;
+  if (i >= nav.ids.length && nav.hasMore) {
+    await fetchMatchPage(false); // extend the loaded window
+    if (matchNav !== nav) return;
+  }
+  if (i < 0) i = nav.ids.length - 1;
+  if (i >= nav.ids.length) i = 0;
+  nav.cur = i;
+  updateMatchCount();
+  await revealNode(t, nav.ids[i]);
+}
 
-function updateIndexBanner(t, res) {
+function updateMatchCount() {
+  const nav = matchNav;
+  if (!nav) return;
+  const totalText = nav.total != null
+    ? fmtInt(nav.total)
+    : fmtInt(nav.ids.length) + (nav.hasMore ? '+' : '');
+  let text = 'Match ' + fmtInt(nav.cur + 1) + ' of ' + totalText;
+  if (nav.exact) text += ' (exact)';
+  const known = nav.total != null ? nav.total : 0;
+  if (known > nav.ids.length) text += ' (first ' + fmtInt(nav.ids.length) + ' loaded)';
+  $('match-count').textContent = text;
+}
+
+// ---------- search index (FTS) hint in the match bar ----------
+function updateIndexUi(t, res) {
   const big = Number((t.meta && t.meta.total_nodes) || 0) > INDEX_SUGGEST_NODES;
   const built = t.meta && t.meta.fts_built === '1';
   const show = big && !built && !t.indexBuilding && !(res && res.indexed);
-  $('index-banner').classList.toggle('hidden', !show);
+  $('index-note').classList.toggle('hidden', !show && !t.indexBuilding);
+  if (show) $('index-note').textContent = 'Slow? Build a one-time index for instant search.';
+  $('btn-build-index').classList.toggle('hidden', !show);
 }
 
 $('btn-build-index').addEventListener('click', async () => {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain || t.indexBuilding) return;
   t.indexBuilding = true;
+  $('index-note').classList.remove('hidden');
   $('index-note').textContent = 'Building index… you can keep browsing.';
-  $('btn-build-index').disabled = true;
+  $('btn-build-index').classList.add('hidden');
   try {
     await window.oxj.buildIndex(t.id);
     if (!tabAlive(t)) return;
     try { t.meta = await window.oxj.query(t.id, { op: 'meta' }); } catch {}
     toast('Search index built — searches are now instant', true);
+    t.indexBuilding = false;
     if (t === cur) {
-      $('index-banner').classList.add('hidden');
+      $('index-note').classList.add('hidden');
       // Re-run the current search against the index.
-      if (lastSearch && lastSearch.tabId === t.id) {
-        lastSearch.after = 0;
-        searchOffset = 0;
-        $('search-results').textContent = '';
-        runSearch(true);
-      }
+      if (matchNav && matchNav.tabId === t.id) startSearch();
     }
   } catch (err) {
+    t.indexBuilding = false;
+    $('index-note').classList.add('hidden');
     const msg = cleanErr(err);
     if (msg.includes('unknown command')) toast('Indexing needs an engine rebuild: npm run build:engine, then restart');
     else toast('Index build failed: ' + msg);
-  } finally {
-    t.indexBuilding = false;
-    $('btn-build-index').disabled = false;
-    $('index-note').textContent = 'Large document — build a one-time search index for instant results.';
   }
 });
 
@@ -1050,6 +1232,8 @@ window.oxj.onIndexProgress((m) => {
   if (m.event === 'progress' && m.total > 0) {
     const pct = Math.min(100, (m.done / m.total) * 100).toFixed(0);
     $('index-note').textContent = 'Building index… ' + pct + '%';
+  } else if (m.event === 'phase' && m.phase === 'optimize') {
+    $('index-note').textContent = 'Finalizing index (optimize)… this can take a few minutes';
   }
 });
 
@@ -1159,6 +1343,7 @@ function setView(name) {
   $('btn-view-tree').classList.toggle('active', !table);
   $('btn-view-table').classList.toggle('active', table);
   if (table) renderTable();
+  updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
 $('btn-view-table').addEventListener('click', () => setView('table'));
@@ -1228,7 +1413,7 @@ function renderTable() {
   }
   tableRowsEl.appendChild(frag);
 }
-tableScroll.addEventListener('scroll', () => renderTable());
+tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
 
 // ---------- Monaco source panel ----------
 function initMonaco() {
@@ -1982,9 +2167,11 @@ async function validateAgainstSchema() {
 async function compareWithTab() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
-  const others = tabs.filter((x) => x !== t && x.phase === 'ready' && !x.plain);
+  const others = tabs.filter(
+    (x) => x !== t && x.phase === 'ready' && !x.plain && !(x.meta && x.meta.mode === 'memory')
+  );
   if (!others.length) {
-    toast('Open the document to compare with in another tab first');
+    toast('Open the document to compare with in another tab first (database mode)');
     return;
   }
   const { box, back } = simpleModal('Compare "' + t.title + '" with…');

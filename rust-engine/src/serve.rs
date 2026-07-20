@@ -255,12 +255,17 @@ fn like_pattern(q: &str) -> String {
 }
 
 fn fts_built(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
-        [],
-        |_r| Ok(1i64),
-    )
-    .is_ok()
+    // The table's existence alone isn't proof: an interrupted index build
+    // leaves a partial nodes_fts behind, which silently drops matches.
+    // Only trust the index once the indexer has stamped completion in meta.
+    meta_get(conn, "fts_built").as_deref() == Some("1")
+        && conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
+                [],
+                |_r| Ok(1i64),
+            )
+            .is_ok()
 }
 
 fn search_row(row: &rusqlite::Row) -> Result<Value, String> {
@@ -406,6 +411,8 @@ fn op_search(conn: &Connection, db_path: &str, req: &Value) -> Result<Value, Str
     let limit = geti(req, "limit", 100).clamp(1, 500);
     // Trigram FTS needs at least 3 characters; shorter queries fall back to scan.
     let use_fts = fts_built(conn) && q.chars().count() >= 3;
+    let want_total = req.get("total").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mut total: Option<i64> = None;
     let mut items: Vec<Value> = Vec::new();
 
     if use_fts {
@@ -457,59 +464,77 @@ fn op_search(conn: &Connection, db_path: &str, req: &Value) -> Result<Value, Str
                 items.push(search_row(row)?);
             }
         }
+        if want_total {
+            let cnt: i64 = if exact {
+                let csql = match scope {
+                    "keys" => {
+                        "SELECT COUNT(*) FROM nodes_fts f JOIN nodes n ON n.id = f.rowid \
+                         WHERE nodes_fts MATCH ?1 AND n.name = ?2"
+                    }
+                    "values" => {
+                        "SELECT COUNT(*) FROM nodes_fts f JOIN nodes n ON n.id = f.rowid \
+                         WHERE nodes_fts MATCH ?1 AND n.value = ?2"
+                    }
+                    _ => {
+                        "SELECT COUNT(*) FROM nodes_fts f JOIN nodes n ON n.id = f.rowid \
+                         WHERE nodes_fts MATCH ?1 AND (n.name = ?2 OR n.value = ?2)"
+                    }
+                };
+                conn.query_row(csql, params![match_expr, q], |r| r.get(0))
+                    .map_err(es)?
+            } else {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM nodes_fts WHERE nodes_fts MATCH ?1",
+                    params![match_expr],
+                    |r| r.get(0),
+                )
+                .map_err(es)?
+            };
+            total = Some(cnt);
+        }
     } else {
         // Parallel chunked scan with keyset pagination: the id range after the
         // cursor is split across CPU cores, each core scanning its own slice
         // with a dedicated read-only connection.
         let after = geti(req, "after", 0).max(0);
         let pat = if exact { q.to_string() } else { like_pattern(q) };
-        let sql: &'static str = if exact {
+        let where_clause: &'static str = if exact {
             match scope {
-                "keys" => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE name = ?1 AND id > ?2 AND id <= ?3 ORDER BY id LIMIT ?4"
-                }
-                "values" => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE value = ?1 AND id > ?2 AND id <= ?3 ORDER BY id LIMIT ?4"
-                }
-                _ => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE (name = ?1 OR value = ?1) AND id > ?2 AND id <= ?3 \
-                     ORDER BY id LIMIT ?4"
-                }
+                "keys" => "name = ?1",
+                "values" => "value = ?1",
+                _ => "(name = ?1 OR value = ?1)",
             }
         } else {
             match scope {
-                "keys" => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE name LIKE ?1 ESCAPE '\\' AND id > ?2 AND id <= ?3 \
-                     ORDER BY id LIMIT ?4"
-                }
-                "values" => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE value LIKE ?1 ESCAPE '\\' AND id > ?2 AND id <= ?3 \
-                     ORDER BY id LIMIT ?4"
-                }
-                _ => {
-                    "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
-                     WHERE (name LIKE ?1 ESCAPE '\\' OR value LIKE ?1 ESCAPE '\\') \
-                     AND id > ?2 AND id <= ?3 ORDER BY id LIMIT ?4"
-                }
+                "keys" => "name LIKE ?1 ESCAPE '\\'",
+                "values" => "value LIKE ?1 ESCAPE '\\'",
+                _ => "(name LIKE ?1 ESCAPE '\\' OR value LIKE ?1 ESCAPE '\\')",
             }
         };
+        let sql = format!(
+            "SELECT id, kind, name, substr(value,1,200), parent_id FROM nodes \
+             WHERE {} AND id > ?2 AND id <= ?3 ORDER BY id LIMIT ?4",
+            where_clause
+        );
         let max_id: i64 = conn
             .query_row("SELECT COALESCE(MAX(id),0) FROM nodes", [], |r| r.get(0))
             .map_err(es)?;
         if max_id - after <= 500_000 {
             // Small remainder: one connection is faster than spinning up threads.
-            let mut st = conn.prepare_cached(sql).map_err(es)?;
+            let mut st = conn.prepare(&sql).map_err(es)?;
             let mut rows = st.query(params![pat, after, max_id, limit + 1]).map_err(es)?;
             while let Some(row) = rows.next().map_err(es)? {
                 items.push(search_row(row)?);
             }
         } else {
-            items = scan_parallel(db_path, sql, &pat, after, max_id, limit)?;
+            items = scan_parallel(db_path, &sql, &pat, after, max_id, limit)?;
+        }
+        if want_total {
+            let csql = format!(
+                "SELECT COUNT(*) FROM nodes WHERE {} AND id > ?2 AND id <= ?3",
+                where_clause
+            );
+            total = Some(count_parallel(db_path, &csql, &pat, max_id)?);
         }
     }
 
@@ -517,7 +542,7 @@ fn op_search(conn: &Connection, db_path: &str, req: &Value) -> Result<Value, Str
     if has_more {
         items.truncate(limit as usize);
     }
-    Ok(json!({"items": items, "hasMore": has_more, "indexed": use_fts}))
+    Ok(json!({"items": items, "hasMore": has_more, "indexed": use_fts, "total": total}))
 }
 
 // ---------- node statistics ----------

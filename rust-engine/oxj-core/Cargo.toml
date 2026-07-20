@@ -1,0 +1,12 @@
+[package]
+name = "oxj-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Zero-copy memory-mapped structural index engine for large JSON/XML/CSV files"
+
+[dependencies]
+memmap2 = "0.9"
+rayon = "1.10"
+memchr = "2"
+regex = "1.10"
