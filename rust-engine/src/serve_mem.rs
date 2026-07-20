@@ -784,11 +784,15 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
         NodeKind::Null => String::from("null"),
         _ => doc.raw_text(target),
     };
-    // Minified container (typical for API responses): rebuild pretty from
-    // the index. Already-formatted sources keep their original layout.
+    // Minified or line-delimited container (typical for API responses and
+    // NDJSON-style dumps): rebuild pretty from the index. Properly formatted
+    // sources keep their original layout.
+    fn looks_minified(text: &str) -> bool {
+        text.lines().take(200).any(|l| l.len() > 240)
+    }
     if matches!(t.kind, NodeKind::Object | NodeKind::Array | NodeKind::Document)
         && text.len() > 120
-        && !text.contains('\n')
+        && looks_minified(&text)
     {
         let mut out = String::new();
         if build_json_mem(doc, target, &mut out, 0, &mut budget).is_ok() {
