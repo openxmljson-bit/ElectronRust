@@ -274,9 +274,9 @@ body {
 }
 .donut-center b { font-size: 16px; }
 .donut-center span { font-size: 10px; color: var(--fg-dim); }
-.stat-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.stat-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 10.5px; line-height: 1.35; }
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .legend-name { flex: 1; }
 .legend-count { font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-row {
