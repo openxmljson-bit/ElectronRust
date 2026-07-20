@@ -255,12 +255,17 @@ fn like_pattern(q: &str) -> String {
 }
 
 fn fts_built(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
-        [],
-        |_r| Ok(1i64),
-    )
-    .is_ok()
+    // The table's existence alone isn't proof: an interrupted index build
+    // leaves a partial nodes_fts behind, which silently drops matches.
+    // Only trust the index once the indexer has stamped completion in meta.
+    meta_get(conn, "fts_built").as_deref() == Some("1")
+        && conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes_fts'",
+                [],
+                |_r| Ok(1i64),
+            )
+            .is_ok()
 }
 
 fn search_row(row: &rusqlite::Row) -> Result<Value, String> {

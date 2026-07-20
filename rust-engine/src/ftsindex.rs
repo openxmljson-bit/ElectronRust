@@ -26,6 +26,9 @@ pub fn run(dbp: &str) -> Result<(), String> {
     println!("{}", json!({"event":"start"}));
     flush();
 
+    // Clear the completion stamp first: if this run is interrupted, searches
+    // must fall back to the scan path rather than a partial index.
+    let _ = conn.execute("DELETE FROM meta WHERE key='fts_built'", []);
     conn.execute_batch("DROP TABLE IF EXISTS nodes_fts;").map_err(e2s)?;
     conn.execute_batch(
         "CREATE VIRTUAL TABLE nodes_fts USING fts5(\
