@@ -12,6 +12,7 @@ mod json;
 mod progress;
 mod reader;
 mod serve;
+mod serve_mem;
 mod xmlp;
 
 use std::io::Write;
@@ -55,6 +56,33 @@ fn main() {
             if let Err(e) = run_ingest(&file, &dbp, &format) {
                 emit_error(&e);
                 let _ = std::fs::remove_file(&dbp);
+                exit(1);
+            }
+        }
+        "serve-mem" => {
+            let mut file = String::new();
+            let mut format = String::from("auto");
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--file" => {
+                        i += 1;
+                        file = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--format" => {
+                        i += 1;
+                        format = args.get(i).cloned().unwrap_or_default();
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if file.is_empty() {
+                emit_error("serve-mem requires --file <path>");
+                exit(2);
+            }
+            if let Err(e) = serve_mem::serve_mem(&file, &format) {
+                emit_error(&e);
                 exit(1);
             }
         }

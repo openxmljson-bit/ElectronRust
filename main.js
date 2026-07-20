@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 const https = require('https');
 const http = require('http');
+const os = require('os');
 
 const MAX_RECENTS = 15;
 
@@ -146,8 +147,8 @@ function setIndexBytes(dbPath, bytes) {
 
 function inUseDbs() {
   const s = new Set();
-  for (const [, v] of sessions) s.add(v.dbPath);
-  for (const [, v] of ingests) s.add(v.dbPath);
+  for (const [, v] of sessions) { if (v.dbPath) s.add(v.dbPath); }
+  for (const [, v] of ingests) { if (v.dbPath) s.add(v.dbPath); }
   return s;
 }
 
@@ -384,15 +385,35 @@ function killIngest(tabId, deleteDb) {
   }
 }
 
-function startServe(tabId, dbPath, wc, file) {
+// Hybrid engine decision ("like the previous app"): files that comfortably
+// fit in RAM open with the mmap-based in-memory engine (no ingest at all);
+// bigger ones stream into SQLite.
+const MEM_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
+const MEM_FREE_FRACTION = 0.7;                 // ≤70% of currently free RAM
+
+function decideMode(filePath) {
+  const pref = getSettings().engineMode || 'auto'; // auto | db | memory
+  if (pref === 'db') return 'db';
+  if (pref === 'memory') return 'memory';
+  try {
+    const size = fs.statSync(filePath).size;
+    if (size <= MEM_MAX_BYTES && size <= os.freemem() * MEM_FREE_FRACTION) return 'memory';
+  } catch {}
+  return 'db';
+}
+
+function startServe(tabId, dbPath, wc, file, mode) {
   return new Promise((resolve, reject) => {
     killSession(tabId);
     const bin = engineBin();
     if (!bin) return reject(new Error('Engine binary not found. Run: npm run build:engine'));
-    const proc = spawn(bin, ['serve', '--db', dbPath], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const s = { proc, pending: new Map(), file, dbPath, wc };
+    const args = mode === 'memory'
+      ? ['serve-mem', '--file', file]
+      : ['serve', '--db', dbPath];
+    const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const s = { proc, pending: new Map(), file, dbPath, wc, mode: mode || 'db' };
     sessions.set(tabId, s);
-    lastDb.set(tabId, { dbPath, file, wc });
+    lastDb.set(tabId, { dbPath, file, wc, mode: mode || 'db' });
     const rl = readline.createInterface({ input: proc.stdout });
     let ready = false;
     rl.on('line', (line) => {
@@ -426,7 +447,8 @@ function startServe(tabId, dbPath, wc, file) {
       }
       if (!ready) reject(new Error('engine exited during startup'));
     });
-    setTimeout(() => { if (!ready) reject(new Error('engine start timeout')); }, 20000);
+    // Memory mode parses the whole file before 'ready' — allow generous time.
+    setTimeout(() => { if (!ready) reject(new Error('engine start timeout')); }, mode === 'memory' ? 300000 : 20000);
   });
 }
 
@@ -437,9 +459,10 @@ function startServe(tabId, dbPath, wc, file) {
 async function query(tabId, payload) {
   if (!sessions.get(tabId)) {
     const info = lastDb.get(tabId);
-    if (info && fs.existsSync(info.dbPath) && !info.wc.isDestroyed()) {
+    const source = info && (info.mode === 'memory' ? info.file : info.dbPath);
+    if (info && source && fs.existsSync(source) && !info.wc.isDestroyed()) {
       if (!reviving.has(tabId)) {
-        const p = startServe(tabId, info.dbPath, info.wc, info.file)
+        const p = startServe(tabId, info.dbPath, info.wc, info.file, info.mode)
           .finally(() => reviving.delete(tabId));
         reviving.set(tabId, p);
       }
@@ -473,12 +496,33 @@ async function loadFile(wc, tabId, filePath, force) {
   killSession(tabId);
   addRecent(filePath);
 
+  // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
+  if (decideMode(filePath) === 'memory') {
+    try {
+      let size = 0;
+      try { size = fs.statSync(filePath).size; } catch {}
+      if (!wc.isDestroyed()) {
+        wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
+        wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
+      }
+      await startServe(tabId, null, wc, filePath, 'memory');
+      const meta = await query(tabId, { op: 'meta' });
+      bumpStat(meta.format);
+      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath });
+      return;
+    } catch (memErr) {
+      // Parse/memory failure: fall through to the robust DB path.
+      engineLog('serve-mem failed, falling back to DB: ' + String((memErr && memErr.message) || memErr));
+      killSession(tabId);
+    }
+  }
+
   const dbPath = dbPathFor(filePath);
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
     indexTouch(dbPath, filePath); // refresh LRU timestamp
-    await startServe(tabId, dbPath, wc, filePath);
+    await startServe(tabId, dbPath, wc, filePath, 'db');
     const meta = await query(tabId, { op: 'meta' });
     bumpStat(meta.format);
     if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath });
@@ -504,7 +548,7 @@ async function loadFile(wc, tabId, filePath, force) {
       indexTouch(dbPath, filePath);
       setTimeout(() => { try { pruneCache(); buildMenu(); } catch {} }, 500); // enforce cap after new data lands
       try {
-        await startServe(tabId, dbPath, wc, filePath);
+        await startServe(tabId, dbPath, wc, filePath, 'db');
         const meta = await query(tabId, { op: 'meta' });
         bumpStat(meta.format);
         if (!wc.isDestroyed()) {
@@ -738,6 +782,20 @@ function buildMenu() {
           })),
         },
         { type: 'separator' },
+        {
+          label: 'Engine Mode',
+          submenu: [
+            { v: 'auto', label: 'Auto (RAM under 10 GB, DB above)' },
+            { v: 'memory', label: 'Always Memory' },
+            { v: 'db', label: 'Always Database' },
+          ].map((o) => ({
+            label: o.label,
+            type: 'radio',
+            checked: (getSettings().engineMode || 'auto') === o.v,
+            click: () => { saveSetting('engineMode', o.v); buildMenu(); },
+          })),
+        },
+        { type: 'separator' },
         { label: 'Open Cache Folder', click: () => shell.openPath(dbCacheDir()) },
       ],
     },
@@ -863,6 +921,9 @@ app.whenReady().then(() => {
       const sa = sessions.get(tabA);
       const sb = sessions.get(tabB);
       if (!sa || !sb) throw new Error('both tabs must have loaded documents');
+      if (sa.mode === 'memory' || sb.mode === 'memory') {
+        throw new Error('Compare needs database mode — set Cache → Engine Mode → Always Database and reload both tabs');
+      }
       const bin = engineBin();
       const out = await new Promise((resolve, reject) => {
         const proc = spawn(bin, ['diff', '--a', sa.dbPath, '--b', sb.dbPath, '--limit', '5000']);
@@ -951,6 +1012,7 @@ app.whenReady().then(() => {
     try {
       const info = sessions.get(tabId) || lastDb.get(tabId);
       if (!info) throw new Error('no document loaded');
+      if (!info.dbPath) throw new Error('memory-mode documents need no search index — search is already parallel');
       const bin = engineBin();
       if (!bin) throw new Error('engine binary not found');
       const wc = e.sender;

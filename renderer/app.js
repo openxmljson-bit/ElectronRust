@@ -159,7 +159,9 @@ function renderScreen() {
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
-    $('btn-tools').classList.toggle('hidden', plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
+    const memMode = t.meta && t.meta.mode === 'memory';
+    $('btn-tools').classList.toggle('hidden',
+      plain || memMode || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
     $('btn-jq').classList.toggle('hidden', !jqApplicable(t));
     if (!jqApplicable(t)) $('jq-bar').classList.add('hidden');
     $('search-scope').classList.toggle('hidden', plain);
@@ -185,7 +187,7 @@ function renderScreen() {
     $('view-toggle').classList.toggle('hidden', !isCsv);
     setView(t.view);
     $('status-doc').textContent =
-      baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes);
+      baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes) + (memMode ? ' · RAM' : '');
     if (isCsv) buildTableHead(t);
     renderTree();
     treeScroll.scrollTop = t.treeScrollTop || 0;
@@ -2057,9 +2059,11 @@ async function validateAgainstSchema() {
 async function compareWithTab() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
-  const others = tabs.filter((x) => x !== t && x.phase === 'ready' && !x.plain);
+  const others = tabs.filter(
+    (x) => x !== t && x.phase === 'ready' && !x.plain && !(x.meta && x.meta.mode === 'memory')
+  );
   if (!others.length) {
-    toast('Open the document to compare with in another tab first');
+    toast('Open the document to compare with in another tab first (database mode)');
     return;
   }
   const { box, back } = simpleModal('Compare "' + t.title + '" with…');
