@@ -1073,6 +1073,7 @@ function updateMatchCount() {
     ? fmtInt(nav.total)
     : fmtInt(nav.ids.length) + (nav.hasMore ? '+' : '');
   let text = 'Match ' + fmtInt(nav.cur + 1) + ' of ' + totalText;
+  if (nav.exact) text += ' (exact)';
   const known = nav.total != null ? nav.total : 0;
   if (known > nav.ids.length) text += ' (first ' + fmtInt(nav.ids.length) + ' loaded)';
   $('match-count').textContent = text;
