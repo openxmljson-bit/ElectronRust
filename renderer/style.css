@@ -257,6 +257,28 @@ body {
 .side-col .stats { box-shadow: 0 18px 60px rgba(0,0,0,.45); }
 .cache-actions { margin-top: 10px; text-align: right; }
 .stats-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+/* Donut chart */
+.stats-chart { display: flex; align-items: center; gap: 16px; }
+.donut {
+  width: 104px; height: 104px;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+}
+.donut-center {
+  position: absolute; inset: 20px;
+  border-radius: 50%;
+  background: var(--bg2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  line-height: 1.15;
+}
+.donut-center b { font-size: 16px; }
+.donut-center span { font-size: 10px; color: var(--fg-dim); }
+.stat-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.legend-name { flex: 1; }
+.legend-count { font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-row {
   display: flex; align-items: center; gap: 12px;
   padding: 5px 8px;

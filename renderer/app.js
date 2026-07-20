@@ -322,7 +322,9 @@ async function refreshRecents() {
   }
 }
 
-// ---------- files-served stats ----------
+// ---------- file activity donut chart ----------
+const STAT_PALETTE = ['#4da3ff', '#e0764a', '#7ee0a3', '#c586c0', '#e2b93b', '#8b91a3', '#66c2cd', '#d16d6d', '#9a86e8'];
+
 async function refreshStats() {
   let s = {};
   try { s = await window.oxj.stats(); } catch {}
@@ -335,25 +337,47 @@ async function refreshStats() {
   list.textContent = '';
   if (!entries.length) { wrap.classList.add('hidden'); return; }
   wrap.classList.remove('hidden');
-  const max = entries[0][1] || 1;
-  for (const [fmt, count] of entries) {
-    const row = document.createElement('div');
-    row.className = 'stat-row';
-    const label = document.createElement('span');
-    label.className = 'stat-label';
-    label.textContent = fmt;
-    const track = document.createElement('div');
-    track.className = 'stat-track';
-    const bar = document.createElement('div');
-    bar.className = 'stat-bar';
-    bar.style.width = Math.max(4, Math.round((count / max) * 100)) + '%';
-    track.appendChild(bar);
+  const total = entries.reduce((sum, [, v]) => sum + v, 0) || 1;
+
+  const chart = document.createElement('div');
+  chart.className = 'stats-chart';
+
+  // Donut via conic-gradient — compact, fixed height.
+  const donut = document.createElement('div');
+  donut.className = 'donut';
+  let acc = 0;
+  const stops = entries.map(([, v], i) => {
+    const from = (acc / total) * 360;
+    acc += v;
+    const to = (acc / total) * 360;
+    return STAT_PALETTE[i % STAT_PALETTE.length] + ' ' + from.toFixed(2) + 'deg ' + to.toFixed(2) + 'deg';
+  }).join(', ');
+  donut.style.background = 'conic-gradient(' + stops + ')';
+  const center = document.createElement('div');
+  center.className = 'donut-center';
+  center.innerHTML = '<b>' + fmtInt(total) + '</b><span>files</span>';
+  donut.appendChild(center);
+
+  const legend = document.createElement('div');
+  legend.className = 'stat-legend';
+  entries.forEach(([fmt, count], i) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'legend-dot';
+    dot.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
+    const name = document.createElement('span');
+    name.className = 'legend-name';
+    name.textContent = fmt;
     const num = document.createElement('span');
-    num.className = 'stat-count';
+    num.className = 'legend-count';
     num.textContent = fmtInt(count);
-    row.append(label, track, num);
-    list.appendChild(row);
-  }
+    item.append(dot, name, num);
+    legend.appendChild(item);
+  });
+
+  chart.append(donut, legend);
+  list.appendChild(chart);
 }
 
 // ---------- cache info box ----------
