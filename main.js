@@ -131,7 +131,16 @@ function indexTouch(dbPath, source) {
   const ix = readCacheIndex();
   const key = path.basename(dbPath);
   const prev = ix[key] || {};
-  ix[key] = { source: source || prev.source || null, lastUsed: Date.now() };
+  ix[key] = { ...prev, source: source || prev.source || null, lastUsed: Date.now() };
+  writeCacheIndex(ix);
+}
+
+// Record how much a built FTS index added to a DB (measured as file growth).
+function setIndexBytes(dbPath, bytes) {
+  const ix = readCacheIndex();
+  const key = path.basename(dbPath);
+  const prev = ix[key] || {};
+  ix[key] = { ...prev, indexBytes: Math.max(0, Math.round(bytes)) };
   writeCacheIndex(ix);
 }
 
@@ -278,6 +287,7 @@ async function deleteSearchIndexes(bw) {
       proc.on('exit', () => { clearTimeout(timer); resolve(); });
       proc.on('error', () => { clearTimeout(timer); resolve(); });
     });
+    setIndexBytes(d.path, 0);
   }
   const freed = Math.max(0, before - cacheTotalSize());
   buildMenu();
@@ -944,6 +954,8 @@ app.whenReady().then(() => {
       const bin = engineBin();
       if (!bin) throw new Error('engine binary not found');
       const wc = e.sender;
+      let sizeBefore = 0;
+      try { sizeBefore = fs.statSync(info.dbPath).size; } catch {}
       await new Promise((resolve, reject) => {
         const proc = spawn(bin, ['index', '--db', info.dbPath]);
         const rl = readline.createInterface({ input: proc.stdout });
@@ -965,6 +977,8 @@ app.whenReady().then(() => {
           }
         });
       });
+      try { setIndexBytes(info.dbPath, fs.statSync(info.dbPath).size - sizeBefore); } catch {}
+      buildMenu(); // refresh cache size display
       return ok(true);
     } catch (err) { return fail(err); }
   });
@@ -983,12 +997,24 @@ app.whenReady().then(() => {
         } catch {}
       }
     } catch {}
+    const ix = readCacheIndex();
+    let indexBytes = 0;
+    let indexCount = 0;
+    for (const d of dbs) {
+      const entry = ix[d.file];
+      if (entry && entry.indexBytes > 0) {
+        indexBytes += entry.indexBytes;
+        indexCount++;
+      }
+    }
     return {
       totalBytes: dbs.reduce((s, d) => s + d.size, 0),
       count: dbs.length,
       limitGb: getSettings().cacheLimitGb ?? 20,
       tempBytes,
       tempCount,
+      indexBytes,
+      indexCount,
     };
   });
 

@@ -368,6 +368,7 @@ async function refreshCacheInfo() {
   };
   addRow('Cached documents', fmtInt(info.count));
   addRow('Cache size', fmtBytes(info.totalBytes));
+  addRow('Search indexes', info.indexCount ? fmtInt(info.indexCount) + ' · ' + fmtBytes(info.indexBytes) : 'None');
   addRow('Size limit', info.limitGb === 0 ? 'Unlimited' : info.limitGb + ' GB');
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
