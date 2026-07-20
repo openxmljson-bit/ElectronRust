@@ -1,8 +1,8 @@
 [package]
 name = "oxj-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
 description = "Zero-copy memory-mapped structural index engine for large JSON/XML/CSV files"
 
 [dependencies]
