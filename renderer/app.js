@@ -97,6 +97,9 @@ function setCurrent(t) {
 }
 
 function renderTabs() {
+  // A single empty tab (the welcome screen) needs no tab strip.
+  const showBar = tabs.length > 1 || tabs.some((t) => t.phase !== 'empty');
+  $('tabbar').classList.toggle('hidden', !showBar);
   const host = $('tabs');
   host.textContent = '';
   for (const t of tabs) {
