@@ -414,7 +414,7 @@ async function refreshCacheInfo() {
     addRow('RAM mode',
       mode === 'db' ? 'Off (always database)'
       : mode === 'memory' ? 'Always on'
-      : 'Files up to ' + fmtBytes(info.memModeLimit));
+      : 'Files up to ~' + fmtBytes(info.memModeLimit));
   }
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
