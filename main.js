@@ -504,6 +504,7 @@ function queryRaw(tabId, payload) {
 }
 
 async function loadFile(wc, tabId, filePath, force) {
+  const t0 = Date.now();
   const bin = engineBin();
   if (!bin) throw new Error('Engine binary not found. Run: npm run build:engine');
   if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
@@ -523,7 +524,7 @@ async function loadFile(wc, tabId, filePath, force) {
       await startServe(tabId, null, wc, filePath, 'memory');
       const meta = await query(tabId, { op: 'meta' });
       bumpStat(meta.format);
-      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath });
+      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
       return;
     } catch (memErr) {
       // Parse/memory failure: fall through to the robust DB path.
@@ -540,7 +541,7 @@ async function loadFile(wc, tabId, filePath, force) {
     await startServe(tabId, dbPath, wc, filePath, 'db');
     const meta = await query(tabId, { op: 'meta' });
     bumpStat(meta.format);
-    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath });
+    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
     return;
   }
 
@@ -567,7 +568,7 @@ async function loadFile(wc, tabId, filePath, force) {
         const meta = await query(tabId, { op: 'meta' });
         bumpStat(meta.format);
         if (!wc.isDestroyed()) {
-          wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, nodes: msg.nodes, elapsed_ms: msg.elapsed_ms });
+          wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, nodes: msg.nodes, elapsed_ms: msg.elapsed_ms, loadMs: Date.now() - t0 });
         }
       } catch (e) {
         if (!wc.isDestroyed()) wc.send('ingest-error', { tabId, message: String((e && e.message) || e) });

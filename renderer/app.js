@@ -181,6 +181,7 @@ function renderScreen() {
       showPlain(t);
       $('status-doc').textContent =
         baseName(t.file) + ' · ' + t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
+      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
       $('status-type').textContent = 'Read-only · ⌘F to find';
       $('status-path').textContent = '';
       return;
@@ -191,6 +192,7 @@ function renderScreen() {
     $('status-doc').textContent =
       baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes) + (memMode ? ' · RAM' : '');
     if (isCsv) buildTableHead(t);
+    $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
     renderTree();
     treeScroll.scrollTop = t.treeScrollTop || 0;
     renderTree();
@@ -244,9 +246,11 @@ async function openPlainPath(p, tab, lang) {
   t.progress = { startedMsg: 'Reading file…' };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
+  const t0 = performance.now();
   try {
     const res = await window.oxj.loadText(p);
     if (!tabAlive(t)) return;
+    t.loadMs = Math.round(performance.now() - t0);
     t.plain = {
       language: lang,
       label: String(p).split('.').pop().toUpperCase(),
@@ -599,6 +603,7 @@ window.oxj.onIngestError((m) => {
 window.oxj.onDocReady(async (m) => {
   const t = tabById(m.tabId);
   if (!t) return;
+  t.loadMs = m.loadMs != null ? m.loadMs : m.elapsed_ms;
   t.meta = m.meta || {};
   t.docFormat = t.meta.format || 'json';
   t.rootId = parseInt(t.meta.root_id || '1', 10);
