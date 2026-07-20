@@ -52,6 +52,17 @@
           "to": "engine/openjsonxml-engine.exe"
         }
       ]
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon.png",
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "rust-engine/target/release/openjsonxml-engine",
+          "to": "engine/openjsonxml-engine"
+        }
+      ]
     }
   },
   "allowScripts": {

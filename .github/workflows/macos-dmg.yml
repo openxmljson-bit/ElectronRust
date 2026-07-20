@@ -11,6 +11,7 @@ permissions:
 env:
   HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
   HAS_NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD != '' }}
+  HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN != '' }}
 
 jobs:
   build:
@@ -100,8 +101,14 @@ jobs:
           name: OPENXMLJSON-dmg
           path: dist/*.dmg
 
-      - name: Attach to Release
-        if: startsWith(github.ref, 'refs/tags/')
+      # On tag pushes: publish the DMG to the PUBLIC releases repo (source
+      # stays private). Needs RELEASES_REPO_TOKEN — a PAT with contents:write
+      # on that repo. Skipped automatically if the secret isn't set.
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_RELEASES_TOKEN == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          repository: openxmljson-bit/ElectronRust-Releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
           files: dist/*.dmg
