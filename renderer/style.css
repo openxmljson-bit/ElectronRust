@@ -383,6 +383,24 @@ body {
 
 .main-area { flex: 1; display: flex; min-height: 0; position: relative; }
 
+/* Back to top */
+.btn-top {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 8;
+  background: var(--bg2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 7px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 6px 22px rgba(0,0,0,.35);
+  opacity: .92;
+}
+.btn-top:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
+
 /* Tree */
 .tree-wrap { flex: 1; min-width: 0; display: flex; }
 .tree-scroll { flex: 1; overflow: auto; position: relative; }

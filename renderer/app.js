@@ -176,6 +176,7 @@ function renderScreen() {
       $('table-wrap').classList.add('hidden');
       closeSource();
       closeSearch();
+      $('btn-top').classList.add('hidden');
       showPlain(t);
       $('status-doc').textContent =
         baseName(t.file) + ' · ' + t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
@@ -192,6 +193,7 @@ function renderScreen() {
     renderTree();
     treeScroll.scrollTop = t.treeScrollTop || 0;
     renderTree();
+    updateTopBtn();
     updateStatusForSelection();
     if (sourceOpen) scheduleSourceUpdate();
   }
@@ -846,7 +848,22 @@ function renderTree() {
   treeRows.appendChild(frag);
 }
 
-treeScroll.addEventListener('scroll', () => renderTree());
+// Back-to-top button: appears after scrolling down in tree or table view.
+function activeScroller() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) return null;
+  return t.view === 'table' ? tableScroll : treeScroll;
+}
+function updateTopBtn() {
+  const sc = activeScroller();
+  $('btn-top').classList.toggle('hidden', !sc || sc.scrollTop < 600);
+}
+$('btn-top').addEventListener('click', () => {
+  const sc = activeScroller();
+  if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+treeScroll.addEventListener('scroll', () => { renderTree(); updateTopBtn(); });
 window.addEventListener('resize', () => renderTree());
 
 treeRows.addEventListener('click', async (ev) => {
@@ -1241,6 +1258,7 @@ function setView(name) {
   $('btn-view-tree').classList.toggle('active', !table);
   $('btn-view-table').classList.toggle('active', table);
   if (table) renderTable();
+  updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
 $('btn-view-table').addEventListener('click', () => setView('table'));
@@ -1310,7 +1328,7 @@ function renderTable() {
   }
   tableRowsEl.appendChild(frag);
 }
-tableScroll.addEventListener('scroll', () => renderTable());
+tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
 
 // ---------- Monaco source panel ----------
 function initMonaco() {
