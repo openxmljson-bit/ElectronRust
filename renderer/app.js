@@ -17,8 +17,6 @@ let monacoEditor = null;
 let monacoReady = false;
 let uiTheme = 'dark';
 let sourceOpen = false;
-let lastSearch = null;
-let searchOffset = 0;
 
 function makeTab() {
   return {
@@ -172,6 +170,7 @@ function renderScreen() {
       $('tree-wrap').classList.add('hidden');
       $('table-wrap').classList.add('hidden');
       closeSource();
+      closeSearch();
       showPlain(t);
       $('status-doc').textContent =
         baseName(t.file) + ' · ' + t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
@@ -744,7 +743,8 @@ function kindBadge(e) {
 
 function buildRow(t, e, idx) {
   const row = document.createElement('div');
-  row.className = 'trow' + (idx % 2 ? ' zebra' : '') + (idx === t.selectedIdx ? ' selected' : '');
+  row.className = 'trow' + (idx % 2 ? ' zebra' : '') + (idx === t.selectedIdx ? ' selected' : '') +
+    (!e.pseudo && t.matchSet && t.matchSet.has(e.id) ? ' match' : '');
   row.style.top = idx * ROW_H + 'px';
   row.dataset.idx = idx;
 
@@ -925,21 +925,44 @@ async function updateStatusForSelection() {
   } catch {}
 }
 
-// ---------- search ----------
+// ---------- search: match stepping with amber highlights ----------
+// No results panel: matches are highlighted in the tree; a compact bar shows
+// "Match N of M" with prev/next stepping (F3 / Cmd+G).
+let matchNav = null; // { tabId, q, scope, exact, ids, total, cur, after, hasMore, fetching }
+const MATCH_PAGE = 500;
+const INDEX_SUGGEST_NODES = 2000000;
+
 $('search-box').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') startSearch();
   if (ev.key === 'Escape') { ev.target.value = ''; closeSearch(); }
 });
-// Fires when the ✕ inside the field is clicked (or the field is emptied).
+// Fires when the X inside the field is clicked (or the field is emptied).
 $('search-box').addEventListener('search', (ev) => {
   if (!ev.target.value) closeSearch();
 });
-$('btn-close-search').addEventListener('click', closeSearch);
-$('btn-search-more').addEventListener('click', () => runSearch(false));
+$('match-close').addEventListener('click', closeSearch);
+$('match-prev').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur - 1));
+$('match-next').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur + 1));
+
+// F3 / Cmd+G step forward, with Shift step back.
+document.addEventListener('keydown', (ev) => {
+  if (!matchNav || !matchNav.ids.length) return;
+  if (ev.key === 'F3' || ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'g')) {
+    ev.preventDefault();
+    gotoMatch(matchNav.cur + (ev.shiftKey ? -1 : 1));
+  }
+});
 
 function closeSearch() {
-  $('search-panel').classList.add('hidden');
-  lastSearch = null;
+  $('match-bar').classList.add('hidden');
+  if (matchNav) {
+    const t = tabById(matchNav.tabId);
+    if (t) {
+      t.matchSet = null;
+      if (t === cur) renderTree();
+    }
+  }
+  matchNav = null;
 }
 
 function startSearch() {
@@ -953,94 +976,119 @@ function startSearch() {
     exact = true;
     q = q.slice(1, -1);
   }
-  lastSearch = { q, scope: $('search-scope').value, exact, tabId: t.id, after: 0 };
-  searchOffset = 0;
-  $('search-results').textContent = '';
-  $('search-title').textContent = 'Searching…';
-  $('search-panel').classList.remove('hidden');
-  runSearch(true);
+  closeSearch();
+  matchNav = {
+    tabId: t.id, q, scope: $('search-scope').value, exact,
+    ids: [], total: null, cur: -1, after: 0, hasMore: false, fetching: false,
+  };
+  $('match-count').textContent = 'Searching…';
+  $('match-bar').classList.remove('hidden');
+  fetchMatchPage(false).then(() => {
+    if (!matchNav || matchNav.tabId !== t.id) return;
+    if (!matchNav.ids.length) {
+      $('match-count').textContent = 'No matches';
+      return;
+    }
+    gotoMatch(0);
+  });
 }
 
-async function runSearch(fresh, retried) {
-  if (!lastSearch) return;
-  const t = tabById(lastSearch.tabId);
+async function fetchMatchPage(retried) {
+  const nav = matchNav;
+  if (!nav || nav.fetching) return;
+  const t = tabById(nav.tabId);
   if (!t) return;
+  nav.fetching = true;
   try {
     const res = await window.oxj.query(t.id, {
-      op: 'search', q: lastSearch.q, scope: lastSearch.scope, exact: !!lastSearch.exact,
-      offset: searchOffset, after: lastSearch.after || 0, limit: 100,
+      op: 'search', q: nav.q, scope: nav.scope, exact: !!nav.exact,
+      offset: nav.ids.length, after: nav.after, limit: MATCH_PAGE,
+      total: nav.total == null,
     });
-    if (!lastSearch || tabById(lastSearch.tabId) !== t) return;
-    searchOffset += res.items.length;
-    if (res.items.length) lastSearch.after = res.items[res.items.length - 1].id;
-    updateIndexBanner(t, res);
-    const el = $('search-results');
-    for (const it of res.items) {
-      const item = document.createElement('div');
-      item.className = 'sr-item';
-      const k = document.createElement('span');
-      k.className = 'sr-key';
-      k.textContent = it.name != null ? it.name : '(value)';
-      const v = document.createElement('span');
-      v.className = 'sr-val';
-      v.textContent = it.value != null ? it.value : '';
-      item.append(k, v);
-      item.addEventListener('click', () => revealNode(t, it.id));
-      el.appendChild(item);
-    }
-    $('search-title').textContent = fmtInt(searchOffset) + (res.hasMore ? '+' : '') + ' results';
-    $('btn-search-more').classList.toggle('hidden', !res.hasMore);
-    if (fresh && !res.items.length) $('search-title').textContent = 'No results';
+    if (matchNav !== nav) return;
+    for (const it of res.items) nav.ids.push(it.id);
+    if (res.items.length) nav.after = res.items[res.items.length - 1].id;
+    nav.hasMore = !!res.hasMore;
+    if (res.total != null) nav.total = res.total;
+    t.matchSet = new Set(nav.ids);
+    if (t === cur) renderTree();
+    updateIndexUi(t, res);
   } catch (e) {
     const msg = cleanErr(e);
-    // The engine auto-revives on the next query — retry once for transient deaths.
+    // The engine auto-revives on the next query - retry once for transient deaths.
     if (!retried && /engine stopped|no document loaded/i.test(msg)) {
-      return runSearch(fresh, true);
+      nav.fetching = false;
+      return fetchMatchPage(true);
     }
-    $('search-title').textContent = 'Search failed';
+    if (matchNav === nav) $('match-count').textContent = 'Search failed';
     toast(msg);
+  } finally {
+    nav.fetching = false;
   }
 }
 
-// ---------- search index (FTS) banner ----------
-const INDEX_SUGGEST_NODES = 2000000;
+async function gotoMatch(i) {
+  const nav = matchNav;
+  if (!nav || !nav.ids.length) return;
+  const t = tabById(nav.tabId);
+  if (!t || t !== cur) return;
+  if (i >= nav.ids.length && nav.hasMore) {
+    await fetchMatchPage(false); // extend the loaded window
+    if (matchNav !== nav) return;
+  }
+  if (i < 0) i = nav.ids.length - 1;
+  if (i >= nav.ids.length) i = 0;
+  nav.cur = i;
+  updateMatchCount();
+  await revealNode(t, nav.ids[i]);
+}
 
-function updateIndexBanner(t, res) {
+function updateMatchCount() {
+  const nav = matchNav;
+  if (!nav) return;
+  const totalText = nav.total != null
+    ? fmtInt(nav.total)
+    : fmtInt(nav.ids.length) + (nav.hasMore ? '+' : '');
+  let text = 'Match ' + fmtInt(nav.cur + 1) + ' of ' + totalText;
+  const known = nav.total != null ? nav.total : 0;
+  if (known > nav.ids.length) text += ' (first ' + fmtInt(nav.ids.length) + ' loaded)';
+  $('match-count').textContent = text;
+}
+
+// ---------- search index (FTS) hint in the match bar ----------
+function updateIndexUi(t, res) {
   const big = Number((t.meta && t.meta.total_nodes) || 0) > INDEX_SUGGEST_NODES;
   const built = t.meta && t.meta.fts_built === '1';
   const show = big && !built && !t.indexBuilding && !(res && res.indexed);
-  $('index-banner').classList.toggle('hidden', !show);
+  $('index-note').classList.toggle('hidden', !show && !t.indexBuilding);
+  if (show) $('index-note').textContent = 'Slow? Build a one-time index for instant search.';
+  $('btn-build-index').classList.toggle('hidden', !show);
 }
 
 $('btn-build-index').addEventListener('click', async () => {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain || t.indexBuilding) return;
   t.indexBuilding = true;
+  $('index-note').classList.remove('hidden');
   $('index-note').textContent = 'Building index… you can keep browsing.';
-  $('btn-build-index').disabled = true;
+  $('btn-build-index').classList.add('hidden');
   try {
     await window.oxj.buildIndex(t.id);
     if (!tabAlive(t)) return;
     try { t.meta = await window.oxj.query(t.id, { op: 'meta' }); } catch {}
     toast('Search index built — searches are now instant', true);
+    t.indexBuilding = false;
     if (t === cur) {
-      $('index-banner').classList.add('hidden');
+      $('index-note').classList.add('hidden');
       // Re-run the current search against the index.
-      if (lastSearch && lastSearch.tabId === t.id) {
-        lastSearch.after = 0;
-        searchOffset = 0;
-        $('search-results').textContent = '';
-        runSearch(true);
-      }
+      if (matchNav && matchNav.tabId === t.id) startSearch();
     }
   } catch (err) {
+    t.indexBuilding = false;
+    $('index-note').classList.add('hidden');
     const msg = cleanErr(err);
     if (msg.includes('unknown command')) toast('Indexing needs an engine rebuild: npm run build:engine, then restart');
     else toast('Index build failed: ' + msg);
-  } finally {
-    t.indexBuilding = false;
-    $('btn-build-index').disabled = false;
-    $('index-note').textContent = 'Large document — build a one-time search index for instant results.';
   }
 });
 
