@@ -326,7 +326,10 @@ async function refreshRecents() {
 async function refreshStats() {
   let s = {};
   try { s = await window.oxj.stats(); } catch {}
-  const entries = Object.entries(s).sort((a, b) => b[1] - a[1]);
+  const hidden = ['XLSX', 'XLS', 'XLSM', 'XLTX', 'XLSB'];
+  const entries = Object.entries(s)
+    .filter(([k]) => !hidden.includes(k.toUpperCase()))
+    .sort((a, b) => b[1] - a[1]);
   const wrap = $('stats-wrap');
   const list = $('stats-list');
   list.textContent = '';
@@ -402,7 +405,14 @@ function targetTabForOpen() {
   return newTab(true);
 }
 
+const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
+
 async function openPath(p, tab, force) {
+  const ext = String(p).split('.').pop().toLowerCase();
+  if (BLOCKED_EXTS.includes(ext)) {
+    toast('Excel files are not supported — export to CSV or JSON first');
+    return;
+  }
   const lang = plainLangFor(p);
   if (lang) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();

@@ -359,6 +359,7 @@ function getStats() {
 }
 function bumpStat(format) {
   const key = String(format || 'json').toUpperCase();
+  if (['XLSX', 'XLS', 'XLSM', 'XLTX', 'XLSB'].includes(key)) return; // Excel unsupported
   const s = getStats();
   s[key] = (s[key] || 0) + 1;
   try { fs.writeFileSync(statsPath(), JSON.stringify(s)); } catch {}

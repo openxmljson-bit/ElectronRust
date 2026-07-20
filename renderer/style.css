@@ -161,7 +161,7 @@ body {
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 
 /* ---------- Welcome ---------- */
-#screen-welcome { align-items: center; justify-content: center; }
+#screen-welcome { align-items: center; justify-content: flex-start; padding-top: 18px; }
 .welcome-card {
   background: var(--bg2);
   border: 1px solid var(--border);
