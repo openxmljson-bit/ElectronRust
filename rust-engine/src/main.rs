@@ -58,6 +58,25 @@ fn main() {
                 exit(1);
             }
         }
+        "deindex" => {
+            let mut dbp = String::new();
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "--db" {
+                    i += 1;
+                    dbp = args.get(i).cloned().unwrap_or_default();
+                }
+                i += 1;
+            }
+            if dbp.is_empty() {
+                emit_error("deindex requires --db <db-path>");
+                exit(2);
+            }
+            if let Err(e) = ftsindex::remove(&dbp) {
+                emit_error(&e);
+                exit(1);
+            }
+        }
         "index" => {
             let mut dbp = String::new();
             let mut i = 2;

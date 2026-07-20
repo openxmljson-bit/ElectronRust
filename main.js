@@ -254,6 +254,40 @@ function clearCache() {
   return freed;
 }
 
+// Strip FTS search indexes from every cached DB (engine drops + VACUUMs).
+async function deleteSearchIndexes(bw) {
+  const win = bw || BrowserWindow.getFocusedWindow();
+  const res = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['Delete Indexes', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    message: 'Delete all search indexes?',
+    detail:
+      'Removes the full-text search index from every cached document and reclaims its disk space. ' +
+      'Searches fall back to the (parallel) scan; indexes can be rebuilt any time from the search bar.',
+  });
+  if (res.response !== 0) return;
+  const bin = engineBin();
+  if (!bin) return;
+  const before = cacheTotalSize();
+  for (const d of listCacheDbs()) {
+    await new Promise((resolve) => {
+      const proc = spawn(bin, ['deindex', '--db', d.path]);
+      const timer = setTimeout(() => { try { proc.kill(); } catch {} resolve(); }, 600000);
+      proc.on('exit', () => { clearTimeout(timer); resolve(); });
+      proc.on('error', () => { clearTimeout(timer); resolve(); });
+    });
+  }
+  const freed = Math.max(0, before - cacheTotalSize());
+  buildMenu();
+  dialog.showMessageBox(win, {
+    type: 'info',
+    message: 'Search indexes deleted',
+    detail: freed > 0 ? 'Freed ' + fmtBytes(freed) + '.' : 'No indexes were present.',
+  });
+}
+
 async function clearCacheInteractive(bw) {
   const win = bw || BrowserWindow.getFocusedWindow();
   const total = cacheTotalSize();
@@ -672,6 +706,7 @@ function buildMenu() {
             });
           },
         },
+        { label: 'Delete Search Indexes…', click: (mi, bw) => deleteSearchIndexes(bw) },
         { type: 'separator' },
         {
           label: 'Size Limit',
