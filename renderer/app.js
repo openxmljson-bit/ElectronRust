@@ -963,7 +963,6 @@ $('btn-find').addEventListener('click', () => {
 $('search-box').addEventListener('search', (ev) => {
   if (!ev.target.value) closeSearch();
 });
-$('match-close').addEventListener('click', closeSearch);
 $('match-prev').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur - 1));
 $('match-next').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur + 1));
 
@@ -977,7 +976,9 @@ document.addEventListener('keydown', (ev) => {
 });
 
 function closeSearch() {
-  $('match-bar').classList.add('hidden');
+  $('match-count').textContent = '';
+  $('index-note').classList.add('hidden');
+  $('btn-build-index').classList.add('hidden');
   if (matchNav) {
     const t = tabById(matchNav.tabId);
     if (t) {
@@ -1005,7 +1006,6 @@ function startSearch() {
     ids: [], total: null, cur: -1, after: 0, hasMore: false, fetching: false,
   };
   $('match-count').textContent = 'Searching…';
-  $('match-bar').classList.remove('hidden');
   fetchMatchPage(false).then(() => {
     if (!matchNav || matchNav.tabId !== t.id) return;
     if (!matchNav.ids.length) {
