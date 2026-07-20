@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; worker-src 'self' blob: data:" />
+  <title>OPENXMLJSON</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ============ Tab bar (always visible) ============ -->
+  <div id="tabbar" class="tabbar">
+    <div id="tabs" class="tabs"></div>
+    <button id="btn-new-tab" class="tab-add" title="New tab (max 12)">+</button>
+  </div>
+
+  <div id="content" class="content">
+    <!-- ============ Welcome screen ============ -->
+    <div id="screen-welcome" class="screen">
+      <div class="welcome-row">
+      <div class="welcome-card">
+        <div class="logo"><span>OPEN</span>XML<span>JSON</span></div>
+        <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
+        <div class="tagline-big">Built for GIGABYTES</div>
+        <div class="chips">
+          <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">XML</span><span class="chip">CSV</span><span class="chip">TSV</span>
+        </div>
+        <div class="welcome-actions">
+          <button id="btn-open" class="btn-primary">Open File…</button>
+          <button id="btn-open-url" class="btn-secondary">Open URL…</button>
+          <button id="btn-open-clip" class="btn-secondary">Open Clipboard</button>
+        </div>
+        <div class="drop-hint">or drop a file anywhere in this window</div>
+        <div id="recents-wrap" class="recents hidden">
+          <div class="recents-head">
+            <span>Recent files</span>
+            <button id="btn-clear-recents" class="link-btn">Clear</button>
+          </div>
+          <div id="recents-list"></div>
+        </div>
+      </div>
+      <div class="side-col">
+        <div id="stats-wrap" class="stats hidden">
+          <div class="stats-head">Files Served</div>
+          <div id="stats-list"></div>
+        </div>
+        <div id="cache-wrap" class="stats hidden">
+          <div class="stats-head">Cache</div>
+          <div id="cache-list"></div>
+          <div class="cache-actions">
+            <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <!-- ============ Ingest progress screen ============ -->
+    <div id="screen-progress" class="screen hidden">
+      <div class="progress-card">
+        <div class="progress-title">Loading into database</div>
+        <div id="prog-file" class="progress-file"></div>
+        <div class="bar-outer"><div id="bar-inner" class="bar-inner"></div></div>
+        <div class="progress-stats">
+          <span id="prog-pct">0%</span>
+          <span id="prog-bytes"></span>
+          <span id="prog-speed"></span>
+          <span id="prog-eta"></span>
+        </div>
+        <div id="prog-nodes" class="progress-nodes"></div>
+        <div id="prog-phase" class="progress-phase hidden">Building index… this can take a while on large files</div>
+        <button id="btn-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <!-- ============ Viewer ============ -->
+    <div id="screen-viewer" class="screen hidden">
+      <div class="toolbar">
+        <span class="brand"><span>OPEN</span>XML<span>JSON</span></span>
+        <button id="btn-open2" class="btn-tool" title="Open another file">Open…</button>
+        <div id="view-toggle" class="view-toggle hidden">
+          <button id="btn-view-tree" class="seg active">Tree</button>
+          <button id="btn-view-table" class="seg">Table</button>
+        </div>
+        <button id="btn-source" class="btn-tool" title="Show formatted source of the selected node">Source</button>
+        <button id="btn-flow" class="btn-tool" title="Flow diagram of the selected node (JSON/CSV)">Flow</button>
+        <button id="btn-tools" class="btn-tool" title="Schema and comparison tools">Tools ▾</button>
+        <button id="btn-jq" class="btn-tool" title="Run a jq program (JSON documents)">jq</button>
+        <div class="spacer"></div>
+        <select id="search-scope" title="Search scope">
+          <option value="all">Keys + Values</option>
+          <option value="keys">Keys</option>
+          <option value="values">Values</option>
+        </select>
+        <input id="search-box" type="search" placeholder="Search… (Enter)" title='Substring search. Wrap in "double quotes" for an exact match.' spellcheck="false" />
+      </div>
+
+      <div id="jq-bar" class="jq-bar hidden">
+        <span class="jq-label">jq</span>
+        <input id="jq-input" type="text" placeholder='.items[] | select(.active) | {id, name}' spellcheck="false" />
+        <select id="jq-scope" title="What to feed into jq">
+          <option value="selected">Selected node</option>
+          <option value="root">Whole document</option>
+        </select>
+        <button id="jq-run" class="btn-tool">Run ↵</button>
+        <button id="jq-help" class="btn-tool" title="Sample jq commands built from this document">Help</button>
+        <button id="jq-close" class="link-btn">✕</button>
+      </div>
+
+      <div class="main-area">
+        <div id="tree-wrap" class="tree-wrap">
+          <div id="tree-scroll" class="tree-scroll">
+            <div id="tree-spacer" class="tree-spacer">
+              <div id="tree-rows"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="flow-wrap" class="flow-wrap hidden"></div>
+
+        <div id="text-wrap" class="text-wrap hidden">
+          <div id="text-host" class="text-host"></div>
+          <pre id="text-fallback" class="source-fallback hidden"></pre>
+        </div>
+
+        <div id="table-wrap" class="table-wrap hidden">
+          <div id="table-scroll" class="table-scroll">
+            <div id="table-head" class="table-head"></div>
+            <div id="table-spacer" class="table-spacer">
+              <div id="table-rows"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="search-panel" class="search-panel hidden">
+          <div class="panel-head">
+            <span id="search-title">Results</span>
+            <button id="btn-close-search" class="link-btn">✕</button>
+          </div>
+          <div id="index-banner" class="index-banner hidden">
+            <span id="index-note">Large document — build a one-time search index for instant results.</span>
+            <button id="btn-build-index" class="btn-secondary">⚡ Build Index</button>
+          </div>
+          <div id="search-results" class="search-results"></div>
+          <button id="btn-search-more" class="btn-secondary hidden">Load more</button>
+        </div>
+
+        <div id="source-panel" class="source-panel hidden">
+          <div id="source-resizer" class="v-resizer" title="Drag to resize"></div>
+          <div class="panel-head source-head">
+            <span id="source-title">Source</span>
+            <div class="spacer"></div>
+            <button id="btn-copy-source" class="link-btn">Copy</button>
+            <button id="btn-close-source" class="link-btn">✕</button>
+          </div>
+          <div id="monaco-host" class="monaco-host"></div>
+          <pre id="source-fallback" class="source-fallback hidden"></pre>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <span id="status-doc"></span>
+        <div class="spacer"></div>
+        <span id="status-type"></span>
+        <span id="status-path" title=""></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Open URL modal ============ -->
+  <div id="url-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-title">Open URL</div>
+      <input id="url-input" type="text" placeholder="https://api.example.com/data.json" spellcheck="false" />
+      <div class="modal-row">
+        <label>Auth</label>
+        <select id="url-auth">
+          <option value="none">None</option>
+          <option value="basic">Basic</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="apikey">API Key header</option>
+        </select>
+      </div>
+      <div id="url-auth-basic" class="modal-row hidden">
+        <input id="url-user" type="text" placeholder="username" />
+        <input id="url-pass" type="password" placeholder="password" />
+      </div>
+      <div id="url-auth-token" class="modal-row hidden">
+        <input id="url-header" type="text" placeholder="Header name (X-API-Key)" class="hidden" />
+        <input id="url-token" type="password" placeholder="token" />
+      </div>
+      <div class="modal-actions">
+        <button id="url-cancel" class="btn-secondary">Cancel</button>
+        <button id="url-ok" class="btn-primary">Fetch &amp; Open</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="drop-overlay" class="drop-overlay hidden">Drop to open</div>
+
+  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="graph.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

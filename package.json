@@ -1,0 +1,42 @@
+{
+  "name": "openxmljson",
+  "version": "0.1.0",
+  "description": "OPENXMLJSON — a rapid JSON·XML·CSV loading engine, built for gigabytes",
+  "main": "main.js",
+  "author": "Kiran Peddikuppa",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build:engine": "cd rust-engine && cargo build --release",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.45.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  },
+  "build": {
+    "appId": "com.openxmljson.app",
+    "productName": "OPENXMLJSON",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "node_modules/monaco-editor/min/**"
+    ],
+    "extraResources": [
+      {
+        "from": "rust-engine/target/release/openjsonxml-engine",
+        "to": "engine/openjsonxml-engine"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
