@@ -302,6 +302,22 @@ body {
 }
 .stat-count { width: 52px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 
+/* Watermark (welcome screen, bottom-right, theme-aware) */
+.watermark {
+  position: absolute;
+  right: 26px;
+  bottom: 14px;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  color: var(--fg);
+  opacity: .07;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+}
+body.light .watermark { opacity: .09; }
+
 /* ---------- Progress ---------- */
 #screen-progress { align-items: center; justify-content: center; }
 .progress-card {
