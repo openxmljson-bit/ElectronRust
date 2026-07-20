@@ -92,7 +92,7 @@ jobs:
           if [ "$HAS_NOTARY" != "true" ] || [ "$HAS_CERT" != "true" ]; then
             ARGS="$ARGS -c.mac.notarize=false"
           fi
-          npx electron-builder $ARGS
+          npx electron-builder $ARGS --publish never
           ls -la dist/
 
       - name: Upload artifact
