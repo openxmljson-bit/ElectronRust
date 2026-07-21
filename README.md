@@ -1,4 +1,4 @@
-# OPENJSONXML
+# NARIKJSON
 
 A desktop viewer for very large JSON, NDJSON, XML, CSV and TSV files (tested design target: up to ~25 GB), built on a streaming architecture that never loads the file into memory.
 

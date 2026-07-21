@@ -1,7 +1,7 @@
 {
   "name": "openxmljson",
   "version": "0.1.0",
-  "description": "OPENJSONXML — a rapid JSON·XML·CSV loading engine, built for gigabytes",
+  "description": "NARIKJSON — a rapid JSON·XML·CSV loading engine, built for gigabytes",
   "main": "main.js",
   "author": "Kiran Peddikuppa",
   "license": "MIT",
@@ -20,7 +20,7 @@
   },
   "build": {
     "appId": "com.openxmljson.app",
-    "productName": "OPENJSONXML",
+    "productName": "NARIKJSON",
     "directories": {
       "buildResources": "build"
     },

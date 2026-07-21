@@ -1,4 +1,4 @@
-// OPENJSONXML — Electron main process.
+// NARIKJSON — Electron main process.
 // Tabbed architecture: every tab owns its own Rust engine `serve` process
 // (and, while loading, an `ingest` process), keyed by tabId.
 const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell } = require('electron');
@@ -111,7 +111,7 @@ function migrateOldUserData() {
     const newDir = app.getPath('userData');
     const parent = path.dirname(newDir);
     // Prior data-folder names this app has used (productName drives the folder).
-    const candidates = ['OPENXMLJSON', 'openxmljson', 'openjsonxml'];
+    const candidates = ['OPENJSONXML', 'OPENXMLJSON', 'openxmljson', 'openjsonxml'];
     for (const name of candidates) {
       const oldDir = path.join(parent, name);
       if (oldDir === newDir || !fs.existsSync(oldDir)) continue;
@@ -659,7 +659,7 @@ function downloadUrl(url, headers) {
 }
 
 function authHeaders(auth) {
-  const h = { 'User-Agent': 'OPENJSONXML/0.1' };
+  const h = { 'User-Agent': 'NARIKJSON/0.1' };
   if (!auth || auth.type === 'none') return h;
   if (auth.type === 'basic') h['Authorization'] = 'Basic ' + Buffer.from(`${auth.user || ''}:${auth.pass || ''}`).toString('base64');
   else if (auth.type === 'bearer') h['Authorization'] = 'Bearer ' + (auth.token || '');
@@ -673,7 +673,7 @@ function createWindow() {
     minWidth: 880,
     minHeight: 560,
     backgroundColor: effectiveTheme() === 'light' ? '#f5f6f8' : '#14161c',
-    title: 'OPENJSONXML',
+    title: 'NARIKJSON',
     show: false,
     fullscreen: false,
     webPreferences: {

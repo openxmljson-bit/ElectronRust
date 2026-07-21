@@ -45,7 +45,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OPENJSONXML-windows
+          name: NARIKJSON-windows
           path: dist/*.exe
 
       - name: Publish Release

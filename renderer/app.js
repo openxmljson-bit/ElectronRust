@@ -1,4 +1,4 @@
-/* OPENJSONXML — renderer. Tabbed UI (max 12) over per-tab engine sessions. */
+/* NARIKJSON — renderer. Tabbed UI (max 12) over per-tab engine sessions. */
 'use strict';
 
 const PAGE = 200;
@@ -2143,7 +2143,7 @@ async function validateAgainstSchema() {
     save.textContent = 'Save Report';
     save.addEventListener('click', async () => {
       const report =
-        'OPENJSONXML schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
+        'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
         '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
         res.errors.map((e) => e.path + '\t' + e.message).join('\n');
       const saved = await window.oxj.saveText('validation_report.txt', report);
@@ -2192,7 +2192,7 @@ async function compareWithTab() {
           return;
         }
         const lines = [
-          'OPENJSONXML comparison report',
+          'NARIKJSON comparison report',
           'A: ' + (t.file || t.title),
           'B: ' + (o.file || o.title),
           '',

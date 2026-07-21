@@ -1,5 +1,5 @@
 /* =====================================================================
-   OPENJSONXML — Flow diagram module (adapted from URL & JSON Studio's
+   NARIKJSON — Flow diagram module (adapted from URL & JSON Studio's
    json-graph.js content script).
 
    Renders a JS object/array as an interactive node-link graph (JSONCrack
@@ -753,7 +753,7 @@ window.OXJGraph = (function () {
     const p = (n) => String(n).padStart(2, "0");
     const ts = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
       "_" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
-    return "OPENJSONXML_Graph_" + ts + "." + ext;
+    return "NARIKJSON_Graph_" + ts + "." + ext;
   }
 
   function download(blob, name) {

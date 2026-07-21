@@ -1,5 +1,5 @@
 #!/bin/bash
-# OPENJSONXML — one-shot build & run
+# NARIKJSON — one-shot build & run
 set -e
 cd "$(dirname "$0")"
 
@@ -15,5 +15,5 @@ echo "==> Building Rust engine (release)…"
 echo "==> Installing npm dependencies…"
 npm install
 
-echo "==> Starting OPENJSONXML…"
+echo "==> Starting NARIKJSON…"
 npm start

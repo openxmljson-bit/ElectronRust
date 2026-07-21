@@ -45,7 +45,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OPENJSONXML-linux
+          name: NARIKJSON-linux
           path: dist/*.AppImage
 
       - name: Publish Release
