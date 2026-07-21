@@ -672,6 +672,7 @@ function createWindow() {
   const win = new BrowserWindow({
     minWidth: 880,
     minHeight: 560,
+    icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: effectiveTheme() === 'light' ? '#f5f6f8' : '#14161c',
     title: '{N}ARIKJSON',
     show: false,
@@ -1070,6 +1071,11 @@ app.whenReady().then(() => {
   ipcMain.handle('file-stat', async (_e, p) => {
     try { const st = fs.statSync(p); return { size: st.size }; } catch { return null; }
   });
+
+  // Dock icon in dev (`npm start`); packaged builds use build/icon.icns.
+  if (process.platform === 'darwin' && app.dock) {
+    try { app.dock.setIcon(path.join(__dirname, 'build', 'icon.png')); } catch {}
+  }
 
   migrateOldUserData();
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
