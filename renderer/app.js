@@ -88,6 +88,49 @@ async function closeAllTabs() {
   newTab(true);
 }
 
+// Close every tab except `keep`.
+async function closeOtherTabs(keep) {
+  const others = tabs.filter((t) => t !== keep);
+  tabs = tabs.filter((t) => t === keep);
+  for (const t of others) {
+    if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
+    try { await window.oxj.closeTab(t.id); } catch {}
+  }
+  setCurrent(keep);
+}
+
+// Close tabs on one side of `anchor` ('left' or 'right').
+async function closeTabsToSide(anchor, side) {
+  const at = tabs.indexOf(anchor);
+  if (at < 0) return;
+  const doomed = side === 'left' ? tabs.slice(0, at) : tabs.slice(at + 1);
+  if (!doomed.length) return;
+  tabs = tabs.filter((t) => !doomed.includes(t));
+  for (const t of doomed) {
+    if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
+    try { await window.oxj.closeTab(t.id); } catch {}
+  }
+  if (!tabs.includes(cur)) setCurrent(anchor);
+  else renderTabs();
+}
+
+// Right-click menu on a tab (reuses the shared context-menu widget).
+function showTabMenu(x, y, t) {
+  const at = tabs.indexOf(t);
+  showContextMenu(x, y, [
+    {
+      label: 'Duplicate Tab',
+      disabled: !t.file,
+      action: () => { const nt = newTab(true); if (nt && t.file) openPath(t.file, nt); },
+    },
+    { sep: true },
+    { label: 'Close Tab', action: () => closeTab(t) },
+    { label: 'Close Other Tabs', disabled: tabs.length <= 1, action: () => closeOtherTabs(t) },
+    { label: 'Close Tabs to the Left', disabled: at <= 0, action: () => closeTabsToSide(t, 'left') },
+    { label: 'Close Tabs to the Right', disabled: at >= tabs.length - 1, action: () => closeTabsToSide(t, 'right') },
+  ]);
+}
+
 function setCurrent(t) {
   if (cur && cur.phase === 'ready') cur.treeScrollTop = treeScroll.scrollTop;
   cur = t;
@@ -119,6 +162,7 @@ function renderTabs() {
     el.append(title, close);
     el.addEventListener('click', () => { if (t !== cur) setCurrent(t); });
     el.addEventListener('auxclick', (ev) => { if (ev.button === 1) closeTab(t); });
+    el.addEventListener('contextmenu', (ev) => { ev.preventDefault(); showTabMenu(ev.clientX, ev.clientY, t); });
     // drag to reorder
     el.addEventListener('dragstart', (ev) => {
       ev.dataTransfer.setData('text/tab-id', t.id);
