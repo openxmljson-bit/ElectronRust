@@ -260,6 +260,15 @@ function renderScreen() {
 
 // ---------- plain-text tabs (txt/js/html) ----------
 let textEditor = null;
+let prettyCtxKey = null; // enables the Pretty Print menu item only for minified JSON
+
+// Is the current model minified JSON that would benefit from Pretty Print?
+function canPrettyPrint(t) {
+  if (!t || !t.plain || t.plain.language !== 'json') return false;
+  const text = t.plainText || '';
+  return text.length > 0 && text.length < 150 * 1024 * 1024 && looksMinified(text);
+}
+
 function showPlain(t) {
   if (monacoReady && window.monaco) {
     $('text-fallback').classList.add('hidden');
@@ -277,12 +286,14 @@ function showPlain(t) {
         largeFileOptimizations: true,
         maxTokenizationLineLength: 200000, // color longer lines (default 20k)
       });
-      // Right-click → Pretty Print in read-only tabs (formats minified JSON).
+      // Right-click → Pretty Print, shown only for minified JSON (context key).
+      prettyCtxKey = textEditor.createContextKey('narikCanPretty', false);
       textEditor.addAction({
         id: 'narik-pretty-print',
-        label: 'Pretty Print (JSON)',
+        label: 'Pretty Print',
         contextMenuGroupId: 'modification',
         contextMenuOrder: 1,
+        precondition: 'narikCanPretty',
         run: (ed) => {
           const m = ed.getModel();
           if (!m) return;
@@ -290,6 +301,7 @@ function showPlain(t) {
           if (src.length > 150 * 1024 * 1024) { toast('Too large to pretty-print (over 150 MB)'); return; }
           try {
             m.setValue(JSON.stringify(JSON.parse(src), null, 2));
+            if (prettyCtxKey) prettyCtxKey.set(false); // now formatted — disable
           } catch {
             toast('Not valid JSON — cannot pretty-print');
           }
@@ -303,6 +315,7 @@ function showPlain(t) {
     textEditor.updateOptions({
       wordWrap: t.plain.language === 'plaintext' || t.plain.language === 'markdown' ? 'on' : 'off',
     });
+    if (prettyCtxKey) prettyCtxKey.set(canPrettyPrint(t));
   } else {
     $('text-host').classList.add('hidden');
     const fb = $('text-fallback');
