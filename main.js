@@ -673,7 +673,7 @@ function createWindow() {
     minWidth: 880,
     minHeight: 560,
     backgroundColor: effectiveTheme() === 'light' ? '#f5f6f8' : '#14161c',
-    title: 'NARIKJSON',
+    title: '{N}ARIKJSON',
     show: false,
     fullscreen: false,
     webPreferences: {
