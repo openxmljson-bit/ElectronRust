@@ -168,6 +168,7 @@ body {
 }
 .logo { font-size: 30px; font-weight: 800; letter-spacing: 2px; }
 .logo span { color: var(--accent); }
+.logo .brace, .brand .brace { color: var(--fg-dim); font-weight: 700; }
 .tagline { color: var(--fg-dim); margin-top: 8px; }
 .tagline-big {
   margin-top: 4px;
