@@ -302,9 +302,9 @@ body {
   right: 18px;           /* flush with the side cards */
   margin-right: -10px;   /* cancel the trailing letter-spacing gap */
   bottom: 14px;
-  font-size: 54px;
+  font-size: 80px;
   font-weight: 800;
-  letter-spacing: 6px;
+  letter-spacing: 10px;
   color: var(--fg);
   opacity: .07;
   pointer-events: none;
