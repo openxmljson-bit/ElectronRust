@@ -82,12 +82,17 @@ jobs:
             rust-engine/target/release/openjsonxml-engine
           codesign -dv rust-engine/target/release/openjsonxml-engine
 
-      # ---- package (signs the app; notarizes when notary secrets exist) ----
+      # ---- package + publish ----
+      # On a tag with the releases token, electron-builder publishes the DMG,
+      # the zip, and the latest-mac.yml metadata (required by electron-updater)
+      # straight to the public ElectronRust-Releases repo. Otherwise it just
+      # builds locally (dev / no-token) and we upload an artifact.
       - name: Build DMG
         env:
           APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           set -euo pipefail
           ARGS="--mac --universal"
@@ -97,7 +102,12 @@ jobs:
           if [ "$HAS_NOTARY" != "true" ] || [ "$HAS_CERT" != "true" ]; then
             ARGS="$ARGS -c.mac.notarize=false"
           fi
-          npx electron-builder $ARGS --publish never
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "$HAS_RELEASES_TOKEN" = "true" ]; then
+            ARGS="$ARGS --publish always"
+          else
+            ARGS="$ARGS --publish never"
+          fi
+          npx electron-builder $ARGS
           ls -la dist/
 
       - name: Upload artifact
@@ -105,15 +115,3 @@ jobs:
         with:
           name: NARIKJSON-dmg
           path: dist/*.dmg
-
-      # On tag pushes: publish the DMG to the PUBLIC releases repo (source
-      # stays private). Needs RELEASES_REPO_TOKEN — a PAT with contents:write
-      # on that repo. Skipped automatically if the secret isn't set.
-      - name: Publish Release
-        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_RELEASES_TOKEN == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: openxmljson-bit/ElectronRust-Releases
-          token: ${{ secrets.RELEASES_REPO_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          files: dist/*.dmg

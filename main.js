@@ -2,6 +2,7 @@
 // Tabbed architecture: every tab owns its own Rust engine `serve` process
 // (and, while loading, an `ingest` process), keyed by tabId.
 const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -39,6 +40,83 @@ function engineLog(line) {
       new Date().toISOString() + ' ' + line + '\n'
     );
   } catch {}
+}
+
+// ---------------- auto-update (manual, Help → Check for Updates) ----------------
+// Reads published releases from the public ElectronRust-Releases repo (see the
+// "publish" block in package.json). No automatic checks — user-initiated only.
+let updaterWired = false;
+let updateBusy = false;
+
+function wireUpdater() {
+  if (updaterWired) return;
+  updaterWired = true;
+  autoUpdater.autoDownload = false;           // ask the user before downloading
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (err) => {
+    updateBusy = false;
+    const win = BrowserWindow.getFocusedWindow();
+    dialog.showMessageBox(win, {
+      type: 'error',
+      message: 'Update check failed',
+      detail: String((err && err.message) || err),
+    });
+  });
+  autoUpdater.on('update-not-available', () => {
+    updateBusy = false;
+    const win = BrowserWindow.getFocusedWindow();
+    dialog.showMessageBox(win, {
+      type: 'info',
+      message: "You're up to date",
+      detail: 'NARIKJSON ' + app.getVersion() + ' is the latest version.',
+    });
+  });
+  autoUpdater.on('update-available', async (info) => {
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showMessageBox(win, {
+      type: 'info',
+      buttons: ['Download', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'Update available',
+      detail: 'Version ' + info.version + ' is available (you have ' + app.getVersion() + '). Download it now?',
+    });
+    if (res.response === 0) autoUpdater.downloadUpdate();
+    else updateBusy = false;
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    updateBusy = false;
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showMessageBox(win, {
+      type: 'info',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'Update ready',
+      detail: 'Version ' + info.version + ' has been downloaded. Restart to install?',
+    });
+    if (res.response === 0) setImmediate(() => autoUpdater.quitAndInstall());
+  });
+}
+
+async function checkForUpdates(bw) {
+  const win = bw || BrowserWindow.getFocusedWindow();
+  if (!app.isPackaged) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      message: 'Updates unavailable in development',
+      detail: 'Auto-update only works in an installed build (DMG / installer / AppImage).',
+    });
+    return;
+  }
+  if (updateBusy) return;
+  updateBusy = true;
+  wireUpdater();
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (e) {
+    updateBusy = false; // 'error' event usually fires too, but guard anyway
+  }
 }
 
 // ---------------- engine / paths ----------------
@@ -830,6 +908,24 @@ function buildMenu() {
       ],
     },
     { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: 'Check for Updates…', click: (mi, bw) => checkForUpdates(bw) },
+        { type: 'separator' },
+        {
+          label: 'About NARIKJSON',
+          click: (mi, bw) => {
+            const win = bw || BrowserWindow.getFocusedWindow();
+            dialog.showMessageBox(win, {
+              type: 'info',
+              message: 'NARIKJSON',
+              detail: 'Version ' + app.getVersion() + '\nA rapid JSON·XML·CSV loading engine, built for gigabytes.',
+            });
+          },
+        },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
