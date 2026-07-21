@@ -56,12 +56,15 @@ function prettyJsonText(src) {
   return JSON.stringify(JSON.parse(src.replace(/^\uFEFF/, '')), null, 2);
 }
 
-// A doc counts as minified if any of its first lines is very long — worth
-// reformatting for readability.
+// A doc is "not fully pretty-printed" (worth reformatting) when its average
+// line is long — true for single-line minified JSON and for line-delimited
+// (one object per line) files alike. Genuinely 2-space-indented JSON has short
+// lines (avg ~15-40), so it's left alone.
 function looksMinified(text) {
-  const nl = text.indexOf('\n');
-  const firstLen = nl === -1 ? text.length : nl;
-  return firstLen > 2000;
+  const sample = text.length > 262144 ? text.slice(0, 262144) : text;
+  let lines = 1;
+  for (let i = 0; i < sample.length; i++) if (sample.charCodeAt(i) === 10) lines++;
+  return sample.length / lines > 120;
 }
 
 function plainLangFor(p) {
