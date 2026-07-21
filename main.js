@@ -407,8 +407,8 @@ function killIngest(tabId, deleteDb) {
 // Hybrid engine decision ("like the previous app"): files that comfortably
 // fit in RAM open with the mmap-based in-memory engine (no ingest at all);
 // bigger ones stream into SQLite.
-const MEM_MAX_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
-const MEM_FREE_FRACTION = 0.7;                 // ≤70% of currently free RAM
+const MEM_MAX_BYTES = 64 * 1024 * 1024 * 1024; // absolute safety ceiling (raised for testing)
+const MEM_FREE_FRACTION = 2.5;                 // up to 2.5× available RAM (mmap pages on demand; testing)
 
 async function decideMode(filePath) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
