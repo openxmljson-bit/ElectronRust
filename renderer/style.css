@@ -384,7 +384,7 @@ body.light .watermark { opacity: .09; }
 .btn-top {
   position: absolute;
   right: 22px;
-  bottom: 16px;
+  bottom: 44px;
   z-index: 8;
   background: var(--bg2);
   color: var(--fg);
