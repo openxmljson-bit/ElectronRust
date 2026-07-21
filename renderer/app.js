@@ -49,6 +49,13 @@ const PLAIN_LANGS = {
 };
 const FULL_FILE_MAX = 450 * 1024 * 1024; // read cap for the Full File tab (V8 string limit)
 
+// Pretty-print JSON, tolerating a leading UTF-8 BOM (common in exported
+// Arabic/Windows feeds) which would otherwise make JSON.parse throw. Unicode
+// (Arabic, etc.) is preserved as-is by JSON.stringify.
+function prettyJsonText(src) {
+  return JSON.stringify(JSON.parse(src.replace(/^\uFEFF/, '')), null, 2);
+}
+
 // A doc counts as minified if any of its first lines is very long — worth
 // reformatting for readability.
 function looksMinified(text) {
@@ -300,7 +307,7 @@ function showPlain(t) {
           const src = m.getValue();
           if (src.length > 150 * 1024 * 1024) { toast('Too large to pretty-print (over 150 MB)'); return; }
           try {
-            m.setValue(JSON.stringify(JSON.parse(src), null, 2));
+            m.setValue(prettyJsonText(src));
             if (prettyCtxKey) prettyCtxKey.set(false); // now formatted — disable
           } catch {
             toast('Not valid JSON — cannot pretty-print');
@@ -345,7 +352,7 @@ async function openPlainPath(p, tab, lang, full) {
     // safe size — parse+stringify of very large text would exceed V8 limits.
     const PRETTY_MAX = 150 * 1024 * 1024; // parse+stringify stays under V8's ~512MB string cap
     if (lang === 'json' && !res.truncated && text.length < PRETTY_MAX && looksMinified(text)) {
-      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+      try { text = prettyJsonText(text); } catch {}
     }
     t.plain = {
       language: lang,
