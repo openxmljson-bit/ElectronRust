@@ -1,5 +1,5 @@
 /* =====================================================================
-   OPENXMLJSON — Flow diagram module (adapted from URL & JSON Studio's
+   OPENJSONXML — Flow diagram module (adapted from URL & JSON Studio's
    json-graph.js content script).
 
    Renders a JS object/array as an interactive node-link graph (JSONCrack

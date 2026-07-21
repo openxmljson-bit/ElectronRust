@@ -2143,7 +2143,7 @@ async function validateAgainstSchema() {
     save.textContent = 'Save Report';
     save.addEventListener('click', async () => {
       const report =
-        'OPENXMLJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
+        'OPENJSONXML schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
         '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
         res.errors.map((e) => e.path + '\t' + e.message).join('\n');
       const saved = await window.oxj.saveText('validation_report.txt', report);
@@ -2192,7 +2192,7 @@ async function compareWithTab() {
           return;
         }
         const lines = [
-          'OPENXMLJSON comparison report',
+          'OPENJSONXML comparison report',
           'A: ' + (t.file || t.title),
           'B: ' + (o.file || o.title),
           '',

@@ -98,7 +98,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OPENXMLJSON-dmg
+          name: OPENJSONXML-dmg
           path: dist/*.dmg
 
       # On tag pushes: publish the DMG to the PUBLIC releases repo (source
