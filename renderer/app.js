@@ -47,6 +47,8 @@ const PLAIN_LANGS = {
   js: 'javascript', mjs: 'javascript', html: 'html', htm: 'html',
   py: 'python', yaml: 'yaml', yml: 'yaml',
 };
+const FULL_FILE_MAX = 450 * 1024 * 1024; // read cap for the Full File tab (V8 string limit)
+
 // A doc counts as minified if any of its first lines is very long — worth
 // reformatting for readability.
 function looksMinified(text) {
@@ -211,7 +213,10 @@ function renderScreen() {
     const plain = !!t.plain;
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
-    $('btn-full-file').classList.toggle('hidden', plain); // plain tabs already are the file
+    // Full File opens the raw file in a read-only tab, but that's size-gated at
+    // 450 MB (V8 string limit) — hide the button when the file is larger.
+    const srcBytes = Number((t.meta && t.meta.source_bytes) || 0);
+    $('btn-full-file').classList.toggle('hidden', plain || srcBytes > FULL_FILE_MAX);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
@@ -271,6 +276,24 @@ function showPlain(t) {
         scrollBeyondLastLine: false,
         largeFileOptimizations: true,
         maxTokenizationLineLength: 200000, // color longer lines (default 20k)
+      });
+      // Right-click → Pretty Print in read-only tabs (formats minified JSON).
+      textEditor.addAction({
+        id: 'narik-pretty-print',
+        label: 'Pretty Print (JSON)',
+        contextMenuGroupId: 'modification',
+        contextMenuOrder: 1,
+        run: (ed) => {
+          const m = ed.getModel();
+          if (!m) return;
+          const src = m.getValue();
+          if (src.length > 150 * 1024 * 1024) { toast('Too large to pretty-print (over 150 MB)'); return; }
+          try {
+            m.setValue(JSON.stringify(JSON.parse(src), null, 2));
+          } catch {
+            toast('Not valid JSON — cannot pretty-print');
+          }
+        },
       });
     }
     if (!t.plainModel) {
