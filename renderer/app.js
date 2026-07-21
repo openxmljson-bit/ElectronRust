@@ -178,7 +178,7 @@ function renderScreen() {
       $('btn-top').classList.add('hidden');
       showPlain(t);
       $('status-doc').textContent =
-        baseName(t.file) + ' · ' + t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
+        t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
       $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
       $('status-type').textContent = 'Read-only · ⌘F to find';
       $('status-path').textContent = '';
@@ -188,7 +188,7 @@ function renderScreen() {
     $('view-toggle').classList.toggle('hidden', !isCsv);
     setView(t.view);
     $('status-doc').textContent =
-      baseName(t.file) + ' · ' + t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes) + (memMode ? ' · RAM' : '');
+      t.docFormat.toUpperCase() + ' · ' + fmtInt(t.meta.total_nodes || 0) + ' nodes · ' + fmtBytes(t.meta.source_bytes) + (memMode ? ' · RAM' : '');
     if (isCsv) buildTableHead(t);
     $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
     renderTree();
