@@ -307,7 +307,7 @@ async function openPlainPath(p, tab, lang, full) {
     // Pretty-print minified JSON so it's readable and Monaco can syntax-color
     // it (long single lines are left uncolored by the tokenizer). Bounded to a
     // safe size — parse+stringify of very large text would exceed V8 limits.
-    const PRETTY_MAX = 40 * 1024 * 1024;
+    const PRETTY_MAX = 150 * 1024 * 1024; // parse+stringify stays under V8's ~512MB string cap
     if (lang === 'json' && !res.truncated && text.length < PRETTY_MAX && looksMinified(text)) {
       try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
     }
