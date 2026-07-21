@@ -203,6 +203,7 @@ function renderScreen() {
     const plain = !!t.plain;
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
+    $('btn-full-file').classList.toggle('hidden', plain); // plain tabs already are the file
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
@@ -222,7 +223,7 @@ function renderScreen() {
       $('btn-top').classList.add('hidden');
       showPlain(t);
       $('status-doc').textContent =
-        t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
+        t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first ' + fmtBytes(t.plain.limit) : '');
       $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
       $('status-type').textContent = 'Read-only · ⌘F to find';
       $('status-path').textContent = '';
@@ -278,7 +279,7 @@ function showPlain(t) {
   }
 }
 
-async function openPlainPath(p, tab, lang) {
+async function openPlainPath(p, tab, lang, full) {
   const t = tab || targetTabForOpen();
   if (!t) return;
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
@@ -290,7 +291,7 @@ async function openPlainPath(p, tab, lang) {
   else { renderTabs(); renderScreen(); }
   const t0 = performance.now();
   try {
-    const res = await window.oxj.loadText(p);
+    const res = await window.oxj.loadText(p, full);
     if (!tabAlive(t)) return;
     t.loadMs = Math.round(performance.now() - t0);
     t.plain = {
@@ -298,6 +299,7 @@ async function openPlainPath(p, tab, lang) {
       label: String(p).split('.').pop().toUpperCase(),
       size: res.size,
       truncated: res.truncated,
+      limit: res.limit || 25 * 1024 * 1024,
     };
     t.plainText = res.text;
     t.phase = 'ready';
@@ -1569,6 +1571,20 @@ function closeSource() {
 }
 $('btn-source').addEventListener('click', () => (sourceOpen ? closeSource() : openSource()));
 $('btn-close-source').addEventListener('click', closeSource);
+
+// Full File ↗ — open the complete original file in a new read-only tab.
+function fullFileLang(p) {
+  const ext = String(p).split('.').pop().toLowerCase();
+  if (['json', 'ndjson', 'jsonl'].includes(ext)) return 'json';
+  if (ext === 'xml') return 'xml';
+  return 'plaintext'; // csv/tsv and anything else: raw text
+}
+$('btn-full-file').addEventListener('click', () => {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || !t.file) return;
+  const nt = newTab(true);
+  if (nt) openPlainPath(t.file, nt, fullFileLang(t.file), true);
+});
 $('btn-copy-source').addEventListener('click', async () => {
   const text = monacoReady && monacoEditor ? monacoEditor.getValue() : updateSource._text || '';
   try {
