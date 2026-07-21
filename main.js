@@ -109,13 +109,18 @@ function clearRecents() {
 function migrateOldUserData() {
   try {
     const newDir = app.getPath('userData');
-    const oldDir = path.join(path.dirname(newDir), 'openjsonxml');
-    if (!fs.existsSync(oldDir)) return;
-    for (const f of ['stats.json', 'recents.json', 'settings.json']) {
-      const src = path.join(oldDir, f);
-      const dst = path.join(newDir, f);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) {
-        fs.copyFileSync(src, dst);
+    const parent = path.dirname(newDir);
+    // Prior data-folder names this app has used (productName drives the folder).
+    const candidates = ['OPENXMLJSON', 'openxmljson', 'openjsonxml'];
+    for (const name of candidates) {
+      const oldDir = path.join(parent, name);
+      if (oldDir === newDir || !fs.existsSync(oldDir)) continue;
+      for (const f of ['stats.json', 'recents.json', 'settings.json']) {
+        const src = path.join(oldDir, f);
+        const dst = path.join(newDir, f);
+        if (fs.existsSync(src) && !fs.existsSync(dst)) {
+          fs.copyFileSync(src, dst);
+        }
       }
     }
   } catch {}
@@ -668,7 +673,7 @@ function createWindow() {
     minWidth: 880,
     minHeight: 560,
     backgroundColor: effectiveTheme() === 'light' ? '#f5f6f8' : '#14161c',
-    title: 'OPENXMLJSON',
+    title: 'OPENJSONXML',
     show: false,
     fullscreen: false,
     webPreferences: {

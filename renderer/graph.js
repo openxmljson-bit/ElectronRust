@@ -753,7 +753,7 @@ window.OXJGraph = (function () {
     const p = (n) => String(n).padStart(2, "0");
     const ts = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
       "_" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
-    return "OPENXMLJSON_Graph_" + ts + "." + ext;
+    return "OPENJSONXML_Graph_" + ts + "." + ext;
   }
 
   function download(blob, name) {
