@@ -974,61 +974,6 @@ app.whenReady().then(() => {
     } catch (err) { return fail(err); }
   });
 
-  // ---------------- jq ----------------
-  // Uses the system jq binary (full, real jq). GUI apps don't inherit the
-  // shell PATH on macOS, so check the common install locations explicitly.
-  function findJq() {
-    const candidates = [
-      '/opt/homebrew/bin/jq',
-      '/usr/local/bin/jq',
-      '/usr/bin/jq',
-      '/opt/local/bin/jq',
-    ];
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c;
-    }
-    return null;
-  }
-
-  ipcMain.handle('jq-available', async () => !!findJq());
-
-  ipcMain.handle('run-jq', async (_e, { program, inputFile }) => {
-    try {
-      const jq = findJq();
-      if (!jq) {
-        throw new Error('jq is not installed. Install it with: brew install jq');
-      }
-      if (!program || !String(program).trim()) throw new Error('empty jq program');
-      const outFile = path.join(downloadsDir(), 'jq_result_' + Date.now() + '.json');
-      await new Promise((resolve, reject) => {
-        const proc = spawn(jq, [String(program)], { stdio: ['pipe', 'pipe', 'pipe'] });
-        const out = fs.createWriteStream(outFile);
-        let errBuf = '';
-        fs.createReadStream(inputFile).pipe(proc.stdin).on('error', () => {});
-        proc.stdout.pipe(out);
-        proc.stderr.on('data', (d) => { errBuf += d; });
-        proc.on('error', reject);
-        const timer = setTimeout(() => {
-          try { proc.kill('SIGKILL'); } catch {}
-          reject(new Error('jq timed out (120s)'));
-        }, 120000);
-        proc.on('exit', (code) => {
-          clearTimeout(timer);
-          out.end(() => {
-            if (code === 0) resolve();
-            else reject(new Error(errBuf.trim().split('\n')[0] || 'jq exited with code ' + code));
-          });
-        });
-      });
-      const st = fs.statSync(outFile);
-      if (st.size === 0) {
-        try { fs.unlinkSync(outFile); } catch {}
-        throw new Error('jq produced no output');
-      }
-      return ok(outFile);
-    } catch (err) { return fail(err); }
-  });
-
   // Build the FTS5 search index for a tab's database (separate process,
   // progress streamed to the renderer). The serve process keeps running;
   // both sides use busy_timeout so reads and index writes interleave safely.

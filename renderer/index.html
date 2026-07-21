@@ -84,7 +84,6 @@
         <button id="btn-source" class="btn-tool" title="Show formatted source of the selected node">Source</button>
         <button id="btn-flow" class="btn-tool" title="Flow diagram of the selected node (JSON/CSV)">Flow</button>
         <button id="btn-tools" class="btn-tool" title="Schema and comparison tools">Tools ▾</button>
-        <button id="btn-jq" class="btn-tool" title="Run a jq program (JSON documents)">jq</button>
         <div class="spacer"></div>
         <select id="search-scope" title="Search scope">
           <option value="all" selected>All</option>
@@ -95,18 +94,6 @@
         <button id="btn-find" class="btn-tool" title="Run search">Find</button>
         <button id="match-prev" class="btn-tool" title="Previous match (⇧F3 / ⇧⌘G)">▲</button>
         <button id="match-next" class="btn-tool" title="Next match (F3 / ⌘G / Enter)">▼</button>
-      </div>
-
-      <div id="jq-bar" class="jq-bar hidden">
-        <span class="jq-label">jq</span>
-        <input id="jq-input" type="text" placeholder='.items[] | select(.active) | {id, name}' spellcheck="false" />
-        <select id="jq-scope" title="What to feed into jq">
-          <option value="selected">Selected node</option>
-          <option value="root">Whole document</option>
-        </select>
-        <button id="jq-run" class="btn-tool">Run ↵</button>
-        <button id="jq-help" class="btn-tool" title="Sample jq commands built from this document">Help</button>
-        <button id="jq-close" class="link-btn">✕</button>
       </div>
 
       <div class="main-area">
