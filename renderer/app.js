@@ -286,7 +286,7 @@ async function openPlainPath(p, tab, lang, full) {
   t.file = p;
   t.title = baseName(p);
   t.phase = 'loading';
-  t.progress = { startedMsg: 'Reading file…' };
+  t.progress = { startedMsg: 'Reading file…', plain: true };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
   const t0 = performance.now();
@@ -576,6 +576,19 @@ window.addEventListener('drop', (e) => {
 // ---------- ingest progress ----------
 function updateProgressDom(t) {
   const pr = t.progress || {};
+  // Plain-text / Full File loads are a single file read — no DB, no engine.
+  if (pr.plain) {
+    $('prog-title').textContent = 'Opening file';
+    $('prog-file').textContent = t.file || '';
+    $('bar-inner').classList.add('indeterminate');
+    $('prog-pct').textContent = '';
+    $('prog-bytes').textContent = '';
+    $('prog-speed').textContent = '';
+    $('prog-eta').textContent = '';
+    $('prog-nodes').textContent = pr.startedMsg || 'Reading file…';
+    $('prog-phase').classList.add('hidden');
+    return;
+  }
   $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
   $('prog-phase').textContent = pr.mem
     ? 'Indexing in memory — no database needed, this is quick…'
