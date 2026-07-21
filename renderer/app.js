@@ -47,6 +47,14 @@ const PLAIN_LANGS = {
   js: 'javascript', mjs: 'javascript', html: 'html', htm: 'html',
   py: 'python', yaml: 'yaml', yml: 'yaml',
 };
+// A doc counts as minified if any of its first lines is very long — worth
+// reformatting for readability.
+function looksMinified(text) {
+  const nl = text.indexOf('\n');
+  const firstLen = nl === -1 ? text.length : nl;
+  return firstLen > 2000;
+}
+
 function plainLangFor(p) {
   const ext = String(p).split('.').pop().toLowerCase();
   return PLAIN_LANGS[ext] || null;
@@ -262,6 +270,7 @@ function showPlain(t) {
         fontSize: 12.5,
         scrollBeyondLastLine: false,
         largeFileOptimizations: true,
+        maxTokenizationLineLength: 200000, // color longer lines (default 20k)
       });
     }
     if (!t.plainModel) {
@@ -294,6 +303,14 @@ async function openPlainPath(p, tab, lang, full) {
     const res = await window.oxj.loadText(p, full);
     if (!tabAlive(t)) return;
     t.loadMs = Math.round(performance.now() - t0);
+    let text = res.text;
+    // Pretty-print minified JSON so it's readable and Monaco can syntax-color
+    // it (long single lines are left uncolored by the tokenizer). Bounded to a
+    // safe size — parse+stringify of very large text would exceed V8 limits.
+    const PRETTY_MAX = 40 * 1024 * 1024;
+    if (lang === 'json' && !res.truncated && text.length < PRETTY_MAX && looksMinified(text)) {
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    }
     t.plain = {
       language: lang,
       label: String(p).split('.').pop().toUpperCase(),
@@ -301,11 +318,11 @@ async function openPlainPath(p, tab, lang, full) {
       truncated: res.truncated,
       limit: res.limit || 25 * 1024 * 1024,
     };
-    t.plainText = res.text;
+    t.plainText = text;
     t.phase = 'ready';
     renderTabs();
     if (t === cur) renderScreen();
-    if (res.truncated) toast('Large file: showing the first 25 MB', true);
+    if (res.truncated) toast('Large file: showing the first ' + fmtBytes(res.limit || 25 * 1024 * 1024), true);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
