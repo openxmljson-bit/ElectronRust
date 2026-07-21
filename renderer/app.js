@@ -1342,10 +1342,15 @@ async function openFlow() {
   }
   const e = t.visible[t.selectedIdx];
   const nodeId = e && !e.pseudo ? e.id : t.rootId;
+  const tooBigMsg = 'This node is too large to diagram. Expand it and pick a smaller item (an array element or object) first.';
   try {
     const res = await window.oxj.query(t.id, { op: 'subtree', node: nodeId, budget: 20000 });
     if (t !== cur) return;
-    const data = JSON.parse(res.text);
+    // Oversized nodes come back as a truncated preview, not valid JSON.
+    if (res.truncated) { toast(tooBigMsg); return; }
+    let data;
+    try { data = JSON.parse(res.text); }
+    catch { toast(tooBigMsg); return; }
     flowOpen = true;
     closeSource();
     $('tree-wrap').classList.add('hidden');
@@ -1354,8 +1359,8 @@ async function openFlow() {
     $('btn-flow').classList.add('active-tool');
     window.OXJGraph.render($('flow-wrap'), data);
   } catch (err) {
-    const msg = cleanErr(err).replace('render as source', 'diagram');
-    toast('Flow diagram unavailable: ' + msg + ' — select a smaller node and try again');
+    const msg = cleanErr(err);
+    toast(/too large|too big|truncat/i.test(msg) ? tooBigMsg : 'Flow diagram unavailable: ' + msg);
   }
 }
 
