@@ -1411,6 +1411,7 @@ function killFlow() {
   flowOpen = false;
   $('flow-wrap').classList.add('hidden');
   $('btn-flow').classList.remove('active-tool');
+  $('btn-flow').textContent = 'Flow';
   window.OXJGraph.destroy();
 }
 
@@ -1438,6 +1439,7 @@ async function openFlow() {
     $('table-wrap').classList.add('hidden');
     $('flow-wrap').classList.remove('hidden');
     $('btn-flow').classList.add('active-tool');
+    $('btn-flow').textContent = 'Tree'; // click again to return to the tree
     window.OXJGraph.render($('flow-wrap'), data);
   } catch (err) {
     const msg = cleanErr(err);
