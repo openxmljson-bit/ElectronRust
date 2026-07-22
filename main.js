@@ -991,11 +991,16 @@ app.whenReady().then(() => {
 
   // Plain-text tabs (txt/js/html…): read directly, no engine involved.
   const PLAIN_MAX = 25 * 1024 * 1024;
-  ipcMain.handle('load-text', async (_e, p) => {
+  // "Full file" read-only tabs. V8 caps a single string at ~512 MB and Monaco
+  // holds the doc as one string, so 450 MB is the safe hard ceiling.
+  const PLAIN_MAX_FULL = 450 * 1024 * 1024;
+  ipcMain.handle('load-text', async (_e, arg) => {
     try {
+      const p = typeof arg === 'string' ? arg : arg.path;
+      const limit = (typeof arg === 'object' && arg.full) ? PLAIN_MAX_FULL : PLAIN_MAX;
       if (!fs.existsSync(p)) throw new Error('File not found: ' + p);
       const st = fs.statSync(p);
-      const readLen = Math.min(st.size, PLAIN_MAX);
+      const readLen = Math.min(st.size, limit);
       const buf = Buffer.alloc(readLen);
       const fd = fs.openSync(p, 'r');
       fs.readSync(fd, buf, 0, readLen, 0);
@@ -1007,7 +1012,7 @@ app.whenReady().then(() => {
       if (ext === 'yml') ext = 'yaml';
       addRecent(p);
       bumpStat(ext || 'txt');
-      return ok({ text: buf.toString('utf8'), size: st.size, truncated: st.size > PLAIN_MAX });
+      return ok({ text: buf.toString('utf8'), size: st.size, truncated: st.size > limit, limit });
     } catch (err) { return fail(err); }
   });
 

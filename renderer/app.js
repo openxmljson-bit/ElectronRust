@@ -47,6 +47,26 @@ const PLAIN_LANGS = {
   js: 'javascript', mjs: 'javascript', html: 'html', htm: 'html',
   py: 'python', yaml: 'yaml', yml: 'yaml',
 };
+const FULL_FILE_MAX = 450 * 1024 * 1024; // read cap for the Full File tab (V8 string limit)
+
+// Pretty-print JSON, tolerating a leading UTF-8 BOM (common in exported
+// Arabic/Windows feeds) which would otherwise make JSON.parse throw. Unicode
+// (Arabic, etc.) is preserved as-is by JSON.stringify.
+function prettyJsonText(src) {
+  return JSON.stringify(JSON.parse(src.replace(/^\uFEFF/, '')), null, 2);
+}
+
+// A doc is "not fully pretty-printed" (worth reformatting) when its average
+// line is long — true for single-line minified JSON and for line-delimited
+// (one object per line) files alike. Genuinely 2-space-indented JSON has short
+// lines (avg ~15-40), so it's left alone.
+function looksMinified(text) {
+  const sample = text.length > 262144 ? text.slice(0, 262144) : text;
+  let lines = 1;
+  for (let i = 0; i < sample.length; i++) if (sample.charCodeAt(i) === 10) lines++;
+  return sample.length / lines > 120;
+}
+
 function plainLangFor(p) {
   const ext = String(p).split('.').pop().toLowerCase();
   return PLAIN_LANGS[ext] || null;
@@ -203,6 +223,11 @@ function renderScreen() {
     const plain = !!t.plain;
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
+    // Raw File opens the file in a read-only tab, size-gated at 450 MB (V8
+    // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
+    const srcBytes = Number((t.meta && t.meta.source_bytes) || 0);
+    const isCsvDoc = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
@@ -222,7 +247,7 @@ function renderScreen() {
       $('btn-top').classList.add('hidden');
       showPlain(t);
       $('status-doc').textContent =
-        t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first 25 MB' : '');
+        t.plain.label + ' · ' + fmtBytes(t.plain.size) + (t.plain.truncated ? ' · showing first ' + fmtBytes(t.plain.limit) : '');
       $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
       $('status-type').textContent = 'Read-only · ⌘F to find';
       $('status-path').textContent = '';
@@ -246,6 +271,15 @@ function renderScreen() {
 
 // ---------- plain-text tabs (txt/js/html) ----------
 let textEditor = null;
+let prettyCtxKey = null; // enables the Pretty Print menu item only for minified JSON
+
+// Is the current model minified JSON that would benefit from Pretty Print?
+function canPrettyPrint(t) {
+  if (!t || !t.plain || t.plain.language !== 'json') return false;
+  const text = t.plainText || '';
+  return text.length > 0 && text.length < 150 * 1024 * 1024 && looksMinified(text);
+}
+
 function showPlain(t) {
   if (monacoReady && window.monaco) {
     $('text-fallback').classList.add('hidden');
@@ -261,6 +295,28 @@ function showPlain(t) {
         fontSize: 12.5,
         scrollBeyondLastLine: false,
         largeFileOptimizations: true,
+        maxTokenizationLineLength: 200000, // color longer lines (default 20k)
+      });
+      // Right-click → Pretty Print, shown only for minified JSON (context key).
+      prettyCtxKey = textEditor.createContextKey('narikCanPretty', false);
+      textEditor.addAction({
+        id: 'narik-pretty-print',
+        label: 'Pretty Print',
+        contextMenuGroupId: 'modification',
+        contextMenuOrder: 1,
+        precondition: 'narikCanPretty',
+        run: (ed) => {
+          const m = ed.getModel();
+          if (!m) return;
+          const src = m.getValue();
+          if (src.length > 150 * 1024 * 1024) { toast('Too large to pretty-print (over 150 MB)'); return; }
+          try {
+            m.setValue(prettyJsonText(src));
+            if (prettyCtxKey) prettyCtxKey.set(false); // now formatted — disable
+          } catch {
+            toast('Not valid JSON — cannot pretty-print');
+          }
+        },
       });
     }
     if (!t.plainModel) {
@@ -270,6 +326,7 @@ function showPlain(t) {
     textEditor.updateOptions({
       wordWrap: t.plain.language === 'plaintext' || t.plain.language === 'markdown' ? 'on' : 'off',
     });
+    if (prettyCtxKey) prettyCtxKey.set(canPrettyPrint(t));
   } else {
     $('text-host').classList.add('hidden');
     const fb = $('text-fallback');
@@ -278,32 +335,41 @@ function showPlain(t) {
   }
 }
 
-async function openPlainPath(p, tab, lang) {
+async function openPlainPath(p, tab, lang, full) {
   const t = tab || targetTabForOpen();
   if (!t) return;
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
   t.file = p;
   t.title = baseName(p);
   t.phase = 'loading';
-  t.progress = { startedMsg: 'Reading file…' };
+  t.progress = { startedMsg: 'Reading file…', plain: true };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
   const t0 = performance.now();
   try {
-    const res = await window.oxj.loadText(p);
+    const res = await window.oxj.loadText(p, full);
     if (!tabAlive(t)) return;
     t.loadMs = Math.round(performance.now() - t0);
+    let text = res.text;
+    // Pretty-print minified JSON so it's readable and Monaco can syntax-color
+    // it (long single lines are left uncolored by the tokenizer). Bounded to a
+    // safe size — parse+stringify of very large text would exceed V8 limits.
+    const PRETTY_MAX = 150 * 1024 * 1024; // parse+stringify stays under V8's ~512MB string cap
+    if (lang === 'json' && !res.truncated && text.length < PRETTY_MAX && looksMinified(text)) {
+      try { text = prettyJsonText(text); } catch {}
+    }
     t.plain = {
       language: lang,
       label: String(p).split('.').pop().toUpperCase(),
       size: res.size,
       truncated: res.truncated,
+      limit: res.limit || 25 * 1024 * 1024,
     };
-    t.plainText = res.text;
+    t.plainText = text;
     t.phase = 'ready';
     renderTabs();
     if (t === cur) renderScreen();
-    if (res.truncated) toast('Large file: showing the first 25 MB', true);
+    if (res.truncated) toast('Large file: showing the first ' + fmtBytes(res.limit || 25 * 1024 * 1024), true);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
@@ -574,6 +640,19 @@ window.addEventListener('drop', (e) => {
 // ---------- ingest progress ----------
 function updateProgressDom(t) {
   const pr = t.progress || {};
+  // Plain-text / Full File loads are a single file read — no DB, no engine.
+  if (pr.plain) {
+    $('prog-title').textContent = 'Opening file';
+    $('prog-file').textContent = t.file || '';
+    $('bar-inner').classList.add('indeterminate');
+    $('prog-pct').textContent = '';
+    $('prog-bytes').textContent = '';
+    $('prog-speed').textContent = '';
+    $('prog-eta').textContent = '';
+    $('prog-nodes').textContent = pr.startedMsg || 'Reading file…';
+    $('prog-phase').classList.add('hidden');
+    return;
+  }
   $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
   $('prog-phase').textContent = pr.mem
     ? 'Indexing in memory — no database needed, this is quick…'
@@ -665,7 +744,10 @@ window.oxj.onDocReady(async (m) => {
   if (!tabAlive(t)) return;
   t.phase = 'ready';
   renderTabs();
-  if (t === cur) renderScreen();
+  if (t === cur) {
+    renderScreen();
+    openSource(); // show the Source panel by default when a file opens
+  }
   if (m.cached) toast('Reopened instantly from cached database', true);
   else toast('Loaded ' + fmtInt(m.nodes || t.meta.total_nodes || 0) + ' nodes', true);
 });
@@ -1330,6 +1412,7 @@ function killFlow() {
   flowOpen = false;
   $('flow-wrap').classList.add('hidden');
   $('btn-flow').classList.remove('active-tool');
+  $('btn-flow').textContent = 'Flow';
   window.OXJGraph.destroy();
 }
 
@@ -1357,6 +1440,7 @@ async function openFlow() {
     $('table-wrap').classList.add('hidden');
     $('flow-wrap').classList.remove('hidden');
     $('btn-flow').classList.add('active-tool');
+    $('btn-flow').textContent = 'Tree'; // click again to return to the tree
     window.OXJGraph.render($('flow-wrap'), data);
   } catch (err) {
     const msg = cleanErr(err);
@@ -1389,7 +1473,7 @@ function setView(name) {
   $('table-wrap').classList.toggle('hidden', !table);
   $('btn-view-tree').classList.toggle('active', !table);
   $('btn-view-table').classList.toggle('active', table);
-  if (table) renderTable();
+  if (table) { closeSource(); renderTable(); } // Source panel isn't useful in the CSV grid
   updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
@@ -1569,6 +1653,20 @@ function closeSource() {
 }
 $('btn-source').addEventListener('click', () => (sourceOpen ? closeSource() : openSource()));
 $('btn-close-source').addEventListener('click', closeSource);
+
+// Full File ↗ — open the complete original file in a new read-only tab.
+function fullFileLang(p) {
+  const ext = String(p).split('.').pop().toLowerCase();
+  if (['json', 'ndjson', 'jsonl'].includes(ext)) return 'json';
+  if (ext === 'xml') return 'xml';
+  return 'plaintext'; // csv/tsv and anything else: raw text
+}
+$('btn-full-file').addEventListener('click', () => {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || !t.file) return;
+  const nt = newTab(true);
+  if (nt) openPlainPath(t.file, nt, fullFileLang(t.file), true);
+});
 $('btn-copy-source').addEventListener('click', async () => {
   const text = monacoReady && monacoEditor ? monacoEditor.getValue() : updateSource._text || '';
   try {
