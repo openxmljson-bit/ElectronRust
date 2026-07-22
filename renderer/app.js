@@ -1479,20 +1479,57 @@ function setView(name) {
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
 $('btn-view-table').addEventListener('click', () => setView('table'));
 
+const TABLE_COL_DEFAULT = 180;
+const TABLE_COL_MIN = 50;
+function colWidth(t, c) {
+  return (t.colWidths && t.colWidths[c]) || TABLE_COL_DEFAULT;
+}
+
 function buildTableHead(t) {
+  if (!t.colWidths || t.colWidths.length !== t.tableHeaders.length) {
+    t.colWidths = new Array(t.tableHeaders.length).fill(TABLE_COL_DEFAULT);
+  }
   const head = $('table-head');
   head.textContent = '';
   const idx = document.createElement('div');
   idx.className = 'th idx';
   idx.textContent = '#';
   head.appendChild(idx);
-  for (const h of t.tableHeaders) {
+  t.tableHeaders.forEach((h, c) => {
     const th = document.createElement('div');
     th.className = 'th';
     th.textContent = h;
     th.title = h;
+    th.style.width = colWidth(t, c) + 'px';
+    // Drag handle on the right edge to resize this column.
+    const grip = document.createElement('div');
+    grip.className = 'col-resizer';
+    grip.addEventListener('mousedown', (ev) => startColResize(ev, t, c, th));
+    grip.addEventListener('click', (ev) => ev.stopPropagation());
+    th.appendChild(grip);
     head.appendChild(th);
-  }
+  });
+}
+
+function startColResize(ev, t, c, th) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const startX = ev.clientX;
+  const startW = colWidth(t, c);
+  document.body.classList.add('resizing');
+  const onMove = (e) => {
+    const w = Math.max(TABLE_COL_MIN, startW + (e.clientX - startX));
+    t.colWidths[c] = w;
+    th.style.width = w + 'px';
+    renderTable(); // re-apply to the visible rows
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('resizing');
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
 }
 
 async function fetchTablePage(t, page) {
@@ -1535,6 +1572,7 @@ function renderTable() {
     for (let c = 0; c < t.tableHeaders.length; c++) {
       const td = document.createElement('div');
       td.className = 'td';
+      td.style.width = colWidth(t, c) + 'px';
       const cell = cells[c];
       td.textContent = cell && cell.value != null ? cell.value : '';
       if (cell && cell.value) td.title = cell.value;

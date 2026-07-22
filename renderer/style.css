@@ -455,6 +455,12 @@ body.light .watermark { opacity: .09; }
   border-right: 1px solid var(--border);
   font-family: var(--mono); font-size: 12px;
 }
+.th { position: relative; }
+.col-resizer {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 7px; cursor: col-resize; z-index: 3;
+}
+.col-resizer:hover { background: var(--accent); opacity: .6; }
 .th.idx, .td.idx { width: 70px; color: var(--fg-dim); text-align: right; }
 .table-spacer { position: relative; width: max-content; min-width: 100%; }
 .table-row { position: absolute; display: flex; height: var(--row-h); align-items: stretch; width: max-content; min-width: 100%; }
