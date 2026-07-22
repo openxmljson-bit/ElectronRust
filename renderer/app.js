@@ -1472,7 +1472,7 @@ function setView(name) {
   $('table-wrap').classList.toggle('hidden', !table);
   $('btn-view-tree').classList.toggle('active', !table);
   $('btn-view-table').classList.toggle('active', table);
-  if (table) renderTable();
+  if (table) { closeSource(); renderTable(); } // Source panel isn't useful in the CSV grid
   updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
