@@ -593,10 +593,6 @@ $('btn-open-clip').addEventListener('click', async () => {
     toast(cleanErr(e));
   }
 });
-$('btn-open2').addEventListener('click', async () => {
-  const p = await window.oxj.pickFile();
-  if (p) openPath(p);
-});
 $('btn-clear-recents').addEventListener('click', async () => {
   await window.oxj.clearRecents();
   refreshRecents();
