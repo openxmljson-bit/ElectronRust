@@ -743,7 +743,10 @@ window.oxj.onDocReady(async (m) => {
   if (!tabAlive(t)) return;
   t.phase = 'ready';
   renderTabs();
-  if (t === cur) renderScreen();
+  if (t === cur) {
+    renderScreen();
+    openSource(); // show the Source panel by default when a file opens
+  }
   if (m.cached) toast('Reopened instantly from cached database', true);
   else toast('Loaded ' + fmtInt(m.nodes || t.meta.total_nodes || 0) + ' nodes', true);
 });
