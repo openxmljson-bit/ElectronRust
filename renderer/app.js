@@ -223,10 +223,11 @@ function renderScreen() {
     const plain = !!t.plain;
     killFlow();
     $('btn-source').classList.toggle('hidden', plain);
-    // Full File opens the raw file in a read-only tab, but that's size-gated at
-    // 450 MB (V8 string limit) — hide the button when the file is larger.
+    // Raw File opens the file in a read-only tab, size-gated at 450 MB (V8
+    // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
     const srcBytes = Number((t.meta && t.meta.source_bytes) || 0);
-    $('btn-full-file').classList.toggle('hidden', plain || srcBytes > FULL_FILE_MAX);
+    const isCsvDoc = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
