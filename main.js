@@ -13,9 +13,14 @@ const http = require('http');
 const os = require('os');
 const si = require('systeminformation');
 
-// The macOS application menu (About / Hide / Quit labels) uses the app name.
-// Set it explicitly so it reads NARIKJSON in dev too, not the npm package name.
-app.setName('NARIKJSON');
+// The macOS application menu (About / Hide / Quit labels) uses the app name,
+// so set it explicitly to the branded "{N}ARIKJSON". The app name also drives
+// the user-data folder path, and braces make for an ugly folder name, so pin
+// userData to a clean "NARIKJSON" directory before anything reads that path.
+app.setName('{N}ARIKJSON');
+try {
+  app.setPath('userData', path.join(app.getPath('appData'), 'NARIKJSON'));
+} catch {}
 
 // macOS uses "free" RAM aggressively for file caching, so os.freemem() is
 // near-useless as an availability signal. systeminformation's mem.available
