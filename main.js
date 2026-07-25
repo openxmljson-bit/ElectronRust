@@ -185,29 +185,6 @@ function clearRecents() {
   buildMenu();
 }
 
-// One-time migration: the app was renamed openjsonxml -> openxmljson, which
-// moved Electron's userData folder. Pull stats/recents/settings across so
-// counters survive the rename.
-function migrateOldUserData() {
-  try {
-    const newDir = app.getPath('userData');
-    const parent = path.dirname(newDir);
-    // Prior data-folder names this app has used (productName drives the folder).
-    const candidates = ['OPENJSONXML', 'OPENXMLJSON', 'openxmljson', 'openjsonxml'];
-    for (const name of candidates) {
-      const oldDir = path.join(parent, name);
-      if (oldDir === newDir || !fs.existsSync(oldDir)) continue;
-      for (const f of ['stats.json', 'recents.json', 'settings.json']) {
-        const src = path.join(oldDir, f);
-        const dst = path.join(newDir, f);
-        if (fs.existsSync(src) && !fs.existsSync(dst)) {
-          fs.copyFileSync(src, dst);
-        }
-      }
-    }
-  } catch {}
-}
-
 // ---------------- cache management ----------------
 // Sidecar index (dbcache/index.json) maps each DB file to its source path and
 // last-used time, enabling orphan detection and LRU pruning.
@@ -1182,7 +1159,6 @@ app.whenReady().then(() => {
     try { app.dock.setIcon(path.join(__dirname, 'build', 'icon.png')); } catch {}
   }
 
-  migrateOldUserData();
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
 
   ipcMain.handle('get-theme', async () => effectiveTheme());
