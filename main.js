@@ -13,14 +13,11 @@ const http = require('http');
 const os = require('os');
 const si = require('systeminformation');
 
-// The macOS application menu (About / Hide / Quit labels) uses the app name,
-// so set it explicitly to the branded "{N}ARIKJSON". The app name also drives
-// the user-data folder path, and braces make for an ugly folder name, so pin
-// userData to a clean "NARIKJSON" directory before anything reads that path.
-app.setName('{N}ARIKJSON');
-try {
-  app.setPath('userData', path.join(app.getPath('appData'), 'NARIKJSON'));
-} catch {}
+// The macOS application menu (bold title, About / Hide / Quit) uses the app
+// name. Keep it the clean "NARIKJSON" everywhere (folder path, dock, window);
+// the braced "{N}ARIKJSON" branding is applied only to the menu item labels
+// in buildMenu(), not to the app name itself.
+app.setName('NARIKJSON');
 
 // macOS uses "free" RAM aggressively for file caching, so os.freemem() is
 // near-useless as an availability signal. systeminformation's mem.available
@@ -778,7 +775,23 @@ function buildMenu() {
   const recents = getRecents();
   const isMac = process.platform === 'darwin';
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac ? [{
+      // Custom app menu so the About / Hide / Quit item labels read the branded
+      // "{N}ARIKJSON". (The bold menubar title comes from the app name and stays
+      // "NARIKJSON".) Mirrors Electron's default appMenu roles otherwise.
+      label: app.getName(),
+      submenu: [
+        { label: 'About {N}ARIKJSON', role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { label: 'Hide {N}ARIKJSON', role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { label: 'Quit {N}ARIKJSON', role: 'quit' },
+      ],
+    }] : []),
     {
       label: 'File',
       submenu: [
