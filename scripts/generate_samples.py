@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate sample JSON / NDJSON / CSV / XML files for testing OPENJSONXML.
+"""Generate sample JSON / NDJSON / CSV / XML files for testing NARIKJSON.
 
 Usage:
     python3 scripts/generate_samples.py [--rows 100000] [--out samples/]
@@ -47,7 +47,7 @@ def main():
     # JSON (single big array)
     p = os.path.join(args.out, "sample.json")
     with open(p, "w") as f:
-        f.write('{"generated_by":"OPENJSONXML sample","items":[\n')
+        f.write('{"generated_by":"NARIKJSON sample","items":[\n')
         for i in range(args.rows):
             f.write(json.dumps(record(i)))
             f.write(",\n" if i + 1 < args.rows else "\n")

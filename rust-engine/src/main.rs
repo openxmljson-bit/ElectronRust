@@ -1,4 +1,4 @@
-// OPENJSONXML engine — streaming ingest of very large JSON/NDJSON/XML/CSV/TSV
+// NARIKJSON engine — streaming ingest of very large JSON/NDJSON/XML/CSV/TSV
 // files into SQLite, plus a query server for the Electron UI.
 //
 // Usage:

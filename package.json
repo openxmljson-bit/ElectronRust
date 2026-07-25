@@ -1,5 +1,5 @@
 {
-  "name": "openxmljson",
+  "name": "narikjson",
   "version": "0.1.0",
   "description": "NARIKJSON — a rapid JSON·XML·CSV loading engine, built for gigabytes",
   "main": "main.js",
@@ -20,7 +20,7 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "com.openxmljson.app",
+    "appId": "com.narikjson.app",
     "productName": "NARIKJSON",
     "directories": {
       "buildResources": "build"

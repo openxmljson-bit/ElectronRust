@@ -68,7 +68,7 @@ meta(key TEXT PRIMARY KEY, value TEXT);
 
 ## Notes on scale
 
-The database stores a full copy of the data, so expect roughly 1–2× the source size in `~/Library/Application Support/openjsonxml/dbcache` (clear it freely; files re-ingest on demand). Ingest is disk-bound: on an SSD expect very roughly 50–150 MB/s. Search is a sequential scan (fast, multi-GB/s in SQLite, but a no-match search on a 25 GB file takes a while); an FTS index is a natural next step. Single values larger than ~1 GB exceed SQLite's default limit and are unsupported.
+The database stores a full copy of the data, so expect roughly 1–2× the source size in `~/Library/Application Support/NARIKJSON/dbcache` (clear it freely; files re-ingest on demand). Ingest is disk-bound: on an SSD expect very roughly 50–150 MB/s. Search is a sequential scan (fast, multi-GB/s in SQLite, but a no-match search on a 25 GB file takes a while); an FTS index is a natural next step. Single values larger than ~1 GB exceed SQLite's default limit and are unsupported.
 
 ## Packaging installers
 

@@ -13,6 +13,10 @@ const http = require('http');
 const os = require('os');
 const si = require('systeminformation');
 
+// The macOS application menu (About / Hide / Quit labels) uses the app name.
+// Set it explicitly so it reads NARIKJSON in dev too, not the npm package name.
+app.setName('NARIKJSON');
+
 // macOS uses "free" RAM aggressively for file caching, so os.freemem() is
 // near-useless as an availability signal. systeminformation's mem.available
 // (free + reclaimable cache) matches Activity Monitor's practical headroom.
@@ -179,29 +183,6 @@ function addRecent(file) {
 function clearRecents() {
   try { fs.unlinkSync(recentsPath()); } catch {}
   buildMenu();
-}
-
-// One-time migration: the app was renamed openjsonxml -> openxmljson, which
-// moved Electron's userData folder. Pull stats/recents/settings across so
-// counters survive the rename.
-function migrateOldUserData() {
-  try {
-    const newDir = app.getPath('userData');
-    const parent = path.dirname(newDir);
-    // Prior data-folder names this app has used (productName drives the folder).
-    const candidates = ['OPENJSONXML', 'OPENXMLJSON', 'openxmljson', 'openjsonxml'];
-    for (const name of candidates) {
-      const oldDir = path.join(parent, name);
-      if (oldDir === newDir || !fs.existsSync(oldDir)) continue;
-      for (const f of ['stats.json', 'recents.json', 'settings.json']) {
-        const src = path.join(oldDir, f);
-        const dst = path.join(newDir, f);
-        if (fs.existsSync(src) && !fs.existsSync(dst)) {
-          fs.copyFileSync(src, dst);
-        }
-      }
-    }
-  } catch {}
 }
 
 // ---------------- cache management ----------------
@@ -1178,7 +1159,6 @@ app.whenReady().then(() => {
     try { app.dock.setIcon(path.join(__dirname, 'build', 'icon.png')); } catch {}
   }
 
-  migrateOldUserData();
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
 
   ipcMain.handle('get-theme', async () => effectiveTheme());

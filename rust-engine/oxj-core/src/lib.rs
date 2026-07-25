@@ -1,4 +1,4 @@
-//! oxj-core — the OPENXMLJSON engine.
+//! oxj-core — the NARIKJSON engine.
 //!
 //! A zero-copy, memory-mapped structural index for very large JSON, XML and
 //! CSV/TSV documents. The file is mapped once, parsed once into a flat array
