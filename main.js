@@ -13,6 +13,10 @@ const http = require('http');
 const os = require('os');
 const si = require('systeminformation');
 
+// The macOS application menu (About / Hide / Quit labels) uses the app name.
+// Set it explicitly so it reads NARIKJSON in dev too, not the npm package name.
+app.setName('NARIKJSON');
+
 // macOS uses "free" RAM aggressively for file caching, so os.freemem() is
 // near-useless as an availability signal. systeminformation's mem.available
 // (free + reclaimable cache) matches Activity Monitor's practical headroom.
