@@ -13,8 +13,10 @@ const http = require('http');
 const os = require('os');
 const si = require('systeminformation');
 
-// The macOS application menu (About / Hide / Quit labels) uses the app name.
-// Set it explicitly so it reads NARIKJSON in dev too, not the npm package name.
+// The macOS application menu (bold title, About / Hide / Quit) uses the app
+// name. Keep it the clean "NARIKJSON" everywhere (folder path, dock, window);
+// the braced "{N}ARIKJSON" branding is applied only to the menu item labels
+// in buildMenu(), not to the app name itself.
 app.setName('NARIKJSON');
 
 // macOS uses "free" RAM aggressively for file caching, so os.freemem() is
@@ -773,7 +775,23 @@ function buildMenu() {
   const recents = getRecents();
   const isMac = process.platform === 'darwin';
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac ? [{
+      // Custom app menu so the About / Hide / Quit item labels read the branded
+      // "{N}ARIKJSON". (The bold menubar title comes from the app name and stays
+      // "NARIKJSON".) Mirrors Electron's default appMenu roles otherwise.
+      label: app.getName(),
+      submenu: [
+        { label: 'About {N}ARIKJSON', role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { label: 'Hide {N}ARIKJSON', role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { label: 'Quit {N}ARIKJSON', role: 'quit' },
+      ],
+    }] : []),
     {
       label: 'File',
       submenu: [
@@ -895,12 +913,12 @@ function buildMenu() {
         { label: 'Check for Updates…', click: (mi, bw) => checkForUpdates(bw) },
         { type: 'separator' },
         {
-          label: 'About NARIKJSON',
+          label: 'About {N}ARIKJSON',
           click: (mi, bw) => {
             const win = bw || BrowserWindow.getFocusedWindow();
             dialog.showMessageBox(win, {
               type: 'info',
-              message: 'NARIKJSON',
+              message: '{N}ARIKJSON',
               detail: 'Version ' + app.getVersion() + '\nA rapid JSON·XML·CSV loading engine, built for gigabytes.',
             });
           },
