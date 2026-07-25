@@ -913,12 +913,12 @@ function buildMenu() {
         { label: 'Check for Updates…', click: (mi, bw) => checkForUpdates(bw) },
         { type: 'separator' },
         {
-          label: 'About NARIKJSON',
+          label: 'About {N}ARIKJSON',
           click: (mi, bw) => {
             const win = bw || BrowserWindow.getFocusedWindow();
             dialog.showMessageBox(win, {
               type: 'info',
-              message: 'NARIKJSON',
+              message: '{N}ARIKJSON',
               detail: 'Version ' + app.getVersion() + '\nA rapid JSON·XML·CSV loading engine, built for gigabytes.',
             });
           },
