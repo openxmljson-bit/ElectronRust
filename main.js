@@ -738,6 +738,9 @@ function createWindow() {
     title: '{N}ARIKJSON',
     show: false,
     fullscreen: false,
+    // Disables macOS's auto-injected "Toggle Full Screen" menu item (the green
+    // traffic-light button now maximizes instead of entering native fullscreen).
+    fullscreenable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -842,10 +845,6 @@ function buildMenu() {
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-        { type: 'separator' },
-        { role: 'toggleDevTools' },
       ],
     },
     {
