@@ -2757,7 +2757,7 @@ function showDiffReport(model) {
   head.className = 'diff-head';
   head.innerHTML =
     '<button class="diff-x" title="Close">✕</button>' +
-    '<div class="diff-title">Structural Diff</div>' +
+    '<div class="diff-title">Structural Document Comparison</div>' +
     '<div class="diff-files"><span title="' + htmlEsc(model.aPath) + '">A: ' + htmlEsc(model.aName) + '</span>' +
     '<span title="' + htmlEsc(model.bPath) + '">B: ' + htmlEsc(model.bName) + '</span></div>' +
     '<div class="diff-ts">Generated ' + htmlEsc(model.ts) +
@@ -2884,7 +2884,7 @@ async function saveDiff(model, fmt) {
 
 // ---- Pure diff serializers (self-contained, HTML-escaped) ----
 function diffToTxt(m) {
-  const L = ['NARIKJSON structural diff', 'A: ' + m.aName, 'B: ' + m.bName, 'Generated: ' + m.ts, '',
+  const L = ['NARIKJSON — Structural Document Comparison', 'A: ' + m.aName, 'B: ' + m.bName, 'Generated: ' + m.ts, '',
     'Total: ' + m.summary.total + '  Added: ' + m.summary.added + '  Removed: ' + m.summary.removed +
     '  Changed: ' + m.summary.changed + (m.summary.truncated ? '  (truncated)' : ''), ''];
   for (const r of m.rows) {
@@ -2915,7 +2915,7 @@ function diffToHtml(m) {
   const rows = m.rows.map((r) =>
     '<tr class="' + cls[r.kind] + '"><td>' + r.kind + '</td><td class="p">' + e(r.path) +
     '</td><td>' + e(r.left) + '</td><td>' + e(r.right) + '</td></tr>').join('');
-  return '<!doctype html><html><head><meta charset="utf-8"><title>NARIKJSON diff</title><style>' +
+  return '<!doctype html><html><head><meta charset="utf-8"><title>NARIKJSON — Structural Document Comparison</title><style>' +
     'body{font:14px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0;padding:24px}' +
     'h1{font-size:18px;margin:0 0 4px}.files{color:#555;font-size:13px}.files span{margin-right:18px}' +
     '.ts{color:#888;font-size:12px;margin:2px 0 16px}' +
@@ -2928,7 +2928,7 @@ function diffToHtml(m) {
     'td.p{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}' +
     'tr.add{background:#f0fdf4}tr.rem{background:#fff1f2}tr.chg{background:#eff6ff}' +
     '</style></head><body>' +
-    '<h1>Structural Diff</h1>' +
+    '<h1>Structural Document Comparison</h1>' +
     '<div class="files"><span>A: ' + e(m.aName) + '</span><span>B: ' + e(m.bName) + '</span></div>' +
     '<div class="ts">Generated ' + e(m.ts) + (m.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>' +
     '<div class="cards"><div class="card"><div class="n">' + m.summary.total + '</div><div class="l">Total</div></div>' +
