@@ -879,6 +879,13 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Tools',
+      submenu: [
+        { id: 'tool-gen-schema', label: 'Generate JSON Schema', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'gen-schema') },
+        { id: 'tool-validate-schema', label: 'Validate Against JSON Schema…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'validate-schema') },
+      ],
+    },
+    {
       label: 'View',
       submenu: [
         {
@@ -1237,7 +1244,7 @@ app.whenReady().then(() => {
     const menu = Menu.getApplicationMenu();
     if (!menu) return;
     const set = (id, on) => { const mi = menu.getMenuItemById(id); if (mi) mi.enabled = on; };
-    for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text']) set(id, menuState.hasDoc);
+    for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text', 'tool-gen-schema', 'tool-validate-schema']) set(id, menuState.hasDoc);
     set('exp-match-json', menuState.hasMatches);
     set('exp-match-csv', menuState.hasMatches);
   });

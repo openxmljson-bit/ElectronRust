@@ -1828,6 +1828,12 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'export-matches':
       exportMatches(cur, arg);
       break;
+    case 'gen-schema':
+      generateSchema();
+      break;
+    case 'validate-schema':
+      validateAgainstSchema();
+      break;
   }
 });
 
