@@ -2692,8 +2692,10 @@ function buildDiffModel(a, b, res) {
   const removed = Number(res.removed) || 0;
   const changed = Number(res.changed) || 0;
   return {
-    aName: a.file || a.title,
-    bName: b.file || b.title,
+    aName: baseName(a.file || a.title),
+    bName: baseName(b.file || b.title),
+    aPath: a.file || a.title,
+    bPath: b.file || b.title,
     ts: new Date().toISOString().replace('T', ' ').slice(0, 19),
     summary: { added, removed, changed, total: added + removed + changed, truncated: !!res.truncated },
     rows,
@@ -2712,11 +2714,13 @@ function showDiffReport(model) {
   const head = document.createElement('div');
   head.className = 'diff-head';
   head.innerHTML =
+    '<button class="diff-x" title="Close">✕</button>' +
     '<div class="diff-title">Structural Diff</div>' +
-    '<div class="diff-files"><span>A: ' + htmlEsc(model.aName) + '</span>' +
-    '<span>B: ' + htmlEsc(model.bName) + '</span></div>' +
+    '<div class="diff-files"><span title="' + htmlEsc(model.aPath) + '">A: ' + htmlEsc(model.aName) + '</span>' +
+    '<span title="' + htmlEsc(model.bPath) + '">B: ' + htmlEsc(model.bName) + '</span></div>' +
     '<div class="diff-ts">Generated ' + htmlEsc(model.ts) +
     (model.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>';
+  head.querySelector('.diff-x').addEventListener('click', () => overlay.remove());
   page.appendChild(head);
 
   const bar = document.createElement('div');
