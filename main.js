@@ -825,7 +825,37 @@ function buildMenu() {
         ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit' }]),
       ],
     },
-    { role: 'editMenu' },
+    {
+      // Basic Edit menu — the standard roles carry the native clipboard/undo
+      // accelerators (Cmd+Z/X/C/V/A) so text fields and the Source editor work.
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'Search',
+      submenu: [
+        { label: 'Find', accelerator: 'CmdOrCtrl+F', click: (mi, bw) => sendMenu(bw, 'find') },
+        // F3 / Shift+F3 are handled by a renderer keydown listener (which also
+        // does Cmd+G); registerAccelerator:false keeps them as visible hints
+        // here without double-firing the step.
+        { label: 'Find Next', accelerator: 'F3', registerAccelerator: false, click: (mi, bw) => sendMenu(bw, 'find-next') },
+        { label: 'Find Previous', accelerator: 'Shift+F3', registerAccelerator: false, click: (mi, bw) => sendMenu(bw, 'find-prev') },
+        { type: 'separator' },
+        { label: 'Jump to Path…', accelerator: 'CmdOrCtrl+L', click: (mi, bw) => sendMenu(bw, 'jump-to-path') },
+        { type: 'separator' },
+        // Cmd+C belongs to Edit ▸ Copy, so Copy Row uses Cmd+Shift+C.
+        { label: 'Copy Row', accelerator: 'CmdOrCtrl+Shift+C', click: (mi, bw) => sendMenu(bw, 'copy-row') },
+        { label: 'Copy as cURL', click: (mi, bw) => sendMenu(bw, 'copy-curl') },
+      ],
+    },
     {
       label: 'View',
       submenu: [
