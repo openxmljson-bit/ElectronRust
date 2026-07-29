@@ -2022,7 +2022,7 @@ const EXPORT_BUDGET = 5000000; // node budget for whole-document reconstruction
 
 function exportDocName(t, ext) {
   const b = String(baseName(t.file || 'document')).replace(/\.[^.]+$/, '') || 'document';
-  return b + '.' + ext;
+  return stampName(b, ext);
 }
 
 // Whole document, converted to the requested format.
@@ -2085,7 +2085,7 @@ async function exportMatches(t, fmt) {
     ext = 'csv';
   }
   const stem = 'matches_' + String(matchNav.q || 'search').replace(/[^\w]+/g, '_').slice(0, 30);
-  const saved = await window.oxj.saveText(stem + '.' + ext, text);
+  const saved = await window.oxj.saveText(stampName(stem, ext), text);
   if (saved) {
     toast('Saved ' + baseName(saved) + (matchNav.hasMore ? ' (loaded matches only)' : ''), true);
   }
@@ -2344,12 +2344,20 @@ async function convertNode(t, e, fmt, budget) {
   throw new Error('unknown format');
 }
 
-function defaultExportName(e, ext) {
-  const base = String(e.label || 'value').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'value';
+// Compact local timestamp (YYYYMMDD_HHMMSS) suffixed to all export filenames.
+function timeStamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
-  return base + '_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
-    '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.' + ext;
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+    '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+function stampName(base, ext) {
+  const b = String(base).replace(/[^\w.-]+/g, '_').slice(0, 60).replace(/^_+|_+$/g, '') || 'file';
+  return b + '_' + timeStamp() + '.' + ext;
+}
+
+function defaultExportName(e, ext) {
+  return stampName(e.label || 'value', ext);
 }
 
 async function copyNodeAs(t, e, fmt) {
@@ -2835,7 +2843,7 @@ async function saveDiff(model, fmt) {
   const map = { html: diffToHtml, txt: diffToTxt, json: diffToJson, csv: diffToCsv };
   try {
     const text = map[fmt](model);
-    const saved = await window.oxj.saveText('diff_report.' + fmt, text);
+    const saved = await window.oxj.saveText(stampName('diff_report', fmt), text);
     if (saved) toast('Saved ' + baseName(saved), true);
   } catch (err) { toast('Export failed: ' + cleanErr(err)); }
 }
@@ -3160,7 +3168,7 @@ function showValidationReport(t, p, res) {
       'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
       '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
       res.errors.map((e) => e.path + '\t' + e.message).join('\n');
-    const saved = await window.oxj.saveText('validation_report.txt', report);
+    const saved = await window.oxj.saveText(stampName('validation_report', 'txt'), report);
     if (saved) toast('Saved ' + baseName(saved), true);
   });
   const close = document.createElement('button');
