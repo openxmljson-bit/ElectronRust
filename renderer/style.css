@@ -793,3 +793,12 @@ body.resizing .monaco-host, body.resizing .tree-scroll { pointer-events: none; }
 .diff-rows .r-rem { background: #fff1f2; }
 .diff-rows .r-chg { background: #eff6ff; }
 .recent-path { display: block; font-size: 11px; color: var(--fg-dim); margin-top: 2px; word-break: break-all; }
+
+/* Compare target picker: filter + scrollable list for many tabs */
+.picker-filter {
+  width: 100%; box-sizing: border-box; margin: 4px 0 8px;
+  padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-2, #1a1d24); color: var(--fg);
+  font-size: 13px;
+}
+.picker-list { max-height: 44vh; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }

@@ -2599,6 +2599,22 @@ async function compareTabsFlow() {
   const { box, back } = simpleModal('Compare "' + t.title + '" with…');
   const counts = {};
   others.forEach((o) => { counts[o.title] = (counts[o.title] || 0) + 1; });
+
+  // A filter box appears when there are many tabs, so a long list stays usable.
+  let filter = null;
+  if (others.length > 6) {
+    filter = document.createElement('input');
+    filter.type = 'search';
+    filter.className = 'picker-filter';
+    filter.placeholder = 'Filter tabs…';
+    filter.spellcheck = false;
+    box.appendChild(filter);
+  }
+
+  // The list itself scrolls once it exceeds its max height.
+  const list = document.createElement('div');
+  list.className = 'picker-list';
+  const rowEls = [];
   for (const o of others) {
     const row = document.createElement('div');
     row.className = 'recent-item';
@@ -2615,8 +2631,26 @@ async function compareTabsFlow() {
     name.title = o.file || '';
     row.appendChild(name);
     row.addEventListener('click', async () => { back.remove(); await runCompare(t, o); });
-    box.appendChild(row);
+    row._hay = (o.title + ' ' + (o.file || '')).toLowerCase();
+    rowEls.push(row);
+    list.appendChild(row);
   }
+  box.appendChild(list);
+
+  if (filter) {
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const r of rowEls) r.style.display = (!q || r._hay.includes(q)) ? '' : 'none';
+    });
+    // Enter selects the only visible match, for quick keyboard use.
+    filter.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      const shown = rowEls.filter((r) => r.style.display !== 'none');
+      if (shown.length === 1) shown[0].click();
+    });
+    setTimeout(() => filter.focus(), 20);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'modal-actions';
   const close = document.createElement('button');
