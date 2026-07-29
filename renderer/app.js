@@ -2573,10 +2573,16 @@ async function openTextAsTab(name, ext, text) {
 // The in-memory engine doesn't implement schema/validate, so it returns this.
 function isMemoryModeErr(m) { return String(m || '').includes('database mode'); }
 
-// Reconstruct the whole document into a JS value (used by the memory-mode
-// fallbacks). Throws for documents too big for a single JS string.
+// Reconstruct the whole document into a JS value (used by the validate
+// fallback). The in-memory subtree op clamps its budget and returns a
+// truncated preview past that, so detect truncation and fail cleanly rather
+// than trying to JSON.parse an ellipsis marker.
 async function reconstructDoc(t) {
-  return getNodeObj(t, t.visible[0], EXPORT_BUDGET);
+  const root = t.visible[0];
+  if (isScalarKind(root.kind)) return getNodeObj(t, root);
+  const r = await getSubtree(t, root, 300000);
+  if (r.truncated) throw new Error('doc-too-large-for-memory-tool');
+  return r.language === 'json' ? JSON.parse(r.text) : xmlTextToObj(r.text);
 }
 
 async function generateSchema() {
@@ -2592,8 +2598,13 @@ async function generateSchema() {
       sampled = res.sampled;
     } catch (err) {
       if (!isMemoryModeErr(cleanErr(err))) throw err;
-      // Memory mode: infer the schema in the renderer.
-      schema = { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferJsonSchema(await reconstructDoc(t)) };
+      // Memory mode: infer the schema by walking the tree structurally, so we
+      // never reconstruct (and truncate) the whole document as one JSON string.
+      const root = t.visible[0];
+      const budget = { n: 200000 };
+      const inferred = await inferSchemaFromTree(t, { id: root.id, kind: root.kind, n: root.n, value: root.value }, budget);
+      schema = { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferred };
+      sampled = budget.n <= 0;
     }
     const text = JSON.stringify(schema, null, 2);
     await openTextAsTab(baseName(t.file).replace(/\.[^.]+$/, '') + '_schema', 'json', text);
@@ -2604,6 +2615,56 @@ async function generateSchema() {
     else if (isMemoryModeErr(msg)) toast('Document too large to build a schema in memory mode; reopen via Engine Mode → Always Database');
     else toast('Schema generation failed: ' + msg);
   }
+}
+
+// Infer a draft-07 schema by walking the node tree (no full reconstruction, so
+// no truncation). Arrays are sampled; `budget.n` caps total nodes visited and,
+// when exhausted, marks the result as sampled.
+async function inferSchemaFromTree(t, node, budget) {
+  const k = node.kind;
+  if (k === K.STR || k === K.ATTR || k === K.TEXT) return { type: 'string' };
+  if (k === K.BOOL) return { type: 'boolean' };
+  if (k === K.NULL) return { type: 'null' };
+  if (k === K.NUM) {
+    const s = String(node.value == null ? '' : node.value);
+    return { type: /^[+-]?\d+$/.test(s) ? 'integer' : 'number' };
+  }
+  if (k === K.ARR) {
+    if (!node.n || budget.n <= 0) return { type: 'array' };
+    const SAMPLE = 500;
+    const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: 0, limit: Math.min(SAMPLE, Number(node.n)) });
+    const subs = [];
+    for (const c of (res.items || [])) {
+      if (budget.n <= 0) break;
+      budget.n -= 1;
+      subs.push(await inferSchemaFromTree(t, c, budget));
+    }
+    return subs.length ? { type: 'array', items: mergeSchemas(subs) } : { type: 'array' };
+  }
+  if (k === K.OBJ || k === K.ELEM) {
+    const properties = {};
+    const required = [];
+    let off = 0;
+    const PAGE = 500;
+    for (;;) {
+      if (budget.n <= 0) break;
+      const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: off, limit: PAGE });
+      const items = res.items || [];
+      for (const c of items) {
+        if (budget.n <= 0) break;
+        budget.n -= 1;
+        if (c.name == null) continue;
+        properties[c.name] = await inferSchemaFromTree(t, c, budget);
+        required.push(c.name);
+      }
+      if (items.length < PAGE) break;
+      off += PAGE;
+    }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  return {};
 }
 
 // ---- JSON Schema inference (draft-07), renderer fallback for memory mode ----
@@ -2738,7 +2799,7 @@ async function validateAgainstSchema() {
   } catch (err) {
     const msg = cleanErr(err);
     if (msg.includes('unknown op')) toast('This tool needs an engine rebuild: npm run build:engine, then restart');
-    else if (isMemoryModeErr(msg)) toast('Document too large to validate in memory mode; reopen via Engine Mode → Always Database');
+    else if (isMemoryModeErr(msg) || msg.includes('doc-too-large-for-memory-tool')) toast('This document is too large to validate in memory mode; reopen via Engine Mode → Always Database');
     else toast('Validation failed: ' + msg);
   }
 }
