@@ -825,7 +825,41 @@ function buildMenu() {
         ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit' }]),
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Search',
+      submenu: [
+        { label: 'Find', accelerator: 'CmdOrCtrl+F', click: (mi, bw) => sendMenu(bw, 'find') },
+        // F3 / Shift+F3 are handled by a renderer keydown listener (which also
+        // does Cmd+G); registerAccelerator:false keeps them as visible hints
+        // here without double-firing the step.
+        { label: 'Find Next', accelerator: 'F3', registerAccelerator: false, click: (mi, bw) => sendMenu(bw, 'find-next') },
+        { label: 'Find Previous', accelerator: 'Shift+F3', registerAccelerator: false, click: (mi, bw) => sendMenu(bw, 'find-prev') },
+        { type: 'separator' },
+        { label: 'Jump to Path…', accelerator: 'CmdOrCtrl+L', click: (mi, bw) => sendMenu(bw, 'jump-to-path') },
+        { type: 'separator' },
+        { label: 'Copy Row', accelerator: 'CmdOrCtrl+C', click: (mi, bw) => sendMenu(bw, 'copy-row') },
+        { label: 'Copy as cURL', click: (mi, bw) => sendMenu(bw, 'copy-curl') },
+      ],
+    },
+    // Hidden Edit menu: the visible Edit menu was removed, but macOS needs these
+    // roles registered for clipboard/undo shortcuts to work in text fields and
+    // the Source editor. Copy (Cmd+C) is intentionally omitted — it belongs to
+    // "Copy Row", which falls back to a native text copy when an editor/field
+    // is focused.
+    {
+      label: 'Edit',
+      visible: false,
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' },
+      ],
+    },
     {
       label: 'View',
       submenu: [

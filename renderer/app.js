@@ -578,6 +578,7 @@ async function openPath(p, tab, force) {
     if (t === cur) { renderTabs(); renderScreen(); }
     toast('Load failed: ' + cleanErr(e));
   }
+  return t;
 }
 
 $('btn-open').addEventListener('click', async () => {
@@ -1743,7 +1744,9 @@ $('url-ok').addEventListener('click', async () => {
   toast('Fetching ' + url + '…', true);
   try {
     const file = await window.oxj.downloadUrl(url, auth);
-    openPath(file);
+    const t = await openPath(file);
+    // Remember the request so "Copy as cURL" can reproduce it.
+    if (t) t.origin = { url, auth };
   } catch (e) {
     toast('Fetch failed: ' + cleanErr(e));
   }
@@ -1788,8 +1791,209 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'close-all-tabs':
       closeAllTabs();
       break;
+    case 'find': {
+      if (!cur || cur.plain || cur.phase !== 'ready') { toast('Search is not available here'); break; }
+      const box = $('search-box');
+      box.classList.remove('hidden');
+      box.focus();
+      box.select();
+      break;
+    }
+    case 'find-next':
+      if (matchNav && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
+      else if (cur && !cur.plain && cur.phase === 'ready') { $('search-box').focus(); }
+      break;
+    case 'find-prev':
+      if (matchNav && matchNav.ids.length) gotoMatch(matchNav.cur - 1);
+      break;
+    case 'jump-to-path':
+      jumpToPath();
+      break;
+    case 'copy-row':
+      copyRowOrText();
+      break;
+    case 'copy-curl':
+      copyAsCurl();
+      break;
   }
 });
+
+// ---------- Search-menu helpers: jump-to-path, copy row, copy as cURL ----------
+
+// Small modal prompt (Electron disables window.prompt). Resolves to the trimmed
+// string, or null if cancelled.
+function askText(title, placeholder) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    const h = document.createElement('div');
+    h.className = 'modal-title';
+    h.textContent = title;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.spellcheck = false;
+    input.placeholder = placeholder || '';
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button');
+    cancel.className = 'btn-secondary';
+    cancel.textContent = 'Cancel';
+    const ok = document.createElement('button');
+    ok.className = 'btn-primary';
+    ok.textContent = 'Go';
+    actions.append(cancel, ok);
+    modal.append(h, input, actions);
+    back.append(modal);
+    document.body.append(back);
+    const done = (v) => { back.remove(); resolve(v); };
+    ok.onclick = () => done(input.value.trim() || null);
+    cancel.onclick = () => done(null);
+    back.addEventListener('mousedown', (e) => { if (e.target === back) done(null); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim() || null); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+    });
+    setTimeout(() => input.focus(), 20);
+  });
+}
+
+// Parse a JSON path like $.a.b[0]["c d"] into segments ({key} | {index}).
+function parseJsonPath(p) {
+  let s = p.trim();
+  if (s[0] === '$') s = s.slice(1);
+  const segs = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '.') { i++; continue; }
+    if (c === '[') {
+      const end = s.indexOf(']', i);
+      if (end < 0) return null;
+      let inner = s.slice(i + 1, end).trim();
+      if ((inner.startsWith('"') && inner.endsWith('"')) || (inner.startsWith("'") && inner.endsWith("'"))) {
+        const body = inner.slice(1, -1);
+        try { segs.push({ key: JSON.parse('"' + body.replace(/"/g, '\\"') + '"') }); }
+        catch { segs.push({ key: body }); }
+      } else if (/^\d+$/.test(inner)) {
+        segs.push({ index: parseInt(inner, 10) });
+      } else {
+        segs.push({ key: inner });
+      }
+      i = end + 1;
+    } else {
+      let j = i;
+      while (j < s.length && s[j] !== '.' && s[j] !== '[') j++;
+      const name = s.slice(i, j);
+      if (name) segs.push({ key: name });
+      i = j;
+    }
+  }
+  return segs;
+}
+
+// Parse an XML path like /root/item[2]/@id or /root/text().
+function parseXmlPath(p) {
+  return p.split('/').map((s) => s.trim()).filter(Boolean).map((tok) => {
+    if (tok.startsWith('@')) return { attr: tok.slice(1) };
+    if (tok === 'text()') return { text: true };
+    const m = tok.match(/^(.+?)\[(\d+)\]$/);
+    if (m) return { key: m[1], nth: parseInt(m[2], 10) };
+    return { key: tok };
+  });
+}
+
+// Walk from the root to the node identified by one path segment.
+async function childMatching(t, parentId, seg, isXml) {
+  if (!isXml && 'index' in seg) {
+    const res = await window.oxj.query(t.id, { op: 'children', node: parentId, offset: seg.index, limit: 1 });
+    return res.items && res.items.length ? res.items[0].id : null;
+  }
+  const PAGE = 500;
+  const nth = seg.nth ? seg.nth - 1 : 0;
+  let off = 0, seen = 0;
+  for (;;) {
+    const res = await window.oxj.query(t.id, { op: 'children', node: parentId, offset: off, limit: PAGE });
+    const items = res.items || [];
+    for (const c of items) {
+      let match;
+      if (isXml && seg.attr != null) match = c.kind === 7 && c.name === seg.attr;
+      else if (isXml && seg.text) match = c.kind === 8;
+      else match = c.name === seg.key;
+      if (match) {
+        if (seen === nth) return c.id;
+        seen++;
+      }
+    }
+    if (items.length < PAGE) break;
+    off += PAGE;
+  }
+  return null;
+}
+
+async function resolvePath(t, p, isXml) {
+  try {
+    const segs = isXml ? parseXmlPath(p) : parseJsonPath(p);
+    if (!segs) return null;
+    if (!segs.length) return t.rootId; // "$" or "/" -> root
+    let curId = t.rootId;
+    for (const seg of segs) {
+      curId = await childMatching(t, curId, seg, isXml);
+      if (curId == null) return null;
+    }
+    return curId;
+  } catch { return null; }
+}
+
+async function jumpToPath() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const isXml = t.docFormat === 'xml';
+  const p = await askText('Jump to Path', isXml ? '/root/item/@id' : '$.users[0].name');
+  if (!p) return;
+  const id = await resolvePath(t, p, isXml);
+  if (id == null) { toast('No node found at that path'); return; }
+  await revealNode(t, id);
+}
+
+// True when a text field / the Source editor is focused, so Cmd+C should do a
+// normal text copy rather than "Copy Row".
+function isEditableFocus() {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
+  return !!(el.closest && el.closest('.monaco-editor'));
+}
+
+async function copyRowOrText() {
+  if (isEditableFocus()) { try { document.execCommand('copy'); } catch {} return; }
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) return;
+  const e = t.visible && t.selectedIdx >= 0 ? t.visible[t.selectedIdx] : null;
+  if (!e || e.pseudo) { toast('Select a row first'); return; }
+  if (t.docFormat === 'csv' || t.docFormat === 'tsv') await copyCsvRow(t, e);
+  else await copyNodeAs(t, e, 'json');
+}
+
+async function copyAsCurl() {
+  const t = cur;
+  if (!t || !t.origin || !t.origin.url) {
+    toast('Copy as cURL only works for documents opened from a URL');
+    return;
+  }
+  const { url, auth } = t.origin;
+  const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+  let cmd = 'curl ' + q(url);
+  if (auth && auth.type === 'basic' && (auth.user || auth.pass)) {
+    cmd += ' -u ' + q((auth.user || '') + ':' + (auth.pass || ''));
+  } else if (auth && auth.type === 'bearer' && auth.token) {
+    cmd += ' -H ' + q('Authorization: Bearer ' + auth.token);
+  } else if (auth && auth.type === 'apikey' && auth.token) {
+    cmd += ' -H ' + q((auth.header || 'X-API-Key') + ': ' + auth.token);
+  }
+  await copyText(cmd, 'cURL command');
+}
 
 // ============================================================
 // Context menu + cross-format converters (JSON/XML/YAML/CSV)
