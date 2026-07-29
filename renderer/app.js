@@ -2570,20 +2570,143 @@ async function openTextAsTab(name, ext, text) {
   if (nt) openPath(file, nt);
 }
 
+// The in-memory engine doesn't implement schema/validate, so it returns this.
+function isMemoryModeErr(m) { return String(m || '').includes('database mode'); }
+
+// Reconstruct the whole document into a JS value (used by the memory-mode
+// fallbacks). Throws for documents too big for a single JS string.
+async function reconstructDoc(t) {
+  return getNodeObj(t, t.visible[0], EXPORT_BUDGET);
+}
+
 async function generateSchema() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  if (t.docFormat === 'xml') { toast('JSON Schema generation supports JSON, NDJSON and CSV documents'); return; }
   try {
     toast('Generating schema…', true);
-    const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
-    const text = JSON.stringify(res.schema, null, 2);
+    let schema, sampled = false;
+    try {
+      const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
+      schema = res.schema;
+      sampled = res.sampled;
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      // Memory mode: infer the schema in the renderer.
+      schema = { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferJsonSchema(await reconstructDoc(t)) };
+    }
+    const text = JSON.stringify(schema, null, 2);
     await openTextAsTab(baseName(t.file).replace(/\.[^.]+$/, '') + '_schema', 'json', text);
-    if (res.sampled) toast('Schema inferred from a sample of a very large document', true);
+    if (sampled) toast('Schema inferred from a sample of a very large document', true);
   } catch (err) {
     const msg = cleanErr(err);
     if (msg.includes('unknown op')) toast('This tool needs an engine rebuild: npm run build:engine, then restart');
+    else if (isMemoryModeErr(msg)) toast('Document too large to build a schema in memory mode; reopen via Engine Mode → Always Database');
     else toast('Schema generation failed: ' + msg);
   }
+}
+
+// ---- JSON Schema inference (draft-07), renderer fallback for memory mode ----
+function inferJsonSchema(v) {
+  if (v === null) return { type: 'null' };
+  if (Array.isArray(v)) {
+    if (!v.length) return { type: 'array' };
+    return { type: 'array', items: mergeSchemas(v.map(inferJsonSchema)) };
+  }
+  const t = typeof v;
+  if (t === 'string') return { type: 'string' };
+  if (t === 'number') return { type: Number.isInteger(v) ? 'integer' : 'number' };
+  if (t === 'boolean') return { type: 'boolean' };
+  if (t === 'object') {
+    const properties = {};
+    const required = [];
+    for (const k of Object.keys(v)) { properties[k] = inferJsonSchema(v[k]); required.push(k); }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  return {};
+}
+
+function mergeSchemas(list) {
+  if (list.length === 1) return list[0];
+  const types = new Set(list.map((s) => s.type));
+  if (types.size === 1 && list[0].type === 'object') {
+    const keys = new Set();
+    list.forEach((s) => Object.keys(s.properties || {}).forEach((k) => keys.add(k)));
+    const properties = {};
+    const required = [];
+    for (const k of keys) {
+      const subs = list.filter((s) => s.properties && s.properties[k]).map((s) => s.properties[k]);
+      properties[k] = mergeSchemas(subs);
+      if (list.every((s) => s.properties && s.properties[k])) required.push(k);
+    }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  if (types.size === 1 && list[0].type === 'array') {
+    const items = list.map((s) => s.items).filter(Boolean);
+    return items.length ? { type: 'array', items: mergeSchemas(items) } : { type: 'array' };
+  }
+  if (types.size === 1) return { type: list[0].type };
+  // integer is a refinement of number
+  if (types.size === 2 && types.has('integer') && types.has('number')) return { type: 'number' };
+  return { type: Array.from(types) };
+}
+
+// ---- Minimal draft-07 validator, renderer fallback for memory mode ----
+function jsValidate(value, schema) {
+  const errors = [];
+  const MAX = 1000;
+  const typeOf = (v) => {
+    if (v === null) return 'null';
+    if (Array.isArray(v)) return 'array';
+    const t = typeof v;
+    if (t === 'number') return Number.isInteger(v) ? 'integer' : 'number';
+    return t;
+  };
+  const check = (v, sch, path) => {
+    if (errors.length >= MAX || !sch || typeof sch !== 'object') return;
+    if (sch.type) {
+      const types = Array.isArray(sch.type) ? sch.type : [sch.type];
+      const vt = typeOf(v);
+      const ok = types.some((tt) => tt === vt || (tt === 'number' && vt === 'integer'));
+      if (!ok) { errors.push({ path, message: 'expected type ' + types.join('|') + ', got ' + vt }); return; }
+    }
+    if (sch.enum && !sch.enum.some((e) => JSON.stringify(e) === JSON.stringify(v))) {
+      errors.push({ path, message: 'value not in enum' });
+    }
+    if (typeof v === 'number') {
+      if (sch.minimum != null && v < sch.minimum) errors.push({ path, message: 'below minimum ' + sch.minimum });
+      if (sch.maximum != null && v > sch.maximum) errors.push({ path, message: 'above maximum ' + sch.maximum });
+      if (sch.exclusiveMinimum != null && v <= sch.exclusiveMinimum) errors.push({ path, message: 'not above exclusiveMinimum ' + sch.exclusiveMinimum });
+      if (sch.exclusiveMaximum != null && v >= sch.exclusiveMaximum) errors.push({ path, message: 'not below exclusiveMaximum ' + sch.exclusiveMaximum });
+      if (sch.multipleOf && v % sch.multipleOf !== 0) errors.push({ path, message: 'not a multiple of ' + sch.multipleOf });
+    }
+    if (typeof v === 'string') {
+      if (sch.minLength != null && v.length < sch.minLength) errors.push({ path, message: 'shorter than minLength ' + sch.minLength });
+      if (sch.maxLength != null && v.length > sch.maxLength) errors.push({ path, message: 'longer than maxLength ' + sch.maxLength });
+      if (sch.pattern) { try { if (!new RegExp(sch.pattern).test(v)) errors.push({ path, message: 'does not match pattern' }); } catch { /* bad regex */ } }
+    }
+    if (Array.isArray(v)) {
+      if (sch.minItems != null && v.length < sch.minItems) errors.push({ path, message: 'fewer than minItems ' + sch.minItems });
+      if (sch.maxItems != null && v.length > sch.maxItems) errors.push({ path, message: 'more than maxItems ' + sch.maxItems });
+      if (sch.items) {
+        if (Array.isArray(sch.items)) sch.items.forEach((it, i) => { if (v[i] !== undefined) check(v[i], it, path + '[' + i + ']'); });
+        else v.forEach((el, i) => check(el, sch.items, path + '[' + i + ']'));
+      }
+    }
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if (Array.isArray(sch.required)) for (const r of sch.required) if (!(r in v)) errors.push({ path: path + '.' + r, message: 'missing required property' });
+      if (sch.properties) for (const k of Object.keys(sch.properties)) if (k in v) check(v[k], sch.properties[k], path + '.' + k);
+      if (sch.additionalProperties === false && sch.properties) {
+        for (const k of Object.keys(v)) if (!(k in sch.properties)) errors.push({ path: path + '.' + k, message: 'additional property not allowed' });
+      }
+    }
+  };
+  check(value, schema, '$');
+  return { count: errors.length, truncated: errors.length >= MAX, errors };
 }
 
 async function validateAgainstSchema() {
@@ -2600,53 +2723,64 @@ async function validateAgainstSchema() {
   }
   try {
     toast('Validating…', true);
-    const res = await window.oxj.query(t.id, { op: 'validate', schema, node: t.rootId });
+    let res;
+    try {
+      res = await window.oxj.query(t.id, { op: 'validate', schema, node: t.rootId });
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      res = jsValidate(await reconstructDoc(t), schema); // memory-mode fallback
+    }
     if (!res.count) {
       toast('Valid — no schema violations found ✓', true);
       return;
     }
-    const { box, back } = simpleModal(
-      'Validation — ' + fmtInt(res.count) + (res.truncated ? '+' : '') + ' error(s)'
-    );
-    const list = document.createElement('div');
-    list.style.cssText = 'max-height:50vh;overflow-y:auto;';
-    for (const e of res.errors.slice(0, 300)) {
-      const row = document.createElement('div');
-      row.className = 'stat-kv';
-      const k = document.createElement('span');
-      k.className = 'k';
-      k.textContent = e.path;
-      k.style.cssText = 'overflow:hidden;text-overflow:ellipsis;max-width:45%;';
-      const v = document.createElement('span');
-      v.textContent = e.message;
-      row.append(k, v);
-      list.appendChild(row);
-    }
-    box.appendChild(list);
-    const actions = document.createElement('div');
-    actions.className = 'modal-actions';
-    const save = document.createElement('button');
-    save.className = 'btn-secondary';
-    save.textContent = 'Save Report';
-    save.addEventListener('click', async () => {
-      const report =
-        'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
-        '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
-        res.errors.map((e) => e.path + '\t' + e.message).join('\n');
-      const saved = await window.oxj.saveText('validation_report.txt', report);
-      if (saved) toast('Saved ' + baseName(saved), true);
-    });
-    const close = document.createElement('button');
-    close.className = 'btn-secondary';
-    close.textContent = 'Close';
-    close.addEventListener('click', () => back.remove());
-    actions.append(save, close);
-    box.appendChild(actions);
+    showValidationReport(t, p, res);
   } catch (err) {
     const msg = cleanErr(err);
     if (msg.includes('unknown op')) toast('This tool needs an engine rebuild: npm run build:engine, then restart');
+    else if (isMemoryModeErr(msg)) toast('Document too large to validate in memory mode; reopen via Engine Mode → Always Database');
     else toast('Validation failed: ' + msg);
   }
+}
+
+function showValidationReport(t, p, res) {
+  const { box, back } = simpleModal(
+    'Validation — ' + fmtInt(res.count) + (res.truncated ? '+' : '') + ' error(s)'
+  );
+  const list = document.createElement('div');
+  list.style.cssText = 'max-height:50vh;overflow-y:auto;';
+  for (const e of res.errors.slice(0, 300)) {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = e.path;
+    k.style.cssText = 'overflow:hidden;text-overflow:ellipsis;max-width:45%;';
+    const v = document.createElement('span');
+    v.textContent = e.message;
+    row.append(k, v);
+    list.appendChild(row);
+  }
+  box.appendChild(list);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const save = document.createElement('button');
+  save.className = 'btn-secondary';
+  save.textContent = 'Save Report';
+  save.addEventListener('click', async () => {
+    const report =
+      'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
+      '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
+      res.errors.map((e) => e.path + '\t' + e.message).join('\n');
+    const saved = await window.oxj.saveText('validation_report.txt', report);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  });
+  const close = document.createElement('button');
+  close.className = 'btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => back.remove());
+  actions.append(save, close);
+  box.appendChild(actions);
 }
 
 async function compareWithTab() {
