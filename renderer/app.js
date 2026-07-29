@@ -2622,13 +2622,63 @@ async function compareTabsFlow() {
 async function runCompare(a, b) {
   try {
     toast('Comparing…', true);
-    const res = await window.oxj.diffTabs(a.id, b.id);
+    let res;
+    try {
+      res = await window.oxj.diffTabs(a.id, b.id); // Rust core (database mode)
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      // Memory mode: reconstruct both documents and diff in the renderer.
+      const [av, bv] = await Promise.all([reconstructDoc(a), reconstructDoc(b)]);
+      res = jsDiff(av, bv);
+    }
     const model = buildDiffModel(a, b, res);
     if (!model.summary.total) { toast('Documents are structurally identical ✓', true); return; }
     showDiffReport(model);
   } catch (err) {
-    toast('Compare failed: ' + cleanErr(err));
+    const msg = cleanErr(err);
+    if (msg.includes('doc-too-large-for-memory-tool')) toast('A document is too large to compare in memory mode; reopen via Engine Mode → Always Database');
+    else toast('Compare failed: ' + msg);
   }
+}
+
+// Structural diff in JS (memory-mode fallback), mirroring the Rust core:
+// arrays position-based (element i vs i; tail added/removed), objects key-based,
+// a JSON-type change counts as Changed. Paths use the $.a[0].b grammar.
+function jsDiff(a, b, limit) {
+  limit = limit || 5000;
+  const entries = [];
+  let added = 0, removed = 0, changed = 0, truncated = false;
+  const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+  const show = (v) => (v === undefined ? '' : (v !== null && typeof v === 'object') ? JSON.stringify(v).slice(0, 400) : String(v));
+  const key = (k) => (/^[A-Za-z_$][\w$]*$/.test(k) ? '.' + k : '[' + JSON.stringify(k) + ']');
+  const push = (op, path, av, bv) => {
+    if (entries.length >= limit) { truncated = true; return; }
+    entries.push({ op, path, a: show(av), b: show(bv) });
+  };
+  const walk = (x, y, path) => {
+    if (truncated) return;
+    const tx = typeOf(x), ty = typeOf(y);
+    if (tx !== ty) { changed++; push('changed', path, x, y); return; }
+    if (tx === 'object') {
+      for (const k of Object.keys(x)) {
+        const cp = path + key(k);
+        if (Object.prototype.hasOwnProperty.call(y, k)) walk(x[k], y[k], cp);
+        else { removed++; push('removed', cp, x[k], undefined); }
+      }
+      for (const k of Object.keys(y)) {
+        if (!Object.prototype.hasOwnProperty.call(x, k)) { added++; push('added', path + key(k), undefined, y[k]); }
+      }
+    } else if (tx === 'array') {
+      const n = Math.min(x.length, y.length);
+      for (let i = 0; i < n; i++) walk(x[i], y[i], path + '[' + i + ']');
+      for (let i = n; i < x.length; i++) { removed++; push('removed', path + '[' + i + ']', x[i], undefined); }
+      for (let i = n; i < y.length; i++) { added++; push('added', path + '[' + i + ']', undefined, y[i]); }
+    } else if (x !== y) {
+      changed++; push('changed', path, x, y);
+    }
+  };
+  walk(a, b, '$');
+  return { added, removed, changed, truncated, entries };
 }
 
 function buildDiffModel(a, b, res) {
