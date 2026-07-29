@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('oxj', {
   cancelIngest: (tabId) => unwrap('cancel-ingest', tabId),
   downloadUrl: (url, auth) => unwrap('download-url', { url, auth }),
   clipboardToFile: () => unwrap('clipboard-to-file'),
+  setMenuState: (s) => ipcRenderer.send('menu-state', s),
   loadText: (p, full) => unwrap('load-text', { path: p, full: !!full }),
   saveText: (defaultName, text) => unwrap('save-text', { defaultName, text }),
   readFileText: (p) => unwrap('read-file-text', p),

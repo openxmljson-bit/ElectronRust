@@ -33,6 +33,10 @@ async function availableMemBytes() {
 
 const MAX_RECENTS = 15;
 
+// Renderer-driven enable/disable state for the Export menu. Persisted here so
+// rebuilds of the menu (buildMenu runs on many events) keep the right state.
+let menuState = { hasDoc: false, hasMatches: false };
+
 const sessions = new Map(); // tabId -> { proc, pending: Map, file, dbPath, wc }
 const ingests = new Map();  // tabId -> { proc, dbPath, wc, file }
 const lastDb = new Map();   // tabId -> { dbPath, file, wc } — for auto-revival
@@ -857,6 +861,24 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Export',
+      submenu: [
+        // Whole-document exports (enabled only when a structured doc is open).
+        { id: 'exp-raw', label: 'Raw Copy…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-doc', 'rawjson') },
+        { id: 'exp-pretty', label: 'Pretty JSON…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-doc', 'json') },
+        { id: 'exp-xml', label: 'XML…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-doc', 'xml') },
+        { id: 'exp-csv', label: 'CSV…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-doc', 'csv') },
+        { id: 'exp-yaml', label: 'YAML…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-doc', 'yaml') },
+        { type: 'separator' },
+        { id: 'exp-sel-json', label: 'Selection as JSON…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-selection', 'json') },
+        { id: 'exp-sel-text', label: 'Selection as Text…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'export-selection', 'text') },
+        { type: 'separator' },
+        // Enabled only while a search has matches.
+        { id: 'exp-match-json', label: 'Search Matches as JSON…', enabled: menuState.hasMatches, click: (mi, bw) => sendMenu(bw, 'export-matches', 'json') },
+        { id: 'exp-match-csv', label: 'Search Matches as CSV…', enabled: menuState.hasMatches, click: (mi, bw) => sendMenu(bw, 'export-matches', 'csv') },
+      ],
+    },
+    {
       label: 'View',
       submenu: [
         {
@@ -1207,6 +1229,18 @@ app.whenReady().then(() => {
   }
 
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
+
+  // Renderer reports whether a doc is open / a search has matches, so the
+  // Export menu items enable/disable accordingly.
+  ipcMain.on('menu-state', (_e, s) => {
+    menuState = { hasDoc: !!(s && s.hasDoc), hasMatches: !!(s && s.hasMatches) };
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return;
+    const set = (id, on) => { const mi = menu.getMenuItemById(id); if (mi) mi.enabled = on; };
+    for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text']) set(id, menuState.hasDoc);
+    set('exp-match-json', menuState.hasMatches);
+    set('exp-match-csv', menuState.hasMatches);
+  });
 
   ipcMain.handle('get-theme', async () => effectiveTheme());
 

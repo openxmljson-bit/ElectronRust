@@ -267,6 +267,7 @@ function renderScreen() {
     updateStatusForSelection();
     if (sourceOpen) scheduleSourceUpdate();
   }
+  syncMenuState();
 }
 
 // ---------- plain-text tabs (txt/js/html) ----------
@@ -1218,6 +1219,7 @@ function closeSearch() {
     }
   }
   matchNav = null;
+  syncMenuState();
 }
 
 function startSearch() {
@@ -1241,9 +1243,11 @@ function startSearch() {
     if (!matchNav || matchNav.tabId !== t.id) return;
     if (!matchNav.ids.length) {
       $('match-count').textContent = 'No matches';
+      syncMenuState();
       return;
     }
     gotoMatch(0);
+    syncMenuState();
   });
 }
 
@@ -1815,6 +1819,15 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'copy-curl':
       copyAsCurl();
       break;
+    case 'export-doc':
+      exportDocAs(cur, arg);
+      break;
+    case 'export-selection':
+      exportSelection(cur, arg);
+      break;
+    case 'export-matches':
+      exportMatches(cur, arg);
+      break;
   }
 });
 
@@ -1995,6 +2008,89 @@ async function copyAsCurl() {
   await copyText(cmd, 'cURL command');
 }
 
+// ---------- Export menu ----------
+const EXPORT_BUDGET = 5000000; // node budget for whole-document reconstruction
+
+function exportDocName(t, ext) {
+  const b = String(baseName(t.file || 'document')).replace(/\.[^.]+$/, '') || 'document';
+  return b + '.' + ext;
+}
+
+// Whole document, converted to the requested format.
+async function exportDocAs(t, fmt) {
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const root = t.visible && t.visible[0];
+  if (!root) { toast('Nothing to export'); return; }
+  try {
+    const text = await convertNode(t, root, fmt, EXPORT_BUDGET);
+    const ext = fmt === 'rawjson' ? 'json' : fmt;
+    const saved = await window.oxj.saveText(exportDocName(t, ext), text);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  } catch (err) {
+    toast('Export failed: ' + cleanErr(err).replace(/\s*\(raise the budget[^)]*\)/, ' (document too large to export whole)'));
+  }
+}
+
+// Currently selected node — as pretty JSON, or as its raw text/source.
+async function exportSelection(t, kind) {
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const e = t.visible && t.selectedIdx >= 0 ? t.visible[t.selectedIdx] : null;
+  if (!e || e.pseudo) { toast('Select a node first'); return; }
+  try {
+    if (kind === 'json') { await exportNodeAs(t, e, 'json'); return; }
+    let text;
+    if (isScalarKind(e.kind)) text = String(await getScalarValue(t, e));
+    else text = (await getSubtree(t, e, EXPORT_BUDGET)).text;
+    const saved = await window.oxj.saveText(defaultExportName(e, 'txt'), text);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  } catch (err) {
+    toast('Export failed: ' + cleanErr(err));
+  }
+}
+
+// Loaded search matches -> JSON array or CSV of {path, name, value}.
+async function exportMatches(t, fmt) {
+  if (!t || !matchNav || matchNav.tabId !== t.id || !matchNav.ids.length) {
+    toast('No search matches to export');
+    return;
+  }
+  const ids = matchNav.ids.slice(0, 5000);
+  toast('Collecting ' + ids.length + ' matches…', true);
+  const rows = [];
+  for (const id of ids) {
+    try {
+      const [node, pth] = await Promise.all([
+        window.oxj.query(t.id, { op: 'node', node: id }),
+        window.oxj.query(t.id, { op: 'path', node: id }),
+      ]);
+      rows.push({ path: pth.path, name: node.name != null ? node.name : null, value: node.value != null ? node.value : null });
+    } catch { /* skip a match that can't be read */ }
+  }
+  let text, ext;
+  if (fmt === 'json') {
+    text = JSON.stringify(rows, null, 2);
+    ext = 'json';
+  } else {
+    const cell = (v) => csvCell(v == null ? '' : String(v), ',');
+    text = ['path,name,value', ...rows.map((r) => [cell(r.path), cell(r.name), cell(r.value)].join(','))].join('\n');
+    ext = 'csv';
+  }
+  const stem = 'matches_' + String(matchNav.q || 'search').replace(/[^\w]+/g, '_').slice(0, 30);
+  const saved = await window.oxj.saveText(stem + '.' + ext, text);
+  if (saved) {
+    toast('Saved ' + baseName(saved) + (matchNav.hasMore ? ' (loaded matches only)' : ''), true);
+  }
+}
+
+// Tell the main process what the Export menu items should enable against.
+function syncMenuState() {
+  try {
+    const hasDoc = !!(cur && cur.phase === 'ready' && !cur.plain);
+    const hasMatches = !!(matchNav && cur && matchNav.tabId === cur.id && matchNav.ids.length);
+    window.oxj.setMenuState({ hasDoc, hasMatches });
+  } catch { /* ignore */ }
+}
+
 // ============================================================
 // Context menu + cross-format converters (JSON/XML/YAML/CSV)
 // ============================================================
@@ -2077,7 +2173,7 @@ async function getSubtree(t, e, budget) {
   return window.oxj.query(t.id, { op: 'subtree', node: e.id, budget: budget || 100000 });
 }
 
-async function getNodeObj(t, e) {
+async function getNodeObj(t, e, budget) {
   if (isScalarKind(e.kind)) {
     const v = await getScalarValue(t, e);
     if (e.kind === K.NUM) { const n = Number(v); return Number.isFinite(n) ? n : v; }
@@ -2085,7 +2181,7 @@ async function getNodeObj(t, e) {
     if (e.kind === K.NULL) return null;
     return v;
   }
-  const r = await getSubtree(t, e);
+  const r = await getSubtree(t, e, budget);
   if (r.language === 'json') return JSON.parse(r.text);
   return xmlTextToObj(r.text);
 }
@@ -2228,8 +2324,8 @@ function xmlTextToObj(text) {
   return { [doc.documentElement.tagName]: walk(doc.documentElement) };
 }
 
-async function convertNode(t, e, fmt) {
-  const obj = await getNodeObj(t, e);
+async function convertNode(t, e, fmt, budget) {
+  const obj = await getNodeObj(t, e, budget);
   if (fmt === 'json') return JSON.stringify(obj, null, 2);
   if (fmt === 'rawjson') return JSON.stringify(obj);
   if (fmt === 'yaml') return toYaml(obj);
