@@ -1828,6 +1828,15 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'export-matches':
       exportMatches(cur, arg);
       break;
+    case 'gen-schema':
+      generateSchema();
+      break;
+    case 'validate-schema':
+      validateAgainstSchema();
+      break;
+    case 'compare-tabs':
+      compareTabsFlow();
+      break;
   }
 });
 
@@ -2013,7 +2022,7 @@ const EXPORT_BUDGET = 5000000; // node budget for whole-document reconstruction
 
 function exportDocName(t, ext) {
   const b = String(baseName(t.file || 'document')).replace(/\.[^.]+$/, '') || 'document';
-  return b + '.' + ext;
+  return stampName(b, ext);
 }
 
 // Whole document, converted to the requested format.
@@ -2076,7 +2085,7 @@ async function exportMatches(t, fmt) {
     ext = 'csv';
   }
   const stem = 'matches_' + String(matchNav.q || 'search').replace(/[^\w]+/g, '_').slice(0, 30);
-  const saved = await window.oxj.saveText(stem + '.' + ext, text);
+  const saved = await window.oxj.saveText(stampName(stem, ext), text);
   if (saved) {
     toast('Saved ' + baseName(saved) + (matchNav.hasMore ? ' (loaded matches only)' : ''), true);
   }
@@ -2087,7 +2096,8 @@ function syncMenuState() {
   try {
     const hasDoc = !!(cur && cur.phase === 'ready' && !cur.plain);
     const hasMatches = !!(matchNav && cur && matchNav.tabId === cur.id && matchNav.ids.length);
-    window.oxj.setMenuState({ hasDoc, hasMatches });
+    const hasTwoDocs = tabs.filter((x) => x.phase === 'ready' && !x.plain).length >= 2;
+    window.oxj.setMenuState({ hasDoc, hasMatches, hasTwoDocs });
   } catch { /* ignore */ }
 }
 
@@ -2334,12 +2344,20 @@ async function convertNode(t, e, fmt, budget) {
   throw new Error('unknown format');
 }
 
-function defaultExportName(e, ext) {
-  const base = String(e.label || 'value').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'value';
+// Compact local timestamp (YYYYMMDD_HHMMSS) suffixed to all export filenames.
+function timeStamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
-  return base + '_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
-    '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.' + ext;
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+    '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+function stampName(base, ext) {
+  const b = String(base).replace(/[^\w.-]+/g, '_').slice(0, 60).replace(/^_+|_+$/g, '') || 'file';
+  return b + '_' + timeStamp() + '.' + ext;
+}
+
+function defaultExportName(e, ext) {
+  return stampName(e.label || 'value', ext);
 }
 
 async function copyNodeAs(t, e, fmt) {
@@ -2564,20 +2582,561 @@ async function openTextAsTab(name, ext, text) {
   if (nt) openPath(file, nt);
 }
 
+// ============================================================
+// Compare two open documents — structural diff + styled report
+// ============================================================
+function htmlEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function compareTabsFlow() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const others = tabs.filter((x) => x !== t && x.phase === 'ready' && !x.plain);
+  if (!others.length) { toast('Open another document in a second tab to compare'); return; }
+  const { box, back } = simpleModal('Compare "' + t.title + '" with…');
+  const counts = {};
+  others.forEach((o) => { counts[o.title] = (counts[o.title] || 0) + 1; });
+
+  // A filter box appears when there are many tabs, so a long list stays usable.
+  let filter = null;
+  if (others.length > 6) {
+    filter = document.createElement('input');
+    filter.type = 'search';
+    filter.className = 'picker-filter';
+    filter.placeholder = 'Filter tabs…';
+    filter.spellcheck = false;
+    box.appendChild(filter);
+  }
+
+  // The list itself scrolls once it exceeds its max height.
+  const list = document.createElement('div');
+  list.className = 'picker-list';
+  const rowEls = [];
+  for (const o of others) {
+    const row = document.createElement('div');
+    row.className = 'recent-item';
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    name.textContent = o.title;
+    // Disambiguate duplicate tab names by showing the path.
+    if (counts[o.title] > 1 && o.file) {
+      const sub = document.createElement('span');
+      sub.className = 'recent-path';
+      sub.textContent = o.file;
+      name.appendChild(sub);
+    }
+    name.title = o.file || '';
+    row.appendChild(name);
+    row.addEventListener('click', async () => { back.remove(); await runCompare(t, o); });
+    row._hay = (o.title + ' ' + (o.file || '')).toLowerCase();
+    rowEls.push(row);
+    list.appendChild(row);
+  }
+  box.appendChild(list);
+
+  if (filter) {
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const r of rowEls) r.style.display = (!q || r._hay.includes(q)) ? '' : 'none';
+    });
+    // Enter selects the only visible match, for quick keyboard use.
+    filter.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      const shown = rowEls.filter((r) => r.style.display !== 'none');
+      if (shown.length === 1) shown[0].click();
+    });
+    setTimeout(() => filter.focus(), 20);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const close = document.createElement('button');
+  close.className = 'btn-secondary';
+  close.textContent = 'Cancel';
+  close.addEventListener('click', () => back.remove());
+  actions.appendChild(close);
+  box.appendChild(actions);
+}
+
+async function runCompare(a, b) {
+  try {
+    toast('Comparing…', true);
+    let res;
+    try {
+      res = await window.oxj.diffTabs(a.id, b.id); // Rust core (database mode)
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      // Memory mode: reconstruct both documents and diff in the renderer.
+      const [av, bv] = await Promise.all([reconstructDoc(a), reconstructDoc(b)]);
+      res = jsDiff(av, bv);
+    }
+    const model = buildDiffModel(a, b, res);
+    if (!model.summary.total) { toast('Documents are structurally identical ✓', true); return; }
+    showDiffReport(model);
+  } catch (err) {
+    const msg = cleanErr(err);
+    if (msg.includes('doc-too-large-for-memory-tool')) toast('A document is too large to compare in memory mode; reopen via Engine Mode → Always Database');
+    else toast('Compare failed: ' + msg);
+  }
+}
+
+// Structural diff in JS (memory-mode fallback), mirroring the Rust core:
+// arrays position-based (element i vs i; tail added/removed), objects key-based,
+// a JSON-type change counts as Changed. Paths use the $.a[0].b grammar.
+function jsDiff(a, b, limit) {
+  limit = limit || 5000;
+  const entries = [];
+  let added = 0, removed = 0, changed = 0, truncated = false;
+  const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+  const show = (v) => (v === undefined ? '' : (v !== null && typeof v === 'object') ? JSON.stringify(v).slice(0, 400) : String(v));
+  const key = (k) => (/^[A-Za-z_$][\w$]*$/.test(k) ? '.' + k : '[' + JSON.stringify(k) + ']');
+  const push = (op, path, av, bv) => {
+    if (entries.length >= limit) { truncated = true; return; }
+    entries.push({ op, path, a: show(av), b: show(bv) });
+  };
+  const walk = (x, y, path) => {
+    if (truncated) return;
+    const tx = typeOf(x), ty = typeOf(y);
+    if (tx !== ty) { changed++; push('changed', path, x, y); return; }
+    if (tx === 'object') {
+      for (const k of Object.keys(x)) {
+        const cp = path + key(k);
+        if (Object.prototype.hasOwnProperty.call(y, k)) walk(x[k], y[k], cp);
+        else { removed++; push('removed', cp, x[k], undefined); }
+      }
+      for (const k of Object.keys(y)) {
+        if (!Object.prototype.hasOwnProperty.call(x, k)) { added++; push('added', path + key(k), undefined, y[k]); }
+      }
+    } else if (tx === 'array') {
+      const n = Math.min(x.length, y.length);
+      for (let i = 0; i < n; i++) walk(x[i], y[i], path + '[' + i + ']');
+      for (let i = n; i < x.length; i++) { removed++; push('removed', path + '[' + i + ']', x[i], undefined); }
+      for (let i = n; i < y.length; i++) { added++; push('added', path + '[' + i + ']', undefined, y[i]); }
+    } else if (x !== y) {
+      changed++; push('changed', path, x, y);
+    }
+  };
+  walk(a, b, '$');
+  return { added, removed, changed, truncated, entries };
+}
+
+function buildDiffModel(a, b, res) {
+  const rows = (res.entries || []).map((e) => ({
+    kind: e.op === 'added' ? 'Added' : e.op === 'removed' ? 'Removed' : 'Changed',
+    path: e.path,
+    left: e.a == null ? '' : String(e.a),
+    right: e.b == null ? '' : String(e.b),
+  }));
+  const added = Number(res.added) || 0;
+  const removed = Number(res.removed) || 0;
+  const changed = Number(res.changed) || 0;
+  return {
+    aName: baseName(a.file || a.title),
+    bName: baseName(b.file || b.title),
+    aPath: a.file || a.title,
+    bPath: b.file || b.title,
+    ts: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    summary: { added, removed, changed, total: added + removed + changed, truncated: !!res.truncated },
+    rows,
+  };
+}
+
+const DIFF_KIND_CLS = { Added: 'r-add', Removed: 'r-rem', Changed: 'r-chg' };
+
+function showDiffReport(model) {
+  const overlay = document.createElement('div');
+  overlay.className = 'diff-overlay';
+  const page = document.createElement('div');
+  page.className = 'diff-report';
+  overlay.appendChild(page);
+
+  const head = document.createElement('div');
+  head.className = 'diff-head';
+  head.innerHTML =
+    '<button class="diff-x" title="Close">✕</button>' +
+    '<div class="diff-title">Structural Document Comparison</div>' +
+    '<div class="diff-files"><span title="' + htmlEsc(model.aPath) + '">A: ' + htmlEsc(model.aName) + '</span>' +
+    '<span title="' + htmlEsc(model.bPath) + '">B: ' + htmlEsc(model.bName) + '</span></div>' +
+    '<div class="diff-ts">Generated ' + htmlEsc(model.ts) +
+    (model.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>';
+  head.querySelector('.diff-x').addEventListener('click', () => overlay.remove());
+  page.appendChild(head);
+
+  const bar = document.createElement('div');
+  bar.className = 'diff-bar';
+  const saveWrap = document.createElement('div');
+  saveWrap.className = 'diff-saveas';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-tool';
+  saveBtn.textContent = 'Save As ▾';
+  const saveMenu = document.createElement('div');
+  saveMenu.className = 'diff-saveas-menu hidden';
+  [['HTML', 'html'], ['Text', 'txt'], ['JSON', 'json'], ['CSV', 'csv']].forEach(([label, fmt]) => {
+    const it = document.createElement('button');
+    it.className = 'diff-saveas-item';
+    it.textContent = label;
+    it.addEventListener('click', async () => { saveMenu.classList.add('hidden'); await saveDiff(model, fmt); });
+    saveMenu.appendChild(it);
+  });
+  saveBtn.addEventListener('click', (e) => { e.stopPropagation(); saveMenu.classList.toggle('hidden'); });
+  saveWrap.append(saveBtn, saveMenu);
+  const openBtn = document.createElement('button');
+  openBtn.className = 'btn-tool';
+  openBtn.textContent = 'Open in Browser';
+  openBtn.addEventListener('click', async () => {
+    try { await window.oxj.openHtmlInBrowser(diffToHtml(model)); }
+    catch (err) { toast(cleanErr(err)); }
+  });
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn-tool';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  bar.append(saveWrap, openBtn, closeBtn);
+  page.appendChild(bar);
+
+  const cards = document.createElement('div');
+  cards.className = 'diff-cards';
+  const card = (label, val, cls) =>
+    '<div class="diff-card ' + (cls || '') + '"><div class="diff-card-n">' + fmtInt(val) +
+    '</div><div class="diff-card-l">' + label + '</div></div>';
+  cards.innerHTML = card('Total', model.summary.total) + card('Added', model.summary.added, 'c-add') +
+    card('Removed', model.summary.removed, 'c-rem') + card('Changed', model.summary.changed, 'c-chg');
+  page.appendChild(cards);
+
+  // "By type" breakdown: a proportional bar.
+  const tot = model.summary.total || 1;
+  const bd = document.createElement('div');
+  bd.className = 'diff-breakdown';
+  bd.innerHTML =
+    '<div class="seg s-add" style="width:' + (100 * model.summary.added / tot) + '%"></div>' +
+    '<div class="seg s-rem" style="width:' + (100 * model.summary.removed / tot) + '%"></div>' +
+    '<div class="seg s-chg" style="width:' + (100 * model.summary.changed / tot) + '%"></div>';
+  page.appendChild(bd);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'diff-tablewrap';
+  page.appendChild(tableWrap);
+  renderDiffTable(tableWrap, model.rows);
+
+  overlay.addEventListener('click', (e) => {
+    saveMenu.classList.add('hidden');
+    if (e.target === overlay) overlay.remove();
+  });
+  const onEsc = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(overlay);
+}
+
+// Header + rows. Small diffs render fully (cells wrap); large diffs virtualize
+// with a fixed row height (cells clip, full value on hover).
+function renderDiffTable(wrap, rows) {
+  const header =
+    '<div class="diff-tr diff-th"><div class="diff-td c-kind">Change</div>' +
+    '<div class="diff-td c-path">Path</div><div class="diff-td c-val">Left (A)</div>' +
+    '<div class="diff-td c-val">Right (B)</div></div>';
+  if (rows.length <= 600) {
+    let html = '<div class="diff-table">' + header;
+    for (const r of rows) {
+      html += '<div class="diff-tr ' + DIFF_KIND_CLS[r.kind] + '"><div class="diff-td c-kind">' + r.kind +
+        '</div><div class="diff-td c-path">' + htmlEsc(r.path) + '</div><div class="diff-td c-val">' +
+        htmlEsc(r.left) + '</div><div class="diff-td c-val">' + htmlEsc(r.right) + '</div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    return;
+  }
+  const ROW = 30;
+  wrap.innerHTML = '<div class="diff-table virt">' + header +
+    '<div class="diff-vport"><div class="diff-spacer"></div><div class="diff-rows"></div></div></div>';
+  const vport = wrap.querySelector('.diff-vport');
+  wrap.querySelector('.diff-spacer').style.height = (rows.length * ROW) + 'px';
+  const rowsEl = wrap.querySelector('.diff-rows');
+  const draw = () => {
+    const top = vport.scrollTop;
+    const h = vport.clientHeight || 420;
+    const start = Math.max(0, Math.floor(top / ROW) - 6);
+    const end = Math.min(rows.length, Math.ceil((top + h) / ROW) + 6);
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const r = rows[i];
+      html += '<div class="diff-tr virt-row ' + DIFF_KIND_CLS[r.kind] + '" style="top:' + (i * ROW) +
+        'px;height:' + ROW + 'px"><div class="diff-td c-kind">' + r.kind +
+        '</div><div class="diff-td c-path" title="' + htmlEsc(r.path) + '">' + htmlEsc(r.path) +
+        '</div><div class="diff-td c-val" title="' + htmlEsc(r.left) + '">' + htmlEsc(r.left) +
+        '</div><div class="diff-td c-val" title="' + htmlEsc(r.right) + '">' + htmlEsc(r.right) + '</div></div>';
+    }
+    rowsEl.innerHTML = html;
+  };
+  vport.addEventListener('scroll', draw);
+  setTimeout(draw, 0);
+}
+
+async function saveDiff(model, fmt) {
+  const map = { html: diffToHtml, txt: diffToTxt, json: diffToJson, csv: diffToCsv };
+  try {
+    const text = map[fmt](model);
+    const saved = await window.oxj.saveText(stampName('diff_report', fmt), text);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  } catch (err) { toast('Export failed: ' + cleanErr(err)); }
+}
+
+// ---- Pure diff serializers (self-contained, HTML-escaped) ----
+function diffToTxt(m) {
+  const L = ['NARIKJSON — Structural Document Comparison', 'A: ' + m.aName, 'B: ' + m.bName, 'Generated: ' + m.ts, '',
+    'Total: ' + m.summary.total + '  Added: ' + m.summary.added + '  Removed: ' + m.summary.removed +
+    '  Changed: ' + m.summary.changed + (m.summary.truncated ? '  (truncated)' : ''), ''];
+  for (const r of m.rows) {
+    if (r.kind === 'Changed') L.push('[changed] ' + r.path + ': ' + r.left + ' -> ' + r.right);
+    else if (r.kind === 'Added') L.push('[added]   ' + r.path + ' = ' + r.right);
+    else L.push('[removed] ' + r.path + ' (was ' + r.left + ')');
+  }
+  return L.join('\n');
+}
+
+function diffToJson(m) {
+  return JSON.stringify({
+    a: m.aName, b: m.bName, generated: m.ts, summary: m.summary,
+    changes: m.rows.map((r) => ({ kind: r.kind, path: r.path, left: r.left, right: r.right })),
+  }, null, 2);
+}
+
+function diffToCsv(m) {
+  const cell = (v) => csvCell(v == null ? '' : String(v), ',');
+  const lines = ['kind,path,left,right'];
+  for (const r of m.rows) lines.push([cell(r.kind), cell(r.path), cell(r.left), cell(r.right)].join(','));
+  return lines.join('\n');
+}
+
+function diffToHtml(m) {
+  const e = htmlEsc;
+  const cls = { Added: 'add', Removed: 'rem', Changed: 'chg' };
+  const rows = m.rows.map((r) =>
+    '<tr class="' + cls[r.kind] + '"><td>' + r.kind + '</td><td class="p">' + e(r.path) +
+    '</td><td>' + e(r.left) + '</td><td>' + e(r.right) + '</td></tr>').join('');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>NARIKJSON — Structural Document Comparison</title><style>' +
+    'body{font:14px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0;padding:24px}' +
+    'h1{font-size:18px;margin:0 0 4px}.files{color:#555;font-size:13px}.files span{margin-right:18px}' +
+    '.ts{color:#888;font-size:12px;margin:2px 0 16px}' +
+    '.cards{display:flex;gap:12px;margin-bottom:18px}.card{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px}' +
+    '.card .n{font-size:22px;font-weight:600}.card .l{color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.04em}' +
+    '.card.add{background:#f0fdf4}.card.rem{background:#fff1f2}.card.chg{background:#eff6ff}' +
+    'table{width:100%;border-collapse:collapse;font-size:13px}' +
+    'th{position:sticky;top:0;background:#f8fafc;text-align:left;padding:8px;border-bottom:2px solid #e5e7eb}' +
+    'td{padding:6px 8px;border-bottom:1px solid #f0f0f0;vertical-align:top;word-break:break-word}' +
+    'td.p{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}' +
+    'tr.add{background:#f0fdf4}tr.rem{background:#fff1f2}tr.chg{background:#eff6ff}' +
+    '</style></head><body>' +
+    '<h1>Structural Document Comparison</h1>' +
+    '<div class="files"><span>A: ' + e(m.aName) + '</span><span>B: ' + e(m.bName) + '</span></div>' +
+    '<div class="ts">Generated ' + e(m.ts) + (m.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>' +
+    '<div class="cards"><div class="card"><div class="n">' + m.summary.total + '</div><div class="l">Total</div></div>' +
+    '<div class="card add"><div class="n">' + m.summary.added + '</div><div class="l">Added</div></div>' +
+    '<div class="card rem"><div class="n">' + m.summary.removed + '</div><div class="l">Removed</div></div>' +
+    '<div class="card chg"><div class="n">' + m.summary.changed + '</div><div class="l">Changed</div></div></div>' +
+    '<table><thead><tr><th>Change</th><th>Path</th><th>Left (A)</th><th>Right (B)</th></tr></thead><tbody>' +
+    rows + '</tbody></table></body></html>';
+}
+
+// The in-memory engine doesn't implement schema/validate, so it returns this.
+function isMemoryModeErr(m) { return String(m || '').includes('database mode'); }
+
+// Reconstruct the whole document into a JS value (used by the validate
+// fallback). The in-memory subtree op clamps its budget and returns a
+// truncated preview past that, so detect truncation and fail cleanly rather
+// than trying to JSON.parse an ellipsis marker.
+async function reconstructDoc(t) {
+  const root = t.visible[0];
+  if (isScalarKind(root.kind)) return getNodeObj(t, root);
+  const r = await getSubtree(t, root, 300000);
+  if (r.truncated) throw new Error('doc-too-large-for-memory-tool');
+  return r.language === 'json' ? JSON.parse(r.text) : xmlTextToObj(r.text);
+}
+
 async function generateSchema() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  if (t.docFormat === 'xml') { toast('JSON Schema generation supports JSON, NDJSON and CSV documents'); return; }
   try {
     toast('Generating schema…', true);
-    const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
-    const text = JSON.stringify(res.schema, null, 2);
+    let schema, sampled = false;
+    try {
+      const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
+      schema = res.schema;
+      sampled = res.sampled;
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      // Memory mode: infer the schema by walking the tree structurally, so we
+      // never reconstruct (and truncate) the whole document as one JSON string.
+      const root = t.visible[0];
+      const budget = { n: 200000 };
+      const inferred = await inferSchemaFromTree(t, { id: root.id, kind: root.kind, n: root.n, value: root.value }, budget);
+      schema = { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferred };
+      sampled = budget.n <= 0;
+    }
+    const text = JSON.stringify(schema, null, 2);
     await openTextAsTab(baseName(t.file).replace(/\.[^.]+$/, '') + '_schema', 'json', text);
-    if (res.sampled) toast('Schema inferred from a sample of a very large document', true);
+    if (sampled) toast('Schema inferred from a sample of a very large document', true);
   } catch (err) {
     const msg = cleanErr(err);
     if (msg.includes('unknown op')) toast('This tool needs an engine rebuild: npm run build:engine, then restart');
+    else if (isMemoryModeErr(msg)) toast('Document too large to build a schema in memory mode; reopen via Engine Mode → Always Database');
     else toast('Schema generation failed: ' + msg);
   }
+}
+
+// Infer a draft-07 schema by walking the node tree (no full reconstruction, so
+// no truncation). Arrays are sampled; `budget.n` caps total nodes visited and,
+// when exhausted, marks the result as sampled.
+async function inferSchemaFromTree(t, node, budget) {
+  const k = node.kind;
+  if (k === K.STR || k === K.ATTR || k === K.TEXT) return { type: 'string' };
+  if (k === K.BOOL) return { type: 'boolean' };
+  if (k === K.NULL) return { type: 'null' };
+  if (k === K.NUM) {
+    const s = String(node.value == null ? '' : node.value);
+    return { type: /^[+-]?\d+$/.test(s) ? 'integer' : 'number' };
+  }
+  if (k === K.ARR) {
+    if (!node.n || budget.n <= 0) return { type: 'array' };
+    const SAMPLE = 500;
+    const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: 0, limit: Math.min(SAMPLE, Number(node.n)) });
+    const subs = [];
+    for (const c of (res.items || [])) {
+      if (budget.n <= 0) break;
+      budget.n -= 1;
+      subs.push(await inferSchemaFromTree(t, c, budget));
+    }
+    return subs.length ? { type: 'array', items: mergeSchemas(subs) } : { type: 'array' };
+  }
+  if (k === K.OBJ || k === K.ELEM) {
+    const properties = {};
+    const required = [];
+    let off = 0;
+    const PAGE = 500;
+    for (;;) {
+      if (budget.n <= 0) break;
+      const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: off, limit: PAGE });
+      const items = res.items || [];
+      for (const c of items) {
+        if (budget.n <= 0) break;
+        budget.n -= 1;
+        if (c.name == null) continue;
+        properties[c.name] = await inferSchemaFromTree(t, c, budget);
+        required.push(c.name);
+      }
+      if (items.length < PAGE) break;
+      off += PAGE;
+    }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  return {};
+}
+
+// ---- JSON Schema inference (draft-07), renderer fallback for memory mode ----
+function inferJsonSchema(v) {
+  if (v === null) return { type: 'null' };
+  if (Array.isArray(v)) {
+    if (!v.length) return { type: 'array' };
+    return { type: 'array', items: mergeSchemas(v.map(inferJsonSchema)) };
+  }
+  const t = typeof v;
+  if (t === 'string') return { type: 'string' };
+  if (t === 'number') return { type: Number.isInteger(v) ? 'integer' : 'number' };
+  if (t === 'boolean') return { type: 'boolean' };
+  if (t === 'object') {
+    const properties = {};
+    const required = [];
+    for (const k of Object.keys(v)) { properties[k] = inferJsonSchema(v[k]); required.push(k); }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  return {};
+}
+
+function mergeSchemas(list) {
+  if (list.length === 1) return list[0];
+  const types = new Set(list.map((s) => s.type));
+  if (types.size === 1 && list[0].type === 'object') {
+    const keys = new Set();
+    list.forEach((s) => Object.keys(s.properties || {}).forEach((k) => keys.add(k)));
+    const properties = {};
+    const required = [];
+    for (const k of keys) {
+      const subs = list.filter((s) => s.properties && s.properties[k]).map((s) => s.properties[k]);
+      properties[k] = mergeSchemas(subs);
+      if (list.every((s) => s.properties && s.properties[k])) required.push(k);
+    }
+    const s = { type: 'object', properties };
+    if (required.length) s.required = required;
+    return s;
+  }
+  if (types.size === 1 && list[0].type === 'array') {
+    const items = list.map((s) => s.items).filter(Boolean);
+    return items.length ? { type: 'array', items: mergeSchemas(items) } : { type: 'array' };
+  }
+  if (types.size === 1) return { type: list[0].type };
+  // integer is a refinement of number
+  if (types.size === 2 && types.has('integer') && types.has('number')) return { type: 'number' };
+  return { type: Array.from(types) };
+}
+
+// ---- Minimal draft-07 validator, renderer fallback for memory mode ----
+function jsValidate(value, schema) {
+  const errors = [];
+  const MAX = 1000;
+  const typeOf = (v) => {
+    if (v === null) return 'null';
+    if (Array.isArray(v)) return 'array';
+    const t = typeof v;
+    if (t === 'number') return Number.isInteger(v) ? 'integer' : 'number';
+    return t;
+  };
+  const check = (v, sch, path) => {
+    if (errors.length >= MAX || !sch || typeof sch !== 'object') return;
+    if (sch.type) {
+      const types = Array.isArray(sch.type) ? sch.type : [sch.type];
+      const vt = typeOf(v);
+      const ok = types.some((tt) => tt === vt || (tt === 'number' && vt === 'integer'));
+      if (!ok) { errors.push({ path, message: 'expected type ' + types.join('|') + ', got ' + vt }); return; }
+    }
+    if (sch.enum && !sch.enum.some((e) => JSON.stringify(e) === JSON.stringify(v))) {
+      errors.push({ path, message: 'value not in enum' });
+    }
+    if (typeof v === 'number') {
+      if (sch.minimum != null && v < sch.minimum) errors.push({ path, message: 'below minimum ' + sch.minimum });
+      if (sch.maximum != null && v > sch.maximum) errors.push({ path, message: 'above maximum ' + sch.maximum });
+      if (sch.exclusiveMinimum != null && v <= sch.exclusiveMinimum) errors.push({ path, message: 'not above exclusiveMinimum ' + sch.exclusiveMinimum });
+      if (sch.exclusiveMaximum != null && v >= sch.exclusiveMaximum) errors.push({ path, message: 'not below exclusiveMaximum ' + sch.exclusiveMaximum });
+      if (sch.multipleOf && v % sch.multipleOf !== 0) errors.push({ path, message: 'not a multiple of ' + sch.multipleOf });
+    }
+    if (typeof v === 'string') {
+      if (sch.minLength != null && v.length < sch.minLength) errors.push({ path, message: 'shorter than minLength ' + sch.minLength });
+      if (sch.maxLength != null && v.length > sch.maxLength) errors.push({ path, message: 'longer than maxLength ' + sch.maxLength });
+      if (sch.pattern) { try { if (!new RegExp(sch.pattern).test(v)) errors.push({ path, message: 'does not match pattern' }); } catch { /* bad regex */ } }
+    }
+    if (Array.isArray(v)) {
+      if (sch.minItems != null && v.length < sch.minItems) errors.push({ path, message: 'fewer than minItems ' + sch.minItems });
+      if (sch.maxItems != null && v.length > sch.maxItems) errors.push({ path, message: 'more than maxItems ' + sch.maxItems });
+      if (sch.items) {
+        if (Array.isArray(sch.items)) sch.items.forEach((it, i) => { if (v[i] !== undefined) check(v[i], it, path + '[' + i + ']'); });
+        else v.forEach((el, i) => check(el, sch.items, path + '[' + i + ']'));
+      }
+    }
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if (Array.isArray(sch.required)) for (const r of sch.required) if (!(r in v)) errors.push({ path: path + '.' + r, message: 'missing required property' });
+      if (sch.properties) for (const k of Object.keys(sch.properties)) if (k in v) check(v[k], sch.properties[k], path + '.' + k);
+      if (sch.additionalProperties === false && sch.properties) {
+        for (const k of Object.keys(v)) if (!(k in sch.properties)) errors.push({ path: path + '.' + k, message: 'additional property not allowed' });
+      }
+    }
+  };
+  check(value, schema, '$');
+  return { count: errors.length, truncated: errors.length >= MAX, errors };
 }
 
 async function validateAgainstSchema() {
@@ -2594,53 +3153,64 @@ async function validateAgainstSchema() {
   }
   try {
     toast('Validating…', true);
-    const res = await window.oxj.query(t.id, { op: 'validate', schema, node: t.rootId });
+    let res;
+    try {
+      res = await window.oxj.query(t.id, { op: 'validate', schema, node: t.rootId });
+    } catch (err) {
+      if (!isMemoryModeErr(cleanErr(err))) throw err;
+      res = jsValidate(await reconstructDoc(t), schema); // memory-mode fallback
+    }
     if (!res.count) {
       toast('Valid — no schema violations found ✓', true);
       return;
     }
-    const { box, back } = simpleModal(
-      'Validation — ' + fmtInt(res.count) + (res.truncated ? '+' : '') + ' error(s)'
-    );
-    const list = document.createElement('div');
-    list.style.cssText = 'max-height:50vh;overflow-y:auto;';
-    for (const e of res.errors.slice(0, 300)) {
-      const row = document.createElement('div');
-      row.className = 'stat-kv';
-      const k = document.createElement('span');
-      k.className = 'k';
-      k.textContent = e.path;
-      k.style.cssText = 'overflow:hidden;text-overflow:ellipsis;max-width:45%;';
-      const v = document.createElement('span');
-      v.textContent = e.message;
-      row.append(k, v);
-      list.appendChild(row);
-    }
-    box.appendChild(list);
-    const actions = document.createElement('div');
-    actions.className = 'modal-actions';
-    const save = document.createElement('button');
-    save.className = 'btn-secondary';
-    save.textContent = 'Save Report';
-    save.addEventListener('click', async () => {
-      const report =
-        'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
-        '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
-        res.errors.map((e) => e.path + '\t' + e.message).join('\n');
-      const saved = await window.oxj.saveText('validation_report.txt', report);
-      if (saved) toast('Saved ' + baseName(saved), true);
-    });
-    const close = document.createElement('button');
-    close.className = 'btn-secondary';
-    close.textContent = 'Close';
-    close.addEventListener('click', () => back.remove());
-    actions.append(save, close);
-    box.appendChild(actions);
+    showValidationReport(t, p, res);
   } catch (err) {
     const msg = cleanErr(err);
     if (msg.includes('unknown op')) toast('This tool needs an engine rebuild: npm run build:engine, then restart');
+    else if (isMemoryModeErr(msg) || msg.includes('doc-too-large-for-memory-tool')) toast('This document is too large to validate in memory mode; reopen via Engine Mode → Always Database');
     else toast('Validation failed: ' + msg);
   }
+}
+
+function showValidationReport(t, p, res) {
+  const { box, back } = simpleModal(
+    'Validation — ' + fmtInt(res.count) + (res.truncated ? '+' : '') + ' error(s)'
+  );
+  const list = document.createElement('div');
+  list.style.cssText = 'max-height:50vh;overflow-y:auto;';
+  for (const e of res.errors.slice(0, 300)) {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = e.path;
+    k.style.cssText = 'overflow:hidden;text-overflow:ellipsis;max-width:45%;';
+    const v = document.createElement('span');
+    v.textContent = e.message;
+    row.append(k, v);
+    list.appendChild(row);
+  }
+  box.appendChild(list);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const save = document.createElement('button');
+  save.className = 'btn-secondary';
+  save.textContent = 'Save Report';
+  save.addEventListener('click', async () => {
+    const report =
+      'NARIKJSON schema validation report\nDocument: ' + t.file + '\nSchema: ' + p +
+      '\nErrors: ' + res.count + (res.truncated ? '+ (truncated)' : '') + '\n\n' +
+      res.errors.map((e) => e.path + '\t' + e.message).join('\n');
+    const saved = await window.oxj.saveText(stampName('validation_report', 'txt'), report);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  });
+  const close = document.createElement('button');
+  close.className = 'btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => back.remove());
+  actions.append(save, close);
+  box.appendChild(actions);
 }
 
 async function compareWithTab() {
