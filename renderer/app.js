@@ -1818,6 +1818,37 @@ window.oxj.onMenu(async ({ action, arg }) => {
   }
 });
 
+// Clipboard shortcuts for plain text fields. The visible Edit menu was removed,
+// and macOS doesn't reliably register accelerators for hidden menu items, so
+// paste/cut/select-all are handled here. (Copy is handled by the Search menu's
+// "Copy Row", which does a native copy when a field/editor is focused. Monaco
+// manages its own clipboard, so we leave it alone.)
+function insertAtCursor(el, text) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
+  el.value = el.value.slice(0, start) + text + el.value.slice(end);
+  const pos = start + text.length;
+  el.setSelectionRange(pos, pos);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+document.addEventListener('keydown', async (ev) => {
+  if (!(ev.metaKey || ev.ctrlKey) || ev.altKey) return;
+  const el = document.activeElement;
+  if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return;
+  if (el.closest && el.closest('.monaco-editor')) return; // Monaco handles itself
+  const key = ev.key.toLowerCase();
+  if (key === 'v') {
+    ev.preventDefault();
+    try { insertAtCursor(el, await window.oxj.readClipboard()); } catch {}
+  } else if (key === 'x') {
+    const sel = el.value.substring(el.selectionStart, el.selectionEnd);
+    if (sel) { ev.preventDefault(); window.oxj.writeClipboard(sel); insertAtCursor(el, ''); }
+  } else if (key === 'a') {
+    ev.preventDefault();
+    el.select();
+  }
+});
+
 // ---------- Search-menu helpers: jump-to-path, copy row, copy as cURL ----------
 
 // Small modal prompt (Electron disables window.prompt). Resolves to the trimmed
