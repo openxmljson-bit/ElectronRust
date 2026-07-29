@@ -35,7 +35,7 @@ const MAX_RECENTS = 15;
 
 // Renderer-driven enable/disable state for the Export menu. Persisted here so
 // rebuilds of the menu (buildMenu runs on many events) keep the right state.
-let menuState = { hasDoc: false, hasMatches: false };
+let menuState = { hasDoc: false, hasMatches: false, hasTwoDocs: false };
 
 const sessions = new Map(); // tabId -> { proc, pending: Map, file, dbPath, wc }
 const ingests = new Map();  // tabId -> { proc, dbPath, wc, file }
@@ -883,6 +883,8 @@ function buildMenu() {
       submenu: [
         { id: 'tool-gen-schema', label: 'Generate JSON Schema', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'gen-schema') },
         { id: 'tool-validate-schema', label: 'Validate Against JSON Schema…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'validate-schema') },
+        { type: 'separator' },
+        { id: 'tool-compare', label: 'Compare With Open Tab…', enabled: menuState.hasTwoDocs, click: (mi, bw) => sendMenu(bw, 'compare-tabs') },
       ],
     },
     {
@@ -1240,13 +1242,24 @@ app.whenReady().then(() => {
   // Renderer reports whether a doc is open / a search has matches, so the
   // Export menu items enable/disable accordingly.
   ipcMain.on('menu-state', (_e, s) => {
-    menuState = { hasDoc: !!(s && s.hasDoc), hasMatches: !!(s && s.hasMatches) };
+    menuState = { hasDoc: !!(s && s.hasDoc), hasMatches: !!(s && s.hasMatches), hasTwoDocs: !!(s && s.hasTwoDocs) };
     const menu = Menu.getApplicationMenu();
     if (!menu) return;
     const set = (id, on) => { const mi = menu.getMenuItemById(id); if (mi) mi.enabled = on; };
     for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text', 'tool-gen-schema', 'tool-validate-schema']) set(id, menuState.hasDoc);
     set('exp-match-json', menuState.hasMatches);
     set('exp-match-csv', menuState.hasMatches);
+    set('tool-compare', menuState.hasTwoDocs);
+  });
+
+  // Write an HTML report to a temp file and open it in the default browser.
+  ipcMain.handle('open-html', async (_e, html) => {
+    try {
+      const file = path.join(os.tmpdir(), 'narikjson_diff_' + Date.now() + '.html');
+      fs.writeFileSync(file, String(html == null ? '' : html));
+      await shell.openPath(file);
+      return ok(file);
+    } catch (err) { return fail(err); }
   });
 
   ipcMain.handle('get-theme', async () => effectiveTheme());

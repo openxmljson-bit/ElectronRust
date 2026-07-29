@@ -705,3 +705,84 @@ body.resizing .monaco-host, body.resizing .tree-scroll { pointer-events: none; }
   font-size: 24px; font-weight: 700; color: var(--accent);
   pointer-events: none;
 }
+
+/* ---------- Structural diff report (light, on a white page) ---------- */
+.diff-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, .5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.diff-report {
+  background: #fff; color: #1a1a1a;
+  width: min(1100px, 96vw); height: min(88vh, 900px);
+  border-radius: 14px; overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .5);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.diff-head { padding: 18px 22px 10px; }
+.diff-title { font-size: 18px; font-weight: 700; }
+.diff-files { color: #555; font-size: 12.5px; margin-top: 3px; }
+.diff-files span { margin-right: 18px; word-break: break-all; }
+.diff-ts { color: #8a8f98; font-size: 11.5px; margin-top: 2px; }
+.diff-bar { display: flex; gap: 8px; padding: 6px 22px 12px; position: relative; }
+.diff-bar .btn-tool { background: #f1f3f5; color: #1a1a1a; border: 1px solid #e2e6ea; }
+.diff-bar .btn-tool:hover { background: #e9edf1; }
+.diff-saveas { position: relative; }
+.diff-saveas-menu {
+  position: absolute; top: 110%; left: 0; z-index: 5;
+  background: #fff; border: 1px solid #e2e6ea; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18); overflow: hidden; min-width: 130px;
+}
+.diff-saveas-menu.hidden { display: none; }
+.diff-saveas-item {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 14px; background: none; border: none; color: #1a1a1a;
+  font-size: 13px; cursor: pointer;
+}
+.diff-saveas-item:hover { background: #eff2f5; }
+.diff-cards { display: flex; gap: 12px; padding: 4px 22px 10px; }
+.diff-card { flex: 1; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 14px; }
+.diff-card-n { font-size: 22px; font-weight: 700; }
+.diff-card-l { color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.diff-card.c-add { background: #f0fdf4; }
+.diff-card.c-rem { background: #fff1f2; }
+.diff-card.c-chg { background: #eff6ff; }
+.diff-breakdown {
+  display: flex; height: 8px; margin: 0 22px 12px;
+  border-radius: 5px; overflow: hidden; background: #eef1f4;
+}
+.diff-breakdown .seg { height: 100%; }
+.diff-breakdown .s-add { background: #34c759; }
+.diff-breakdown .s-rem { background: #ff4d6d; }
+.diff-breakdown .s-chg { background: #3b82f6; }
+.diff-tablewrap { flex: 1; min-height: 0; margin: 0 22px 20px; border: 1px solid #eaecef; border-radius: 10px; overflow: hidden; }
+.diff-table { height: 100%; display: flex; flex-direction: column; font-size: 12.5px; }
+.diff-table.virt { }
+.diff-tr { display: flex; }
+.diff-th {
+  position: sticky; top: 0; z-index: 2;
+  background: #f8fafc; font-weight: 600; color: #334;
+  border-bottom: 2px solid #e5e7eb; flex: 0 0 auto;
+}
+.diff-td { padding: 6px 10px; border-bottom: 1px solid #f0f1f3; overflow: hidden; }
+.diff-td.c-kind { flex: 0 0 92px; }
+.diff-td.c-path { flex: 0 0 34%; font-family: ui-monospace, Menlo, monospace; }
+.diff-td.c-val { flex: 1 1 0; word-break: break-word; }
+/* small diff: scroll the whole list, cells wrap */
+.diff-table:not(.virt) { overflow-y: auto; display: block; }
+.diff-table:not(.virt) .diff-th { display: flex; }
+.diff-table:not(.virt) .r-add { background: #f0fdf4; }
+.diff-table:not(.virt) .r-rem { background: #fff1f2; }
+.diff-table:not(.virt) .r-chg { background: #eff6ff; }
+/* large diff: virtualized rows, fixed height, clipped cells */
+.diff-vport { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
+.diff-spacer { position: relative; width: 100%; }
+.diff-rows { position: absolute; top: 0; left: 0; right: 0; }
+.diff-rows .virt-row { position: absolute; left: 0; right: 0; align-items: stretch; }
+.diff-rows .virt-row .diff-td { white-space: nowrap; text-overflow: ellipsis; }
+.diff-rows .r-add { background: #f0fdf4; }
+.diff-rows .r-rem { background: #fff1f2; }
+.diff-rows .r-chg { background: #eff6ff; }
+.recent-path { display: block; font-size: 11px; color: var(--fg-dim); margin-top: 2px; word-break: break-all; }

@@ -1834,6 +1834,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'validate-schema':
       validateAgainstSchema();
       break;
+    case 'compare-tabs':
+      compareTabsFlow();
+      break;
   }
 });
 
@@ -2093,7 +2096,8 @@ function syncMenuState() {
   try {
     const hasDoc = !!(cur && cur.phase === 'ready' && !cur.plain);
     const hasMatches = !!(matchNav && cur && matchNav.tabId === cur.id && matchNav.ids.length);
-    window.oxj.setMenuState({ hasDoc, hasMatches });
+    const hasTwoDocs = tabs.filter((x) => x.phase === 'ready' && !x.plain).length >= 2;
+    window.oxj.setMenuState({ hasDoc, hasMatches, hasTwoDocs });
   } catch { /* ignore */ }
 }
 
@@ -2568,6 +2572,275 @@ async function openTextAsTab(name, ext, text) {
   const file = await window.oxj.textToFile(name, ext, text);
   const nt = newTab(true);
   if (nt) openPath(file, nt);
+}
+
+// ============================================================
+// Compare two open documents — structural diff + styled report
+// ============================================================
+function htmlEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function compareTabsFlow() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const others = tabs.filter((x) => x !== t && x.phase === 'ready' && !x.plain);
+  if (!others.length) { toast('Open another document in a second tab to compare'); return; }
+  const { box, back } = simpleModal('Compare "' + t.title + '" with…');
+  const counts = {};
+  others.forEach((o) => { counts[o.title] = (counts[o.title] || 0) + 1; });
+  for (const o of others) {
+    const row = document.createElement('div');
+    row.className = 'recent-item';
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    name.textContent = o.title;
+    // Disambiguate duplicate tab names by showing the path.
+    if (counts[o.title] > 1 && o.file) {
+      const sub = document.createElement('span');
+      sub.className = 'recent-path';
+      sub.textContent = o.file;
+      name.appendChild(sub);
+    }
+    name.title = o.file || '';
+    row.appendChild(name);
+    row.addEventListener('click', async () => { back.remove(); await runCompare(t, o); });
+    box.appendChild(row);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const close = document.createElement('button');
+  close.className = 'btn-secondary';
+  close.textContent = 'Cancel';
+  close.addEventListener('click', () => back.remove());
+  actions.appendChild(close);
+  box.appendChild(actions);
+}
+
+async function runCompare(a, b) {
+  try {
+    toast('Comparing…', true);
+    const res = await window.oxj.diffTabs(a.id, b.id);
+    const model = buildDiffModel(a, b, res);
+    if (!model.summary.total) { toast('Documents are structurally identical ✓', true); return; }
+    showDiffReport(model);
+  } catch (err) {
+    toast('Compare failed: ' + cleanErr(err));
+  }
+}
+
+function buildDiffModel(a, b, res) {
+  const rows = (res.entries || []).map((e) => ({
+    kind: e.op === 'added' ? 'Added' : e.op === 'removed' ? 'Removed' : 'Changed',
+    path: e.path,
+    left: e.a == null ? '' : String(e.a),
+    right: e.b == null ? '' : String(e.b),
+  }));
+  const added = Number(res.added) || 0;
+  const removed = Number(res.removed) || 0;
+  const changed = Number(res.changed) || 0;
+  return {
+    aName: a.file || a.title,
+    bName: b.file || b.title,
+    ts: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    summary: { added, removed, changed, total: added + removed + changed, truncated: !!res.truncated },
+    rows,
+  };
+}
+
+const DIFF_KIND_CLS = { Added: 'r-add', Removed: 'r-rem', Changed: 'r-chg' };
+
+function showDiffReport(model) {
+  const overlay = document.createElement('div');
+  overlay.className = 'diff-overlay';
+  const page = document.createElement('div');
+  page.className = 'diff-report';
+  overlay.appendChild(page);
+
+  const head = document.createElement('div');
+  head.className = 'diff-head';
+  head.innerHTML =
+    '<div class="diff-title">Structural Diff</div>' +
+    '<div class="diff-files"><span>A: ' + htmlEsc(model.aName) + '</span>' +
+    '<span>B: ' + htmlEsc(model.bName) + '</span></div>' +
+    '<div class="diff-ts">Generated ' + htmlEsc(model.ts) +
+    (model.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>';
+  page.appendChild(head);
+
+  const bar = document.createElement('div');
+  bar.className = 'diff-bar';
+  const saveWrap = document.createElement('div');
+  saveWrap.className = 'diff-saveas';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-tool';
+  saveBtn.textContent = 'Save As ▾';
+  const saveMenu = document.createElement('div');
+  saveMenu.className = 'diff-saveas-menu hidden';
+  [['HTML', 'html'], ['Text', 'txt'], ['JSON', 'json'], ['CSV', 'csv']].forEach(([label, fmt]) => {
+    const it = document.createElement('button');
+    it.className = 'diff-saveas-item';
+    it.textContent = label;
+    it.addEventListener('click', async () => { saveMenu.classList.add('hidden'); await saveDiff(model, fmt); });
+    saveMenu.appendChild(it);
+  });
+  saveBtn.addEventListener('click', (e) => { e.stopPropagation(); saveMenu.classList.toggle('hidden'); });
+  saveWrap.append(saveBtn, saveMenu);
+  const openBtn = document.createElement('button');
+  openBtn.className = 'btn-tool';
+  openBtn.textContent = 'Open in Browser';
+  openBtn.addEventListener('click', async () => {
+    try { await window.oxj.openHtmlInBrowser(diffToHtml(model)); }
+    catch (err) { toast(cleanErr(err)); }
+  });
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn-tool';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  bar.append(saveWrap, openBtn, closeBtn);
+  page.appendChild(bar);
+
+  const cards = document.createElement('div');
+  cards.className = 'diff-cards';
+  const card = (label, val, cls) =>
+    '<div class="diff-card ' + (cls || '') + '"><div class="diff-card-n">' + fmtInt(val) +
+    '</div><div class="diff-card-l">' + label + '</div></div>';
+  cards.innerHTML = card('Total', model.summary.total) + card('Added', model.summary.added, 'c-add') +
+    card('Removed', model.summary.removed, 'c-rem') + card('Changed', model.summary.changed, 'c-chg');
+  page.appendChild(cards);
+
+  // "By type" breakdown: a proportional bar.
+  const tot = model.summary.total || 1;
+  const bd = document.createElement('div');
+  bd.className = 'diff-breakdown';
+  bd.innerHTML =
+    '<div class="seg s-add" style="width:' + (100 * model.summary.added / tot) + '%"></div>' +
+    '<div class="seg s-rem" style="width:' + (100 * model.summary.removed / tot) + '%"></div>' +
+    '<div class="seg s-chg" style="width:' + (100 * model.summary.changed / tot) + '%"></div>';
+  page.appendChild(bd);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'diff-tablewrap';
+  page.appendChild(tableWrap);
+  renderDiffTable(tableWrap, model.rows);
+
+  overlay.addEventListener('click', (e) => {
+    saveMenu.classList.add('hidden');
+    if (e.target === overlay) overlay.remove();
+  });
+  const onEsc = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(overlay);
+}
+
+// Header + rows. Small diffs render fully (cells wrap); large diffs virtualize
+// with a fixed row height (cells clip, full value on hover).
+function renderDiffTable(wrap, rows) {
+  const header =
+    '<div class="diff-tr diff-th"><div class="diff-td c-kind">Change</div>' +
+    '<div class="diff-td c-path">Path</div><div class="diff-td c-val">Left (A)</div>' +
+    '<div class="diff-td c-val">Right (B)</div></div>';
+  if (rows.length <= 600) {
+    let html = '<div class="diff-table">' + header;
+    for (const r of rows) {
+      html += '<div class="diff-tr ' + DIFF_KIND_CLS[r.kind] + '"><div class="diff-td c-kind">' + r.kind +
+        '</div><div class="diff-td c-path">' + htmlEsc(r.path) + '</div><div class="diff-td c-val">' +
+        htmlEsc(r.left) + '</div><div class="diff-td c-val">' + htmlEsc(r.right) + '</div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    return;
+  }
+  const ROW = 30;
+  wrap.innerHTML = '<div class="diff-table virt">' + header +
+    '<div class="diff-vport"><div class="diff-spacer"></div><div class="diff-rows"></div></div></div>';
+  const vport = wrap.querySelector('.diff-vport');
+  wrap.querySelector('.diff-spacer').style.height = (rows.length * ROW) + 'px';
+  const rowsEl = wrap.querySelector('.diff-rows');
+  const draw = () => {
+    const top = vport.scrollTop;
+    const h = vport.clientHeight || 420;
+    const start = Math.max(0, Math.floor(top / ROW) - 6);
+    const end = Math.min(rows.length, Math.ceil((top + h) / ROW) + 6);
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const r = rows[i];
+      html += '<div class="diff-tr virt-row ' + DIFF_KIND_CLS[r.kind] + '" style="top:' + (i * ROW) +
+        'px;height:' + ROW + 'px"><div class="diff-td c-kind">' + r.kind +
+        '</div><div class="diff-td c-path" title="' + htmlEsc(r.path) + '">' + htmlEsc(r.path) +
+        '</div><div class="diff-td c-val" title="' + htmlEsc(r.left) + '">' + htmlEsc(r.left) +
+        '</div><div class="diff-td c-val" title="' + htmlEsc(r.right) + '">' + htmlEsc(r.right) + '</div></div>';
+    }
+    rowsEl.innerHTML = html;
+  };
+  vport.addEventListener('scroll', draw);
+  setTimeout(draw, 0);
+}
+
+async function saveDiff(model, fmt) {
+  const map = { html: diffToHtml, txt: diffToTxt, json: diffToJson, csv: diffToCsv };
+  try {
+    const text = map[fmt](model);
+    const saved = await window.oxj.saveText('diff_report.' + fmt, text);
+    if (saved) toast('Saved ' + baseName(saved), true);
+  } catch (err) { toast('Export failed: ' + cleanErr(err)); }
+}
+
+// ---- Pure diff serializers (self-contained, HTML-escaped) ----
+function diffToTxt(m) {
+  const L = ['NARIKJSON structural diff', 'A: ' + m.aName, 'B: ' + m.bName, 'Generated: ' + m.ts, '',
+    'Total: ' + m.summary.total + '  Added: ' + m.summary.added + '  Removed: ' + m.summary.removed +
+    '  Changed: ' + m.summary.changed + (m.summary.truncated ? '  (truncated)' : ''), ''];
+  for (const r of m.rows) {
+    if (r.kind === 'Changed') L.push('[changed] ' + r.path + ': ' + r.left + ' -> ' + r.right);
+    else if (r.kind === 'Added') L.push('[added]   ' + r.path + ' = ' + r.right);
+    else L.push('[removed] ' + r.path + ' (was ' + r.left + ')');
+  }
+  return L.join('\n');
+}
+
+function diffToJson(m) {
+  return JSON.stringify({
+    a: m.aName, b: m.bName, generated: m.ts, summary: m.summary,
+    changes: m.rows.map((r) => ({ kind: r.kind, path: r.path, left: r.left, right: r.right })),
+  }, null, 2);
+}
+
+function diffToCsv(m) {
+  const cell = (v) => csvCell(v == null ? '' : String(v), ',');
+  const lines = ['kind,path,left,right'];
+  for (const r of m.rows) lines.push([cell(r.kind), cell(r.path), cell(r.left), cell(r.right)].join(','));
+  return lines.join('\n');
+}
+
+function diffToHtml(m) {
+  const e = htmlEsc;
+  const cls = { Added: 'add', Removed: 'rem', Changed: 'chg' };
+  const rows = m.rows.map((r) =>
+    '<tr class="' + cls[r.kind] + '"><td>' + r.kind + '</td><td class="p">' + e(r.path) +
+    '</td><td>' + e(r.left) + '</td><td>' + e(r.right) + '</td></tr>').join('');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>NARIKJSON diff</title><style>' +
+    'body{font:14px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0;padding:24px}' +
+    'h1{font-size:18px;margin:0 0 4px}.files{color:#555;font-size:13px}.files span{margin-right:18px}' +
+    '.ts{color:#888;font-size:12px;margin:2px 0 16px}' +
+    '.cards{display:flex;gap:12px;margin-bottom:18px}.card{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px}' +
+    '.card .n{font-size:22px;font-weight:600}.card .l{color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.04em}' +
+    '.card.add{background:#f0fdf4}.card.rem{background:#fff1f2}.card.chg{background:#eff6ff}' +
+    'table{width:100%;border-collapse:collapse;font-size:13px}' +
+    'th{position:sticky;top:0;background:#f8fafc;text-align:left;padding:8px;border-bottom:2px solid #e5e7eb}' +
+    'td{padding:6px 8px;border-bottom:1px solid #f0f0f0;vertical-align:top;word-break:break-word}' +
+    'td.p{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}' +
+    'tr.add{background:#f0fdf4}tr.rem{background:#fff1f2}tr.chg{background:#eff6ff}' +
+    '</style></head><body>' +
+    '<h1>Structural Diff</h1>' +
+    '<div class="files"><span>A: ' + e(m.aName) + '</span><span>B: ' + e(m.bName) + '</span></div>' +
+    '<div class="ts">Generated ' + e(m.ts) + (m.summary.truncated ? ' · truncated at 5000 changes' : '') + '</div>' +
+    '<div class="cards"><div class="card"><div class="n">' + m.summary.total + '</div><div class="l">Total</div></div>' +
+    '<div class="card add"><div class="n">' + m.summary.added + '</div><div class="l">Added</div></div>' +
+    '<div class="card rem"><div class="n">' + m.summary.removed + '</div><div class="l">Removed</div></div>' +
+    '<div class="card chg"><div class="n">' + m.summary.changed + '</div><div class="l">Changed</div></div></div>' +
+    '<table><thead><tr><th>Change</th><th>Path</th><th>Left (A)</th><th>Right (B)</th></tr></thead><tbody>' +
+    rows + '</tbody></table></body></html>';
 }
 
 // The in-memory engine doesn't implement schema/validate, so it returns this.
