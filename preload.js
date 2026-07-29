@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webUtils, clipboard } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 async function unwrap(channel, args) {
   const r = await ipcRenderer.invoke(channel, args);
@@ -17,8 +17,6 @@ contextBridge.exposeInMainWorld('oxj', {
   cancelIngest: (tabId) => unwrap('cancel-ingest', tabId),
   downloadUrl: (url, auth) => unwrap('download-url', { url, auth }),
   clipboardToFile: () => unwrap('clipboard-to-file'),
-  readClipboard: () => clipboard.readText(),
-  writeClipboard: (t) => clipboard.writeText(String(t == null ? '' : t)),
   loadText: (p, full) => unwrap('load-text', { path: p, full: !!full }),
   saveText: (defaultName, text) => unwrap('save-text', { defaultName, text }),
   readFileText: (p) => unwrap('read-file-text', p),

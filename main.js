@@ -826,6 +826,20 @@ function buildMenu() {
       ],
     },
     {
+      // Basic Edit menu — the standard roles carry the native clipboard/undo
+      // accelerators (Cmd+Z/X/C/V/A) so text fields and the Source editor work.
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
       label: 'Search',
       submenu: [
         { label: 'Find', accelerator: 'CmdOrCtrl+F', click: (mi, bw) => sendMenu(bw, 'find') },
@@ -837,27 +851,9 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Jump to Path…', accelerator: 'CmdOrCtrl+L', click: (mi, bw) => sendMenu(bw, 'jump-to-path') },
         { type: 'separator' },
-        { label: 'Copy Row', accelerator: 'CmdOrCtrl+C', click: (mi, bw) => sendMenu(bw, 'copy-row') },
+        // Cmd+C belongs to Edit ▸ Copy, so Copy Row uses Cmd+Shift+C.
+        { label: 'Copy Row', accelerator: 'CmdOrCtrl+Shift+C', click: (mi, bw) => sendMenu(bw, 'copy-row') },
         { label: 'Copy as cURL', click: (mi, bw) => sendMenu(bw, 'copy-curl') },
-      ],
-    },
-    // Hidden Edit menu: the visible Edit menu was removed, but macOS needs these
-    // roles registered for clipboard/undo shortcuts to work in text fields and
-    // the Source editor. Copy (Cmd+C) is intentionally omitted — it belongs to
-    // "Copy Row", which falls back to a native text copy when an editor/field
-    // is focused.
-    {
-      label: 'Edit',
-      visible: false,
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'paste' },
-        { role: 'pasteAndMatchStyle' },
-        { role: 'delete' },
-        { role: 'selectAll' },
       ],
     },
     {
