@@ -810,18 +810,52 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('dragleave', (e) => {
   if (!e.relatedTarget) $('drop-overlay').classList.add('hidden');
 });
-window.addEventListener('drop', (e) => {
+// Extensions that could be either a delimited table or plain text.
+const MAYBE_DELIM_EXTS = ['txt', 'dat', 'log', 'psv', 'tab'];
+function isMaybeDelim(p) {
+  const name = String(p).split(/[\\/]/).pop();
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  return ext === '' || MAYBE_DELIM_EXTS.includes(ext);
+}
+
+// Ask how to open an ambiguous dropped file. Resolves 'table' | 'text' | null.
+function askOpenAs(name) {
+  return new Promise((resolve) => {
+    const { back, box } = simpleModal('Open "' + name + '"');
+    const msg = document.createElement('div');
+    msg.className = 'ask-open-msg';
+    msg.textContent = 'This looks like a delimited text file. Open it as a table or as plain text?';
+    box.appendChild(msg);
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel';
+    const asText = document.createElement('button'); asText.className = 'btn-secondary'; asText.textContent = 'Open as Text';
+    const asTable = document.createElement('button'); asTable.className = 'btn-primary'; asTable.textContent = 'Open as Table';
+    cancel.onclick = () => { back.remove(); resolve(null); };
+    asText.onclick = () => { back.remove(); resolve('text'); };
+    asTable.onclick = () => { back.remove(); resolve('table'); };
+    back.addEventListener('mousedown', (e) => { if (e.target === back) { back.remove(); resolve(null); } });
+    actions.append(cancel, asText, asTable);
+    box.appendChild(actions);
+  });
+}
+
+window.addEventListener('drop', async (e) => {
   e.preventDefault();
   $('drop-overlay').classList.add('hidden');
   const files = (e.dataTransfer && e.dataTransfer.files) || [];
   if (!files.length) return;
-  try {
-    for (const f of [...files].slice(0, MAX_TABS)) {
-      const p = window.oxj.pathForFile(f);
-      if (p) openPath(p);
+  let paths = [];
+  try { paths = [...files].slice(0, MAX_TABS).map((f) => window.oxj.pathForFile(f)).filter(Boolean); }
+  catch { toast('Could not resolve dropped file path'); return; }
+  for (const p of paths) {
+    if (isMaybeDelim(p)) {
+      const choice = await askOpenAs(baseName(p)); // Table / Text / Cancel
+      if (choice === 'table') openAsCsv(p);
+      else if (choice === 'text') openPlainPath(p, null, plainLangFor(p) || 'plaintext');
+    } else {
+      openPath(p);
     }
-  } catch {
-    toast('Could not resolve dropped file path');
   }
 });
 
