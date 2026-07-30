@@ -244,6 +244,7 @@ function renderScreen() {
   else if (t.phase === 'ready') {
     const plain = !!t.plain;
     killFlow();
+    applyRecentPanel(); // keep the dock's open/closed + width (remembered)
     $('btn-source').classList.toggle('hidden', plain);
     // Raw File opens the file in a read-only tab, size-gated at 450 MB (V8
     // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
@@ -436,33 +437,191 @@ function middleTruncate(s, max) {
   const tail = Math.min(16, Math.floor(max / 3));
   return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
 }
+
+// Shorten a filename with a middle ellipsis, keeping the start and the full
+// extension: very_long_export_name.json -> very_long_e…rt_name.json
+function middleEllipsis(name, limit) {
+  if (!name || name.length <= limit) return name;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const keep = limit - ext.length - 1; // room for the …
+  if (keep < 4) return name.slice(0, Math.max(1, limit - 1)) + '…';
+  const head = Math.ceil(keep * 0.6);
+  const tail = keep - head;
+  return base.slice(0, head) + '…' + base.slice(base.length - tail) + ext;
+}
+
+// Approximate, human-readable size with a leading ~ (shown orange in the UI).
+function humanSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1073741824) return '~' + (n / 1073741824).toFixed(1) + ' GB';
+  if (n >= 1048576) return '~' + (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return '~' + Math.round(n / 1024) + ' KB';
+  return '~' + n + ' B';
+}
+
+// Group a recents entry by file type (extension) for the side panel sections.
+const FILE_GROUPS = [
+  ['JSON', ['json', 'ndjson', 'jsonl']],
+  ['XML', ['xml']],
+  ['CSV', ['csv', 'tsv', 'tab']],
+  ['YAML', ['yaml', 'yml']],
+  ['Logs', ['log']],
+  ['Code', ['js', 'mjs', 'ts', 'py', 'html', 'htm', 'css', 'rs', 'go', 'java', 'c', 'cpp', 'sh']],
+  ['Text', ['txt', 'md']],
+];
+function fileGroup(pathStr) {
+  const ext = String(pathStr).split('.').pop().toLowerCase();
+  for (const [name, exts] of FILE_GROUPS) if (exts.includes(ext)) return name;
+  return 'Other';
+}
+function groupRecentsByType(list) {
+  const out = new Map();
+  for (const [name] of FILE_GROUPS) out.set(name, []);
+  out.set('Other', []);
+  for (const r of list) out.get(fileGroup(r.path)).push(r);
+  // Only non-empty groups, in the fixed order.
+  const res = [];
+  for (const [name] of [...FILE_GROUPS, ['Other']]) {
+    const items = out.get(name);
+    if (items && items.length) res.push([name, items]);
+  }
+  return res;
+}
 function cleanErr(err) {
   return String((err && err.message) || err).replace(/^.*Error:\s*/, '');
 }
 
 // ---------- welcome / recents ----------
 async function refreshRecents() {
-  const list = (await window.oxj.recents()).slice(0, 10); // last 10 files
+  const list = (await window.oxj.recents()).slice(0, 15);
   const wrap = $('recents-wrap');
   const el = $('recents-list');
   el.textContent = '';
   if (!list.length) { wrap.classList.add('hidden'); return; }
   wrap.classList.remove('hidden');
+  $('recents-head-label').textContent = 'Recent (' + list.length + ')';
   for (const r of list) {
     const item = document.createElement('div');
     item.className = 'recent-item';
     item.title = r.path; // full path on hover
     const name = document.createElement('span');
     name.className = 'recent-name';
-    name.textContent = middleTruncate(baseName(r.path), 42);
+    name.textContent = middleEllipsis(baseName(r.path), 40);
     const size = document.createElement('span');
     size.className = 'recent-size';
-    size.textContent = fmtBytes(r.size);
+    size.textContent = humanSize(r.size);
     item.append(name, size);
-    item.addEventListener('click', () => openPath(r.path));
+    item.addEventListener('click', () => openRecent(r.path));
     el.appendChild(item);
   }
 }
+
+// Open a recent, focusing an already-open tab for that file instead of a dupe.
+function openRecent(p) {
+  const existing = tabs.find((x) => x.file === p && x.phase !== 'empty');
+  if (existing) { setCurrent(existing); return; }
+  openPath(p);
+}
+
+// ---------- Recent Files side panel (dock) ----------
+let recentPanelOpen = false;
+let recentWidth = Math.max(180, parseInt(localStorage.getItem('oxj-recent-width'), 10) || 260);
+const recentCollapsed = new Set();
+const FOLDER_SVG = '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1.5 3.75A1.25 1.25 0 0 1 2.75 2.5h2.9c.33 0 .64.13.88.37L7.7 4H13.25A1.25 1.25 0 0 1 14.5 5.25v6A1.25 1.25 0 0 1 13.25 12.5H2.75A1.25 1.25 0 0 1 1.5 11.25v-7.5Z"/></svg>';
+
+// Apply the open/closed state to the DOM (width is inline so the drag handle
+// can resize it while the toggle still fully collapses it).
+function applyRecentPanel() {
+  $('recent-panel').style.width = recentPanelOpen ? recentWidth + 'px' : '0';
+  $('recent-panel').classList.toggle('open', recentPanelOpen);
+  $('btn-recent').classList.toggle('active-tool', recentPanelOpen);
+}
+function closeRecentPanel() { recentPanelOpen = false; applyRecentPanel(); }
+function toggleRecentPanel() {
+  recentPanelOpen = !recentPanelOpen;
+  applyRecentPanel();
+  if (recentPanelOpen) renderRecentDock();
+}
+
+// Drag the left edge of the dock to resize it.
+(function initRecentResizer() {
+  const panel = $('recent-panel');
+  const grip = $('recent-resizer');
+  if (!grip) return;
+  let startX = 0, startW = 0;
+  const onMove = (ev) => {
+    recentWidth = Math.max(180, Math.min(window.innerWidth * 0.6, startW + (startX - ev.clientX)));
+    panel.style.width = recentWidth + 'px';
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('resizing');
+    grip.classList.remove('dragging');
+    localStorage.setItem('oxj-recent-width', String(recentWidth | 0));
+  };
+  grip.addEventListener('mousedown', (ev) => {
+    ev.preventDefault();
+    startX = ev.clientX;
+    startW = panel.getBoundingClientRect().width;
+    document.body.classList.add('resizing');
+    grip.classList.add('dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
+
+async function renderRecentDock() {
+  if (!recentPanelOpen) return;
+  const list = await window.oxj.recents();
+  const el = $('recent-dock-list');
+  el.textContent = '';
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-dock-empty';
+    empty.textContent = 'No recent files';
+    el.appendChild(empty);
+    return;
+  }
+  for (const [group, items] of groupRecentsByType(list)) {
+    const sec = document.createElement('div');
+    sec.className = 'recent-sec';
+    const collapsed = recentCollapsed.has(group);
+    const head = document.createElement('div');
+    head.className = 'recent-sec-head';
+    head.innerHTML = '<span class="recent-sec-caret">' + (collapsed ? '▸' : '▾') + '</span>' +
+      '<span class="recent-sec-name">' + htmlEsc(group) + '</span><span class="recent-sec-count">' + items.length + '</span>';
+    head.addEventListener('click', () => { if (recentCollapsed.has(group)) recentCollapsed.delete(group); else recentCollapsed.add(group); renderRecentDock(); });
+    sec.appendChild(head);
+    if (!collapsed) {
+      for (const r of items) {
+        const row = document.createElement('div');
+        row.className = 'recent-file';
+        row.title = r.path;
+        const name = document.createElement('span');
+        name.className = 'recent-file-name';
+        name.textContent = middleEllipsis(baseName(r.path), 28);
+        const size = document.createElement('span');
+        size.className = 'recent-size';
+        size.textContent = humanSize(r.size);
+        const rev = document.createElement('button');
+        rev.className = 'recent-reveal';
+        rev.title = 'Reveal in folder';
+        rev.innerHTML = FOLDER_SVG;
+        rev.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.revealItem(r.path); });
+        row.append(name, size, rev);
+        row.addEventListener('click', () => openRecent(r.path));
+        sec.appendChild(row);
+      }
+    }
+    el.appendChild(sec);
+  }
+}
+
+$('btn-recent').addEventListener('click', toggleRecentPanel);
+window.oxj.onRecentsChanged(() => { refreshRecents(); renderRecentDock(); });
 
 // ---------- file activity donut chart ----------
 const STAT_PALETTE = ['#4da3ff', '#e0764a', '#7ee0a3', '#c586c0', '#e2b93b', '#8b91a3', '#66c2cd', '#d16d6d', '#9a86e8'];
@@ -579,8 +738,11 @@ async function openPath(p, tab, force) {
     toast('Excel files are not supported — export to CSV or JSON first');
     return;
   }
+  // YAML loads as a structured tree (converted to JSON by the engine); other
+  // plain-text languages open read-only. (Raw File still opens YAML read-only.)
+  const isYaml = ext === 'yaml' || ext === 'yml';
   const lang = plainLangFor(p);
-  if (lang) return openPlainPath(p, tab, lang);
+  if (lang && !isYaml) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();
   if (!t) return; // tab limit reached
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
@@ -773,8 +935,8 @@ window.oxj.onDocReady(async (m) => {
   t.phase = 'ready';
   renderTabs();
   if (t === cur) {
-    renderScreen();
-    openSource(); // show the Source panel by default when a file opens
+    renderScreen(); // Source panel stays closed until a tree node is clicked
+    if (recentPanelOpen) renderRecentDock(); // reopen the dock if the user had it on
   }
   if (m.cached) toast('Reopened instantly from cached database', true);
   else toast('Loaded ' + fmtInt(m.nodes || t.meta.total_nodes || 0) + ' nodes', true);
@@ -1149,24 +1311,84 @@ function scrollToIdx(idx) {
 }
 
 // Keyboard navigation
+// Nearest preceding row shallower than idx = its parent in the flat tree list.
+function parentIndex(t, idx) {
+  const d = t.visible[idx].depth;
+  for (let i = idx - 1; i >= 0; i--) if (t.visible[i].depth < d) return i;
+  return -1;
+}
+async function copySelValue(t, e) {
+  try {
+    const text = isScalarKind(e.kind) ? await getScalarValue(t, e) : (await getSubtree(t, e)).text;
+    await copyText(text, 'value');
+  } catch (err) { toast(cleanErr(err)); }
+}
+async function copySelPath(t, e) {
+  try { const r = await window.oxj.query(t.id, { op: 'path', node: e.id }); await copyText(r.path, 'path'); }
+  catch (err) { toast(cleanErr(err)); }
+}
+
+// Pending prefix for multi-key shortcuts (y… yank, g… go). ~1.2s window.
+let treePrefix = null;
+let treePrefixAt = 0;
+
+// Keyboard navigation + Vim-style shortcuts for the tree.
 document.addEventListener('keydown', async (ev) => {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  if (t.view === 'table' || flowOpen) return; // tree view only
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA')) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   if (!t.visible.length || t.selectedIdx < 0) return;
-  const e = t.visible[t.selectedIdx];
-  if (ev.key === 'ArrowDown' && t.selectedIdx < t.visible.length - 1) {
-    selectAt(t, t.selectedIdx + 1); scrollToIdx(t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowUp' && t.selectedIdx > 0) {
-    selectAt(t, t.selectedIdx - 1); scrollToIdx(t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowRight' && e && !e.pseudo && !e.expanded) {
-    await toggleAt(t, t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowLeft' && e && !e.pseudo) {
-    if (e.expanded) collapseAt(t, t.selectedIdx);
-    renderTree(); ev.preventDefault();
-  } else if (ev.key === 'Enter' && e && !e.pseudo) {
-    await toggleAt(t, t.selectedIdx); renderTree(); ev.preventDefault();
+  const idx = t.selectedIdx;
+  const e = t.visible[idx];
+  const k = ev.key;
+
+  const prefix = (treePrefix && Date.now() - treePrefixAt < 1200) ? treePrefix : null;
+  treePrefix = null;
+
+  // Yank (copy) — y then v/k/p/n (yy = value).
+  if (prefix === 'y') {
+    ev.preventDefault();
+    if (!e || e.pseudo) return;
+    if (k === 'v' || k === 'y') copySelValue(t, e);
+    else if (k === 'k') { if (e.name != null) copyText(e.name, 'key'); else toast('This node has no key'); }
+    else if (k === 'p') copySelPath(t, e);
+    else if (k === 'n') copyNodeAs(t, e, 'json');
+    return;
+  }
+  // Go — gg to root.
+  if (prefix === 'g') {
+    ev.preventDefault();
+    if (k === 'g') { selectAt(t, 0); scrollToIdx(0); renderTree(); }
+    return;
+  }
+  if (k === 'y') { treePrefix = 'y'; treePrefixAt = Date.now(); ev.preventDefault(); return; }
+  if (k === 'g') { treePrefix = 'g'; treePrefixAt = Date.now(); ev.preventDefault(); return; }
+
+  const moveTo = (i) => { selectAt(t, i); scrollToIdx(t.selectedIdx); renderTree(); };
+
+  if (k === 'ArrowDown' || k === 'j') {
+    ev.preventDefault(); if (idx < t.visible.length - 1) moveTo(idx + 1);
+  } else if (k === 'ArrowUp' || k === 'k') {
+    ev.preventDefault(); if (idx > 0) moveTo(idx - 1);
+  } else if (k === 'ArrowRight' || k === 'l') {
+    ev.preventDefault();
+    if (e && !e.pseudo && !e.expanded && isContainer(e.kind, e.n)) { await toggleAt(t, idx); renderTree(); }
+    else if (idx < t.visible.length - 1) moveTo(idx + 1); // already open → into first child
+  } else if (k === 'ArrowLeft' || k === 'h') {
+    ev.preventDefault();
+    if (e && !e.pseudo && e.expanded) { collapseAt(t, idx); renderTree(); }
+    else { const p = parentIndex(t, idx); if (p >= 0) moveTo(p); }
+  } else if (k === 'p') {
+    ev.preventDefault(); const p = parentIndex(t, idx); if (p >= 0) moveTo(p);
+  } else if (k === 'Enter' || k === ' ') {
+    ev.preventDefault(); if (e && !e.pseudo) { await toggleAt(t, idx); renderTree(); }
+  } else if (k === 'Home') {
+    ev.preventDefault(); moveTo(0);
+  } else if (k === 'End') {
+    ev.preventDefault(); moveTo(t.visible.length - 1);
   }
 });
 

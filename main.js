@@ -154,6 +154,24 @@ function downloadsDir() {
   return d;
 }
 
+// YAML isn't a native engine format — parse it and write a temp JSON that the
+// engine ingests. The tab still tracks the original .yaml path.
+function yamlToTempJson(yamlPath) {
+  let yaml;
+  try { yaml = require('js-yaml'); }
+  catch { throw new Error('YAML support needs a dependency — run: npm install'); }
+  let obj;
+  try { obj = yaml.load(fs.readFileSync(yamlPath, 'utf8')); }
+  catch (e) { throw new Error('Could not parse YAML: ' + String((e && e.message) || e).split('\n')[0]); }
+  const out = path.join(downloadsDir(), 'yamlconv_' + Date.now() + '.json');
+  fs.writeFileSync(out, JSON.stringify(obj === undefined ? null : obj));
+  return out;
+}
+function isYamlFile(p) {
+  const e = path.extname(p).toLowerCase();
+  return e === '.yaml' || e === '.yml';
+}
+
 function dbPathFor(file) {
   const st = fs.statSync(file);
   const h = crypto
@@ -175,12 +193,26 @@ function getRecents() {
     return [];
   }
 }
-function addRecent(file) {
-  // Only real disk files and URL downloads belong in Recents. Temp files we
-  // create ourselves (clipboard imports, copy-to-new-tab fragments, reports)
-  // live in the internal downloads dir and are excluded — except url_* fetches.
+// Notify every window so all three recents surfaces re-render.
+function emitRecentsChanged() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('recents-changed');
+  }
+}
+
+// Temp / scratch / converted-result files never belong in Recents.
+function isTempPath(file) {
+  const base = path.basename(file);
+  if (base.startsWith('oxj_') || base.startsWith('narik_')) return true;
+  try { if (file.startsWith(os.tmpdir() + path.sep)) return true; } catch {}
   const dl = downloadsDir();
-  if (file.startsWith(dl + path.sep) && !path.basename(file).startsWith('url_')) return;
+  // Our internal downloads dir is scratch, except url_* fetches (real content).
+  if (file.startsWith(dl + path.sep) && !base.startsWith('url_')) return true;
+  return false;
+}
+
+function addRecent(file) {
+  if (!file || isTempPath(file)) return;
   let list = getRecents().filter((r) => r.path !== file);
   let size = 0;
   try { size = fs.statSync(file).size; } catch {}
@@ -188,9 +220,24 @@ function addRecent(file) {
   list = list.slice(0, MAX_RECENTS);
   try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
   buildMenu();
+  emitRecentsChanged();
 }
+
 function clearRecents() {
   try { fs.unlinkSync(recentsPath()); } catch {}
+  buildMenu();
+  emitRecentsChanged();
+}
+
+// At startup, drop entries whose file is confirmed missing (moved/deleted).
+function pruneRecent() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(recentsPath(), 'utf8'));
+    const kept = raw.filter((r) => {
+      try { return fs.existsSync(r.path); } catch { return true; } // keep on transient error
+    });
+    if (kept.length !== raw.length) fs.writeFileSync(recentsPath(), JSON.stringify(kept));
+  } catch {}
   buildMenu();
 }
 
@@ -585,16 +632,19 @@ async function loadFile(wc, tabId, filePath, force) {
   killSession(tabId);
   addRecent(filePath);
 
+  // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
+  const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
+
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(filePath)) === 'memory') {
+  if ((await decideMode(enginePath)) === 'memory') {
     try {
       let size = 0;
-      try { size = fs.statSync(filePath).size; } catch {}
+      try { size = fs.statSync(enginePath).size; } catch {}
       if (!wc.isDestroyed()) {
         wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
         wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
       }
-      await startServe(tabId, null, wc, filePath, 'memory');
+      await startServe(tabId, null, wc, enginePath, 'memory');
       const meta = await query(tabId, { op: 'meta' });
       bumpStat(meta.format);
       if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
@@ -606,7 +656,7 @@ async function loadFile(wc, tabId, filePath, force) {
     }
   }
 
-  const dbPath = dbPathFor(filePath);
+  const dbPath = dbPathFor(enginePath);
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
@@ -618,7 +668,7 @@ async function loadFile(wc, tabId, filePath, force) {
     return;
   }
 
-  const proc = spawn(bin, ['ingest', filePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(bin, ['ingest', enginePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
   const g = { proc, dbPath, wc, file: filePath };
   ingests.set(tabId, g);
   const rl = readline.createInterface({ input: proc.stdout });
@@ -1004,8 +1054,8 @@ app.whenReady().then(() => {
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [
-        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'xml', 'csv', 'tsv', 'tab'] },
-        { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py', 'yaml', 'yml'] },
+        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab'] },
+        { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py'] },
         { name: 'All files', extensions: ['*'] },
       ],
     });
@@ -1234,7 +1284,11 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('file-stat', async (_e, p) => {
-    try { const st = fs.statSync(p); return { size: st.size }; } catch { return null; }
+    try { const st = fs.statSync(p); return { exists: true, size: st.size }; } catch { return { exists: false, size: 0 }; }
+  });
+  ipcMain.handle('reveal-item', async (_e, p) => {
+    try { if (typeof p === 'string' && p) { shell.showItemInFolder(p); return true; } } catch {}
+    return false;
   });
 
   // Dock icon in dev (`npm start`); packaged builds use build/icon.icns.
@@ -1243,6 +1297,7 @@ app.whenReady().then(() => {
   }
 
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
+  try { pruneRecent(); } catch {} // drop recents whose file no longer exists
 
   // Renderer reports whether a doc is open / a search has matches, so the
   // Export menu items enable/disable accordingly.

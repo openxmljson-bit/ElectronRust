@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('oxj', {
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   fileStat: (p) => ipcRenderer.invoke('file-stat', p),
+  revealItem: (p) => ipcRenderer.invoke('reveal-item', p),
+  onRecentsChanged: (cb) => ipcRenderer.on('recents-changed', () => cb()),
   pathForFile: (file) => webUtils.getPathForFile(file),
   onProgress: (cb) => ipcRenderer.on('ingest-progress', (_e, m) => cb(m)),
   onDocReady: (cb) => ipcRenderer.on('doc-ready', (_e, m) => cb(m)),

@@ -21,7 +21,7 @@
         <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
         <div class="tagline-big">Built for GIGABYTES</div>
         <div class="chips">
-          <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">XML</span><span class="chip">CSV</span><span class="chip">TSV</span>
+          <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">YAML</span><span class="chip">XML</span><span class="chip">CSV</span><span class="chip">TSV</span>
         </div>
         <div class="welcome-actions">
           <button id="btn-open" class="btn-primary">Open File…</button>
@@ -31,7 +31,7 @@
         <div class="drop-hint">or drop a file anywhere in this window</div>
         <div id="recents-wrap" class="recents hidden">
           <div class="recents-head">
-            <span>Recent files</span>
+            <span id="recents-head-label">Recent</span>
             <button id="btn-clear-recents" class="link-btn">Clear</button>
           </div>
           <div id="recents-list"></div>
@@ -83,6 +83,7 @@
         <button id="btn-source" class="btn-tool" title="Show formatted source of the selected node">Source</button>
         <button id="btn-full-file" class="btn-tool" title="Open the complete file in a new read-only tab">Raw File</button>
         <button id="btn-flow" class="btn-tool" title="Flow diagram of the selected node (JSON/CSV)">Flow</button>
+        <button id="btn-recent" class="btn-tool" title="Recent files">Recent</button>
         <button id="btn-tools" class="btn-tool" title="Schema and comparison tools">Tools ▾</button>
         <div class="spacer"></div>
         <select id="search-scope" title="Search scope">
@@ -157,6 +158,12 @@
           </div>
           <div id="monaco-host" class="monaco-host"></div>
           <pre id="source-fallback" class="source-fallback hidden"></pre>
+        </div>
+
+        <div id="recent-panel" class="recent-panel">
+          <div id="recent-resizer" class="v-resizer" title="Drag to resize"></div>
+          <div class="recent-dock-head">Recent Files</div>
+          <div id="recent-dock-list" class="recent-dock-list"></div>
         </div>
       </div>
 
