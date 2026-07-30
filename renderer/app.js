@@ -1640,11 +1640,6 @@ function tableRows(t) {
 // Re-apply the current sort/filter view: drop cached windows, reset scroll,
 // refetch. Guarded to database mode (the memory engine can't sort/filter).
 function applyTableView(t) {
-  if (isMemTab(t) && (t.tableSort || (t.tableFilters && t.tableFilters.length))) {
-    toast('Sorting and filtering need database mode — set Cache → Engine Mode → Always Database and reload');
-    t.tableSort = null;
-    t.tableFilters = [];
-  }
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.tableViewTotal = null;
@@ -1654,8 +1649,6 @@ function applyTableView(t) {
   renderTable();
   updateTableToolbar(t);
 }
-
-function isMemTab(t) { return !!(t && t.meta && t.meta.mode === 'memory'); }
 
 // Selection bounds as inclusive [row0,row1] x [vis0,vis1], or null.
 function selRect(t) {
@@ -1921,7 +1914,6 @@ function colSelect(t, selected) {
 }
 
 function openSortDialog(t) {
-  if (isMemTab(t)) { toast('Sorting needs database mode — set Cache → Engine Mode → Always Database and reload'); return; }
   const { back, box } = simpleModal('Sort rows');
   const row = document.createElement('div');
   row.className = 'modal-row';
@@ -1948,7 +1940,6 @@ function openSortDialog(t) {
 }
 
 function openFilterDialog(t, presetCol) {
-  if (isMemTab(t)) { toast('Filtering needs database mode — set Cache → Engine Mode → Always Database and reload'); return; }
   const { back, box } = simpleModal('Filter rows');
   const working = (t.tableFilters || []).map((f) => ({ ...f }));
   if (presetCol != null && !working.some((f) => f.col === presetCol)) working.push({ col: presetCol, op: 'contains', value: '' });

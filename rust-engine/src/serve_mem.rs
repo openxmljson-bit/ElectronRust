@@ -875,18 +875,86 @@ fn op_stats(doc: &Doc, req: &Value) -> Result<Value, String> {
     }))
 }
 
+fn parse_num(s: &str) -> f64 {
+    s.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+// Numeric-aware sort key: numeric primary (non-numeric collapse to 0.0), then
+// case-insensitive text — matches the DB engine's CAST-then-NOCASE ordering.
+fn sort_key(s: &str) -> (f64, String) {
+    (parse_num(s), s.to_lowercase())
+}
+
+// Does a cell value satisfy one filter (semantics match the SQL engine)?
+fn cell_matches(cv: &str, op: &str, val: &str) -> bool {
+    match op {
+        "equals" => cv == val,
+        "not-equals" => cv != val,
+        "starts-with" => cv.to_lowercase().starts_with(&val.to_lowercase()),
+        "gt" => parse_num(cv) > parse_num(val),
+        "lt" => parse_num(cv) < parse_num(val),
+        "between" => {
+            let mut it = val.splitn(2, ',');
+            let a = parse_num(it.next().unwrap_or("").trim());
+            let b = parse_num(it.next().unwrap_or("").trim());
+            let x = parse_num(cv);
+            x >= a && x <= b
+        }
+        _ => cv.to_lowercase().contains(&val.to_lowercase()), // contains
+    }
+}
+
+fn cell_value(doc: &Doc, rec: u32, col: usize) -> Option<String> {
+    doc.index.children(rec).nth(col).and_then(|k| doc.row_parts(k).2)
+}
+
 fn op_table(doc: &Doc, req: &Value) -> Result<Value, String> {
     let offset = geti(req, "offset", 0).max(0) as usize;
     let limit = geti(req, "limit", 100).clamp(1, 500) as usize;
     let root = doc.index.root();
+    let mut rows: Vec<u32> = doc.index.children(root).collect();
+
+    // Filters (combined with AND).
+    if let Some(fs) = req.get("filters").and_then(|v| v.as_array()) {
+        let filters: Vec<(usize, String, String)> = fs
+            .iter()
+            .filter_map(|f| {
+                let col = f.get("col").and_then(|v| v.as_i64())?;
+                if col < 0 { return None; }
+                Some((
+                    col as usize,
+                    f.get("op").and_then(|v| v.as_str()).unwrap_or("contains").to_string(),
+                    f.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                ))
+            })
+            .collect();
+        if !filters.is_empty() {
+            rows.retain(|&rec| {
+                filters.iter().all(|(col, op, val)| {
+                    cell_matches(&cell_value(doc, rec, *col).unwrap_or_default(), op, val)
+                })
+            });
+        }
+    }
+
+    // Optional numeric-aware sort.
+    if let Some(sort) = req.get("sort").filter(|s| s.is_object()) {
+        let col = sort.get("col").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if col >= 0 {
+            let col = col as usize;
+            let desc = sort.get("dir").and_then(|v| v.as_str()) == Some("desc");
+            rows.sort_by(|&a, &b| {
+                let ord = sort_key(&cell_value(doc, a, col).unwrap_or_default())
+                    .partial_cmp(&sort_key(&cell_value(doc, b, col).unwrap_or_default()))
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if desc { ord.reverse() } else { ord }
+            });
+        }
+    }
+
+    let total = rows.len() as i64;
     let mut out: Vec<Value> = Vec::new();
-    for (i, rec) in doc
-        .index
-        .children(root)
-        .skip(offset)
-        .take(limit)
-        .enumerate()
-    {
+    for (i, &rec) in rows.iter().skip(offset).take(limit).enumerate() {
         let cells: Vec<Value> = doc
             .index
             .children(rec)
@@ -897,5 +965,30 @@ fn op_table(doc: &Doc, req: &Value) -> Result<Value, String> {
             .collect();
         out.push(json!({"id": rec as i64, "ord": (offset + i) as i64, "cells": cells}));
     }
-    Ok(json!({"rows": out}))
+    Ok(json!({"rows": out, "total": total}))
+}
+
+#[cfg(test)]
+mod table_filter_tests {
+    use super::{cell_matches, sort_key};
+
+    #[test]
+    fn matches_ops() {
+        assert!(cell_matches("banana", "contains", "AN")); // case-insensitive
+        assert!(cell_matches("apple", "equals", "apple"));
+        assert!(!cell_matches("apple", "equals", "Apple")); // equals is case-sensitive
+        assert!(cell_matches("apple", "starts-with", "APP"));
+        assert!(cell_matches("10", "gt", "2"));   // numeric, not lexicographic
+        assert!(cell_matches("2", "lt", "10"));
+        assert!(cell_matches("5", "between", "1,9"));
+        assert!(!cell_matches("12", "between", "1,9"));
+    }
+
+    #[test]
+    fn numeric_sort_key_order() {
+        // "2" sorts before "10" numerically (lexicographic would reverse it)
+        assert!(sort_key("2") < sort_key("10"));
+        // non-numeric collapse to 0.0 then compare text
+        assert!(sort_key("apple") < sort_key("banana"));
+    }
 }
