@@ -122,6 +122,7 @@ fn handle(conn: &Connection, db_path: &str, req: &Value) -> Result<Value, String
         "table" => op_table(conn, req),
         "distinct" => op_distinct(conn, req),
         "profile" => op_profile(conn, req),
+        "export" => op_export(conn, req),
         "subtree" => op_subtree(conn, req),
         "stats" => op_stats(conn, req),
         "schema" => op_schema(conn, req),
@@ -1052,6 +1053,93 @@ fn op_profile(conn: &Connection, req: &Value) -> Result<Value, String> {
         }));
     }
     Ok(json!({"columns": cols, "total_rows": total_rows}))
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+// Export the visible columns + filtered/sorted rows as CSV or JSON text (capped).
+fn op_export(conn: &Connection, req: &Value) -> Result<Value, String> {
+    let node = geti(req, "node", 1);
+    let fmt = gets(req, "format", "csv");
+    let cap: i64 = 2_000_000;
+    let cols: Vec<(i64, String)> = req
+        .get("cols")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    let ord = c.get("ord").and_then(|v| v.as_i64())?;
+                    Some((ord, c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let (where_sql, binds) = build_filter_where(node, req);
+    let (join_sql, order_by) = match req.get("sort").filter(|s| s.is_object()) {
+        Some(sort) => {
+            let col = sort.get("col").and_then(|v| v.as_i64()).unwrap_or(-1);
+            let dir = if sort.get("dir").and_then(|v| v.as_str()) == Some("desc") { "DESC" } else { "ASC" };
+            if col >= 0 {
+                (format!("LEFT JOIN nodes sc ON sc.parent_id=r.id AND sc.ord={}", col),
+                 format!("CAST(sc.value AS REAL) {}, sc.value COLLATE NOCASE {}", dir, dir))
+            } else { (String::new(), "r.ord".to_string()) }
+        }
+        None => (String::new(), "r.ord".to_string()),
+    };
+
+    let mut row_ids: Vec<i64> = Vec::new();
+    {
+        let sql = format!("SELECT r.id FROM nodes r {} WHERE {} ORDER BY {} LIMIT {}", join_sql, where_sql, order_by, cap);
+        let mut st = conn.prepare(&sql).map_err(es)?;
+        let mut rows = st.query(params_from_iter(binds.iter())).map_err(es)?;
+        while let Some(row) = rows.next().map_err(es)? {
+            row_ids.push(row.get(0).map_err(es)?);
+        }
+    }
+
+    let mut cellq = conn.prepare_cached("SELECT ord, value FROM nodes WHERE parent_id=?1").map_err(es)?;
+    let mut out = String::new();
+    if fmt == "json" {
+        out.push('[');
+        for (ri, rid) in row_ids.iter().enumerate() {
+            let mut map = std::collections::HashMap::new();
+            let mut cq = cellq.query(params![rid]).map_err(es)?;
+            while let Some(c) = cq.next().map_err(es)? {
+                let ord: i64 = c.get(0).map_err(es)?;
+                let v: Option<String> = c.get(1).map_err(es)?;
+                map.insert(ord, v.unwrap_or_default());
+            }
+            if ri > 0 { out.push(','); }
+            let mut obj = serde_json::Map::new();
+            for (ord, name) in &cols {
+                obj.insert(name.clone(), Value::String(map.get(ord).cloned().unwrap_or_default()));
+            }
+            out.push_str(&serde_json::to_string(&Value::Object(obj)).unwrap_or_default());
+        }
+        out.push(']');
+    } else {
+        out.push_str(&cols.iter().map(|(_, n)| csv_field(n)).collect::<Vec<_>>().join(","));
+        out.push('\n');
+        for rid in &row_ids {
+            let mut map = std::collections::HashMap::new();
+            let mut cq = cellq.query(params![rid]).map_err(es)?;
+            while let Some(c) = cq.next().map_err(es)? {
+                let ord: i64 = c.get(0).map_err(es)?;
+                let v: Option<String> = c.get(1).map_err(es)?;
+                map.insert(ord, v.unwrap_or_default());
+            }
+            out.push_str(&cols.iter().map(|(ord, _)| csv_field(map.get(ord).map(|s| s.as_str()).unwrap_or(""))).collect::<Vec<_>>().join(","));
+            out.push('\n');
+        }
+    }
+    Ok(json!({"text": out, "rows": row_ids.len() as i64, "truncated": row_ids.len() as i64 >= cap}))
 }
 
 // ==================================================================

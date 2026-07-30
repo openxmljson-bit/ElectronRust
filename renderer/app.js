@@ -2139,9 +2139,29 @@ $('btn-cols-none').addEventListener('click', () => {
   t.colHidden = new Set(t.colOrder.slice(1));
   afterColChange(t);
 });
-// Streaming export lands with the Rust engine phase; keep the enablement rule live.
-$('btn-export-csv').addEventListener('click', () => toast('Streaming export arrives with the engine update'));
-$('btn-export-json').addEventListener('click', () => toast('Streaming export arrives with the engine update'));
+$('btn-export-csv').addEventListener('click', () => { if (cur) runTableExport(cur, 'csv'); });
+$('btn-export-json').addEventListener('click', () => { if (cur) runTableExport(cur, 'json'); });
+
+// Export the visible columns + filtered/sorted rows via the engine, into a new tab.
+async function runTableExport(t, fmt) {
+  try {
+    toast('Exporting…', true);
+    const cols = visCols(t).map((c) => ({ ord: c, name: t.tableHeaders[c] }));
+    const res = await window.oxj.query(t.id, {
+      op: 'export', node: 1, format: fmt, cols,
+      filters: (t.tableFilters && t.tableFilters.length) ? t.tableFilters : undefined,
+      sort: t.tableSort || undefined,
+    });
+    const file = await window.oxj.textToFile('oxj_export', fmt, res.text);
+    const nt = newTab(true);
+    if (nt) openPath(file, nt);
+    toast('Exported ' + fmtInt(res.rows) + ' row(s)' + (res.truncated ? ' (capped at 2M)' : ''), true);
+  } catch (err) {
+    const msg = cleanErr(err);
+    if (msg.includes('unknown op')) toast('Export needs an engine rebuild (npm run build:engine), then restart');
+    else toast('Export failed: ' + msg);
+  }
+}
 
 // ---------- Monaco source panel ----------
 function initMonaco() {

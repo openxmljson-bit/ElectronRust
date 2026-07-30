@@ -303,6 +303,7 @@ fn handle(doc: &Doc, req: &Value) -> Result<Value, String> {
         "table" => op_table(doc, req),
         "distinct" => op_distinct(doc, req),
         "profile" => op_profile(doc, req),
+        "export" => op_export(doc, req),
         "schema" | "validate" => Err(String::from(
             "this tool needs database mode (very large files); reopen via Engine Mode → Always Database",
         )),
@@ -1022,6 +1023,72 @@ fn op_profile(doc: &Doc, _req: &Value) -> Result<Value, String> {
         }));
     }
     Ok(json!({"columns": cols, "total_rows": total_rows}))
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn op_export(doc: &Doc, req: &Value) -> Result<Value, String> {
+    let fmt = gets(req, "format", "csv");
+    let cap: usize = 2_000_000;
+    let cols: Vec<(usize, String)> = req
+        .get("cols")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    let ord = c.get("ord").and_then(|v| v.as_i64())?;
+                    Some((ord as usize, c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let root = doc.index.root();
+    let mut rows: Vec<u32> = doc.index.children(root).collect();
+    apply_filters(doc, &mut rows, req);
+    if let Some(sort) = req.get("sort").filter(|s| s.is_object()) {
+        let col = sort.get("col").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if col >= 0 {
+            let col = col as usize;
+            let desc = sort.get("dir").and_then(|v| v.as_str()) == Some("desc");
+            rows.sort_by(|&a, &b| {
+                let ord = sort_key(&cell_value(doc, a, col).unwrap_or_default())
+                    .partial_cmp(&sort_key(&cell_value(doc, b, col).unwrap_or_default()))
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if desc { ord.reverse() } else { ord }
+            });
+        }
+    }
+    let truncated = rows.len() > cap;
+    rows.truncate(cap);
+
+    let mut out = String::new();
+    if fmt == "json" {
+        out.push('[');
+        for (ri, &rec) in rows.iter().enumerate() {
+            if ri > 0 { out.push(','); }
+            let mut obj = serde_json::Map::new();
+            for (ord, name) in &cols {
+                obj.insert(name.clone(), Value::String(cell_value(doc, rec, *ord).unwrap_or_default()));
+            }
+            out.push_str(&serde_json::to_string(&Value::Object(obj)).unwrap_or_default());
+        }
+        out.push(']');
+    } else {
+        out.push_str(&cols.iter().map(|(_, n)| csv_field(n)).collect::<Vec<_>>().join(","));
+        out.push('\n');
+        for &rec in &rows {
+            out.push_str(&cols.iter().map(|(ord, _)| csv_field(&cell_value(doc, rec, *ord).unwrap_or_default())).collect::<Vec<_>>().join(","));
+            out.push('\n');
+        }
+    }
+    Ok(json!({"text": out, "rows": rows.len() as i64, "truncated": truncated}))
 }
 
 fn op_table(doc: &Doc, req: &Value) -> Result<Value, String> {
