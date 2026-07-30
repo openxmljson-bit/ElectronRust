@@ -10,6 +10,7 @@ mod diff;
 mod ftsindex;
 mod json;
 mod progress;
+mod project;
 mod reader;
 mod serve;
 mod serve_mem;
@@ -171,6 +172,45 @@ fn main() {
                 exit(2);
             }
             if let Err(e) = serve::serve(&dbp) {
+                emit_error(&e);
+                exit(1);
+            }
+        }
+        "project" => {
+            let mut file = String::new();
+            let mut format = String::from("auto");
+            let mut paths = String::new();
+            let mut out = String::new();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--file" => {
+                        i += 1;
+                        file = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--format" => {
+                        i += 1;
+                        format = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--paths" => {
+                        i += 1;
+                        paths = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--out" => {
+                        i += 1;
+                        out = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--pretty" => {}
+                    _ => {}
+                }
+                i += 1;
+            }
+            if file.is_empty() || paths.is_empty() || out.is_empty() {
+                emit_error("project requires --file <src> --paths <file> --out <path>");
+                exit(2);
+            }
+            if let Err(e) = project::run_project(&file, &format, &paths, &out) {
+                let _ = std::fs::remove_file(&out);
                 emit_error(&e);
                 exit(1);
             }
