@@ -539,13 +539,13 @@ async function decideMode(filePath) {
   return 'db';
 }
 
-function startServe(tabId, dbPath, wc, file, mode) {
+function startServe(tabId, dbPath, wc, file, mode, format) {
   return new Promise((resolve, reject) => {
     killSession(tabId);
     const bin = engineBin();
     if (!bin) return reject(new Error('Engine binary not found. Run: npm run build:engine'));
     const args = mode === 'memory'
-      ? ['serve-mem', '--file', file]
+      ? ['serve-mem', '--file', file, ...(format ? ['--format', format] : [])]
       : ['serve', '--db', dbPath];
     const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const s = { proc, pending: new Map(), file, dbPath, wc, mode: mode || 'db' };
@@ -625,7 +625,7 @@ function queryRaw(tabId, payload) {
   });
 }
 
-async function loadFile(wc, tabId, filePath, force) {
+async function loadFile(wc, tabId, filePath, force, fileFormat) {
   const t0 = Date.now();
   const bin = engineBin();
   if (!bin) throw new Error('Engine binary not found. Run: npm run build:engine');
@@ -646,7 +646,7 @@ async function loadFile(wc, tabId, filePath, force) {
         wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
         wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
       }
-      await startServe(tabId, null, wc, enginePath, 'memory');
+      await startServe(tabId, null, wc, enginePath, 'memory', fileFormat);
       const meta = await query(tabId, { op: 'meta' });
       bumpStat(meta.format);
       if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
@@ -670,7 +670,9 @@ async function loadFile(wc, tabId, filePath, force) {
     return;
   }
 
-  const proc = spawn(bin, ['ingest', enginePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ingestArgs = ['ingest', enginePath, '--db', dbPath];
+  if (fileFormat) ingestArgs.push('--format', fileFormat);
+  const proc = spawn(bin, ingestArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   const g = { proc, dbPath, wc, file: filePath };
   ingests.set(tabId, g);
   const rl = readline.createInterface({ input: proc.stdout });
@@ -860,6 +862,7 @@ function buildMenu() {
         { label: 'New Window', accelerator: 'Shift+CmdOrCtrl+N', click: () => createWindow() },
         { type: 'separator' },
         { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: (mi, bw) => sendMenu(bw, 'open') },
+        { label: 'Open Delimited File as Table…', click: (mi, bw) => sendMenu(bw, 'open-delimited') },
         { label: 'Open URL…', accelerator: 'Alt+Shift+O', click: (mi, bw) => sendMenu(bw, 'open-url') },
         { label: 'Open Clipboard', accelerator: 'Shift+CmdOrCtrl+V', click: (mi, bw) => sendMenu(bw, 'open-clipboard') },
         {
@@ -1065,8 +1068,8 @@ app.whenReady().then(() => {
     return res.filePaths[0];
   });
 
-  ipcMain.handle('load-file', async (e, { tabId, path: p, force }) => {
-    try { await loadFile(e.sender, tabId, p, !!force); return ok(true); }
+  ipcMain.handle('load-file', async (e, { tabId, path: p, force, format }) => {
+    try { await loadFile(e.sender, tabId, p, !!force, format || null); return ok(true); }
     catch (err) { return fail(err); }
   });
 

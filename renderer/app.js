@@ -732,30 +732,33 @@ function targetTabForOpen() {
 
 const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 
-async function openPath(p, tab, force) {
+async function openPath(p, tab, force, opts) {
+  const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table
   const ext = String(p).split('.').pop().toLowerCase();
   if (BLOCKED_EXTS.includes(ext)) {
     toast('Excel files are not supported — export to CSV or JSON first');
     return;
   }
   // YAML loads as a structured tree (converted to JSON by the engine); other
-  // plain-text languages open read-only. (Raw File still opens YAML read-only.)
+  // plain-text languages open read-only. A forced format (fmt) skips that so a
+  // .txt can load as a table. (Raw File still opens the original read-only.)
   const isYaml = ext === 'yaml' || ext === 'yml';
   const lang = plainLangFor(p);
-  if (lang && !isYaml) return openPlainPath(p, tab, lang);
+  if (lang && !isYaml && !fmt) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();
   if (!t) return; // tab limit reached
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
   t.plain = null;
   t.plainText = null;
   t.file = p;
+  t.forcedFormat = fmt || null; // remembered so reload keeps the table view
   t.title = baseName(p);
   t.phase = 'loading';
   t.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
   try {
-    await window.oxj.loadFile(t.id, p, !!force);
+    await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
@@ -765,6 +768,9 @@ async function openPath(p, tab, force) {
   }
   return t;
 }
+
+// Open any file forcing the CSV table view (engine sniffs comma/;/tab/pipe).
+function openAsCsv(p) { return openPath(p, null, false, { format: 'csv' }); }
 
 $('btn-open').addEventListener('click', async () => {
   const p = await window.oxj.pickFile();
@@ -2576,6 +2582,11 @@ window.oxj.onMenu(async ({ action, arg }) => {
       if (p) openPath(p);
       break;
     }
+    case 'open-delimited': {
+      const p = await window.oxj.pickFile();
+      if (p) openAsCsv(p);
+      break;
+    }
     case 'open-path':
       if (arg) openPath(arg);
       break;
@@ -2591,7 +2602,7 @@ window.oxj.onMenu(async ({ action, arg }) => {
       }
       break;
     case 'reload-tab':
-      if (cur && cur.file) openPath(cur.file, cur, true);
+      if (cur && cur.file) openPath(cur.file, cur, true, cur.forcedFormat ? { format: cur.forcedFormat } : undefined);
       break;
     case 'duplicate-tab': {
       // Capture the source file BEFORE creating the tab — newTab() switches
