@@ -53,7 +53,21 @@ const FULL_FILE_MAX = 450 * 1024 * 1024; // read cap for the Full File tab (V8 s
 // Arabic/Windows feeds) which would otherwise make JSON.parse throw. Unicode
 // (Arabic, etc.) is preserved as-is by JSON.stringify.
 function prettyJsonText(src) {
-  return JSON.stringify(JSON.parse(src.replace(/^\uFEFF/, '')), null, 2);
+  const s = src.replace(/^\uFEFF/, '');
+  try {
+    // A single JSON value (object/array) \u2014 pretty-print the whole thing.
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch { /* not one value \u2014 try NDJSON (one object per line) */ }
+  const out = [];
+  let count = 0;
+  for (const ln of s.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (!t) continue;
+    out.push(JSON.stringify(JSON.parse(t), null, 2)); // throws on a bad line \u2192 caller keeps raw
+    count++;
+  }
+  if (!count) throw new Error('nothing to format');
+  return out.join('\n');
 }
 
 // A doc is "not fully pretty-printed" (worth reformatting) when its average
