@@ -527,14 +527,21 @@ function killIngest(tabId, deleteDb) {
 const MEM_MAX_BYTES = 64 * 1024 * 1024 * 1024; // absolute safety ceiling (raised for testing)
 const MEM_FREE_FRACTION = 2.5;                 // up to 2.5× available RAM (mmap pages on demand; testing)
 
-async function decideMode(filePath) {
+async function decideMode(filePath, format) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
   try {
     const size = fs.statSync(filePath).size;
     const avail = await availableMemBytes();
-    if (size <= MEM_MAX_BYTES && size <= avail * MEM_FREE_FRACTION) return 'memory';
+    if (size > MEM_MAX_BYTES) return 'db';
+    // Delimited files explode in the in-memory index (many tiny cell nodes at
+    // ~24 bytes each), so the index — not the file — must fit in RAM. Estimate
+    // ~5× the file and require it to sit in ~60% of available memory.
+    const ext = path.extname(filePath).toLowerCase();
+    const isDelim = format === 'csv' || format === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(ext);
+    if (isDelim) return (size * 5 <= avail * 0.6) ? 'memory' : 'db';
+    if (size <= avail * MEM_FREE_FRACTION) return 'memory';
   } catch {}
   return 'db';
 }
@@ -638,7 +645,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
 
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(enginePath)) === 'memory') {
+  if ((await decideMode(enginePath, fileFormat)) === 'memory') {
     try {
       let size = 0;
       try { size = fs.statSync(enginePath).size; } catch {}
