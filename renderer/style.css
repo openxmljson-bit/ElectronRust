@@ -43,6 +43,10 @@ body.light .tabbar { background: #e4e6ea; }
 body.light .btn-primary { color: #fff; }
 body.light .trow:hover { background: rgba(0,0,0,.045); }
 body.light .trow.zebra { background: rgba(0,0,0,.025); }
+/* Selection must outrank zebra/hover in light theme (higher specificity). */
+body.light .trow.selected,
+body.light .trow.zebra.selected,
+body.light .trow.selected:hover { background: var(--sel); }
 body.light .table-row.zebra { background: rgba(0,0,0,.02); }
 body.light .table-row:hover { background: rgba(0,0,0,.05); }
 body.light .stat-track { background: #d9dde4; }
