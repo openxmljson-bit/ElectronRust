@@ -1812,6 +1812,8 @@ function showHeaderMenu(e, t, c) {
   if (hasFilter) items.push({ label: 'Clear this filter', action: () => { t.tableFilters = t.tableFilters.filter((f) => f.col !== c); applyTableView(t); } });
   items.push(
     { sep: true },
+    { label: 'Column coverage "' + t.tableHeaders[c] + '"…', action: () => openCoverageDialog(t, c) },
+    { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
     { sep: true },
@@ -1982,6 +1984,149 @@ function openFilterDialog(t, presetCol) {
 $('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
 $('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
 $('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
+$('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
+
+// ---------- coverage / profile reports (light overlay, like the diff report) ----------
+function reportOverlay(titleText, subtitleHtml) {
+  const overlay = document.createElement('div');
+  overlay.className = 'diff-overlay';
+  const page = document.createElement('div');
+  page.className = 'diff-report';
+  overlay.appendChild(page);
+  const head = document.createElement('div');
+  head.className = 'diff-head';
+  head.innerHTML = '<button class="diff-x" title="Close">✕</button><div class="diff-title">' + htmlEsc(titleText) + '</div>' +
+    (subtitleHtml ? '<div class="diff-files">' + subtitleHtml + '</div>' : '');
+  head.querySelector('.diff-x').addEventListener('click', () => overlay.remove());
+  page.appendChild(head);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  const onEsc = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(overlay);
+  return { overlay, page };
+}
+
+function openCoverageDialog(t, col) {
+  const { back, box } = simpleModal('Column coverage — ' + t.tableHeaders[col]);
+  const opt = (id, label, checked) => {
+    const l = document.createElement('label'); l.className = 'cov-opt';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = id; cb.checked = checked;
+    const s = document.createElement('span'); s.textContent = label;
+    l.append(cb, s); return l;
+  };
+  const ci = opt('cov-ci', 'Case-insensitive', false);
+  const trim = opt('cov-trim', 'Trim whitespace', false);
+  const row = document.createElement('div'); row.className = 'modal-row';
+  const tl = document.createElement('label'); tl.textContent = 'Top N';
+  const topIn = document.createElement('input'); topIn.type = 'text'; topIn.value = '1000'; topIn.style.width = '80px';
+  row.append(tl, topIn);
+  box.append(ci, trim, row);
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Compute';
+  ok.onclick = () => {
+    back.remove();
+    runCoverage(t, col, {
+      ci: ci.querySelector('input').checked,
+      trim: trim.querySelector('input').checked,
+      top: Math.max(1, parseInt(topIn.value, 10) || 1000),
+    });
+  };
+  actions.append(cancel, ok); box.appendChild(actions);
+}
+
+async function runCoverage(t, col, opts) {
+  try {
+    toast('Computing coverage…', true);
+    const res = await window.oxj.query(t.id, {
+      op: 'distinct', node: 1, col, top: opts.top, ci: opts.ci, trim: opts.trim,
+      filters: (t.tableFilters && t.tableFilters.length) ? t.tableFilters : undefined,
+    });
+    showCoverageReport(t, col, res);
+  } catch (err) {
+    const msg = cleanErr(err);
+    if (msg.includes('unknown op')) toast('Coverage needs an engine rebuild (npm run build:engine), then restart');
+    else toast('Coverage failed: ' + msg);
+  }
+}
+
+function showCoverageReport(t, col, res) {
+  const total = Number(res.total_rows) || 0;
+  const uniq = total ? (100 * Number(res.distinct) / total).toFixed(1) : '0';
+  let sub = '<span>' + htmlEsc(t.tableHeaders[col]) + '</span><span>' + fmtInt(res.distinct) + ' distinct of ' + fmtInt(total) + ' rows (' + uniq + '% unique)</span>';
+  if (res.numeric) sub += '<span>min ' + res.numeric.min + ' · max ' + res.numeric.max + ' · mean ' + Number(res.numeric.mean).toFixed(2) + '</span>';
+  const { page } = reportOverlay('Column Coverage', sub);
+  const bar = document.createElement('div'); bar.className = 'diff-bar';
+  const save = document.createElement('button'); save.className = 'btn-tool'; save.textContent = 'Save As CSV';
+  save.onclick = async () => {
+    const lines = ['value,count,cumulative_%'];
+    let cum = 0;
+    for (const it of res.items) { cum += it.count; lines.push([csvCell(it.value == null ? '' : String(it.value), ','), it.count, total ? (100 * cum / total).toFixed(2) : '0'].join(',')); }
+    const saved = await window.oxj.saveText(stampName('coverage_' + t.tableHeaders[col], 'csv'), lines.join('\n'));
+    if (saved) toast('Saved ' + baseName(saved), true);
+  };
+  const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+  bar.append(save, close); page.appendChild(bar);
+
+  const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+  const max = res.items.reduce((m, it) => Math.max(m, it.count), 1);
+  let cum = 0;
+  let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-val">Value</div><div class="cov-td c-num">Count</div><div class="cov-td c-num">Cum %</div><div class="cov-td c-bar">Share</div></div>';
+  for (const it of res.items) {
+    cum += it.count;
+    const pct = total ? (100 * cum / total).toFixed(1) : '0';
+    const w = (100 * it.count / max).toFixed(1);
+    html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(it.value == null ? '(empty)' : it.value) + '</div>' +
+      '<div class="cov-td c-num">' + fmtInt(it.count) + '</div><div class="cov-td c-num">' + pct + '%</div>' +
+      '<div class="cov-td c-bar"><div class="cov-bar" style="width:' + w + '%"></div></div></div>';
+  }
+  wrap.innerHTML = html + '</div>';
+  page.appendChild(wrap);
+}
+
+async function runProfile(t) {
+  try {
+    toast('Profiling columns…', true);
+    const res = await window.oxj.query(t.id, { op: 'profile', node: 1 });
+    showProfileReport(t, res);
+  } catch (err) {
+    const msg = cleanErr(err);
+    if (msg.includes('unknown op')) toast('Profile needs an engine rebuild (npm run build:engine), then restart');
+    else toast('Profile failed: ' + msg);
+  }
+}
+
+function showProfileReport(t, res) {
+  const total = Number(res.total_rows) || 0;
+  const { page } = reportOverlay('Column Profile', '<span>' + htmlEsc(baseName(t.file || t.title)) + '</span><span>' + fmtInt(total) + ' rows · ' + res.columns.length + ' columns</span>');
+  const bar = document.createElement('div'); bar.className = 'diff-bar';
+  const save = document.createElement('button'); save.className = 'btn-tool'; save.textContent = 'Save As CSV';
+  save.onclick = async () => {
+    const lines = ['column,distinct,non_empty,empty,fill_%,top_value,top_%'];
+    for (const c of res.columns) {
+      const fill = total ? (100 * c.non_empty / total).toFixed(1) : '0';
+      const topPct = total ? (100 * c.top_count / total).toFixed(1) : '0';
+      lines.push([csvCell(c.column, ','), c.distinct, c.non_empty, c.empty, fill, csvCell(c.top_value == null ? '' : String(c.top_value), ','), topPct].join(','));
+    }
+    const saved = await window.oxj.saveText(stampName('profile_' + baseName(t.file || 'table'), 'csv'), lines.join('\n'));
+    if (saved) toast('Saved ' + baseName(saved), true);
+  };
+  const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+  bar.append(save, close); page.appendChild(bar);
+
+  const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+  let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-val">Column</div><div class="cov-td c-num">Distinct</div><div class="cov-td c-num">Non-empty</div><div class="cov-td c-num">Empty</div><div class="cov-td c-num">Fill %</div><div class="cov-td c-val">Top value</div><div class="cov-td c-num">Top %</div></div>';
+  for (const c of res.columns) {
+    const fill = total ? (100 * c.non_empty / total).toFixed(1) : '0';
+    const topPct = total ? (100 * c.top_count / total).toFixed(1) : '0';
+    html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(c.column) + '</div>' +
+      '<div class="cov-td c-num">' + fmtInt(c.distinct) + '</div><div class="cov-td c-num">' + fmtInt(c.non_empty) + '</div>' +
+      '<div class="cov-td c-num">' + fmtInt(c.empty) + '</div><div class="cov-td c-num">' + fill + '%</div>' +
+      '<div class="cov-td c-val">' + htmlEsc(c.top_value == null ? '' : c.top_value) + '</div><div class="cov-td c-num">' + topPct + '%</div></div>';
+  }
+  wrap.innerHTML = html + '</div>';
+  page.appendChild(wrap);
+}
 
 $('btn-cols').addEventListener('click', toggleColumnsPanel);
 $('btn-cols-close').addEventListener('click', toggleColumnsPanel);

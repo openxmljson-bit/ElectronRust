@@ -301,6 +301,8 @@ fn handle(doc: &Doc, req: &Value) -> Result<Value, String> {
         "subtree" => op_subtree(doc, req),
         "stats" => op_stats(doc, req),
         "table" => op_table(doc, req),
+        "distinct" => op_distinct(doc, req),
+        "profile" => op_profile(doc, req),
         "schema" | "validate" => Err(String::from(
             "this tool needs database mode (very large files); reopen via Engine Mode → Always Database",
         )),
@@ -908,34 +910,126 @@ fn cell_value(doc: &Doc, rec: u32, col: usize) -> Option<String> {
     doc.index.children(rec).nth(col).and_then(|k| doc.row_parts(k).2)
 }
 
+// Column header names = the first record's key names (same as op_meta).
+fn doc_headers(doc: &Doc) -> Vec<String> {
+    let root = doc.index.root();
+    doc.index
+        .children(root)
+        .next()
+        .map(|rec| doc.index.children(rec).map(|k| doc.key_name(k)).collect())
+        .unwrap_or_default()
+}
+
+// Apply the request's `filters` (AND) to a row list in place.
+fn apply_filters(doc: &Doc, rows: &mut Vec<u32>, req: &Value) {
+    let filters: Vec<(usize, String, String)> = req
+        .get("filters")
+        .and_then(|v| v.as_array())
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| {
+                    let col = f.get("col").and_then(|v| v.as_i64())?;
+                    if col < 0 { return None; }
+                    Some((
+                        col as usize,
+                        f.get("op").and_then(|v| v.as_str()).unwrap_or("contains").to_string(),
+                        f.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if filters.is_empty() {
+        return;
+    }
+    rows.retain(|&rec| {
+        filters.iter().all(|(col, op, val)| {
+            cell_matches(&cell_value(doc, rec, *col).unwrap_or_default(), op, val)
+        })
+    });
+}
+
+fn op_distinct(doc: &Doc, req: &Value) -> Result<Value, String> {
+    use std::collections::HashMap;
+    let col = geti(req, "col", 0).max(0) as usize;
+    let top = geti(req, "top", 1000).clamp(1, 100_000) as usize;
+    let ci = req.get("ci").and_then(|v| v.as_bool()).unwrap_or(false);
+    let trim = req.get("trim").and_then(|v| v.as_bool()).unwrap_or(false);
+    let root = doc.index.root();
+    let mut rows: Vec<u32> = doc.index.children(root).collect();
+    apply_filters(doc, &mut rows, req);
+    let total_rows = rows.len() as i64;
+
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    let mut nonempty = 0i64;
+    let mut numeric = 0i64;
+    let (mut nmin, mut nmax, mut nsum) = (f64::INFINITY, f64::NEG_INFINITY, 0.0);
+    for &rec in &rows {
+        let mut k = cell_value(doc, rec, col).unwrap_or_default();
+        if trim { k = k.trim().to_string(); }
+        if ci { k = k.to_lowercase(); }
+        if !k.is_empty() {
+            nonempty += 1;
+            if let Ok(f) = k.trim().parse::<f64>() {
+                numeric += 1;
+                nmin = nmin.min(f);
+                nmax = nmax.max(f);
+                nsum += f;
+            }
+        }
+        *counts.entry(k).or_insert(0) += 1;
+    }
+    let distinct = counts.len() as i64;
+    let mut pairs: Vec<(String, i64)> = counts.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    pairs.truncate(top);
+    let items: Vec<Value> = pairs.into_iter().map(|(v, c)| json!({"value": v, "count": c})).collect();
+    let num_block = if nonempty > 0 && (numeric as f64) / (nonempty as f64) >= 0.8 {
+        json!({"min": nmin, "max": nmax, "mean": nsum / (numeric as f64)})
+    } else {
+        Value::Null
+    };
+    Ok(json!({"items": items, "total_rows": total_rows, "distinct": distinct, "numeric": num_block}))
+}
+
+fn op_profile(doc: &Doc, _req: &Value) -> Result<Value, String> {
+    use std::collections::HashMap;
+    let headers: Vec<String> = doc_headers(doc);
+    let root = doc.index.root();
+    let rows: Vec<u32> = doc.index.children(root).collect();
+    let total_rows = rows.len() as i64;
+    let mut cols: Vec<Value> = Vec::new();
+    for (c, name) in headers.iter().enumerate() {
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        let mut non_empty = 0i64;
+        for &rec in &rows {
+            let v = cell_value(doc, rec, c).unwrap_or_default();
+            if !v.is_empty() {
+                non_empty += 1;
+                *counts.entry(v).or_insert(0) += 1;
+            }
+        }
+        let distinct = counts.len() as i64;
+        let (top_value, top_count) = counts
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+            .map(|(v, c)| (Value::String(v), c))
+            .unwrap_or((Value::Null, 0));
+        cols.push(json!({
+            "column": name, "distinct": distinct,
+            "non_empty": non_empty, "empty": total_rows - non_empty,
+            "top_value": top_value, "top_count": top_count
+        }));
+    }
+    Ok(json!({"columns": cols, "total_rows": total_rows}))
+}
+
 fn op_table(doc: &Doc, req: &Value) -> Result<Value, String> {
     let offset = geti(req, "offset", 0).max(0) as usize;
     let limit = geti(req, "limit", 100).clamp(1, 500) as usize;
     let root = doc.index.root();
     let mut rows: Vec<u32> = doc.index.children(root).collect();
-
-    // Filters (combined with AND).
-    if let Some(fs) = req.get("filters").and_then(|v| v.as_array()) {
-        let filters: Vec<(usize, String, String)> = fs
-            .iter()
-            .filter_map(|f| {
-                let col = f.get("col").and_then(|v| v.as_i64())?;
-                if col < 0 { return None; }
-                Some((
-                    col as usize,
-                    f.get("op").and_then(|v| v.as_str()).unwrap_or("contains").to_string(),
-                    f.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                ))
-            })
-            .collect();
-        if !filters.is_empty() {
-            rows.retain(|&rec| {
-                filters.iter().all(|(col, op, val)| {
-                    cell_matches(&cell_value(doc, rec, *col).unwrap_or_default(), op, val)
-                })
-            });
-        }
-    }
+    apply_filters(doc, &mut rows, req);
 
     // Optional numeric-aware sort.
     if let Some(sort) = req.get("sort").filter(|s| s.is_object()) {

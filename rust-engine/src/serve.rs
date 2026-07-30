@@ -120,6 +120,8 @@ fn handle(conn: &Connection, db_path: &str, req: &Value) -> Result<Value, String
         "path" => op_path(conn, req),
         "search" => op_search(conn, db_path, req),
         "table" => op_table(conn, req),
+        "distinct" => op_distinct(conn, req),
+        "profile" => op_profile(conn, req),
         "subtree" => op_subtree(conn, req),
         "stats" => op_stats(conn, req),
         "schema" => op_schema(conn, req),
@@ -948,6 +950,108 @@ fn op_table(conn: &Connection, req: &Value) -> Result<Value, String> {
         out.push(json!({"id": rid, "ord": ord, "cells": cells}));
     }
     Ok(json!({"rows": out, "total": total}))
+}
+
+// Column coverage: distinct values of one column over the filtered rows, with
+// counts (desc), plus distinct/total and optional numeric stats.
+fn op_distinct(conn: &Connection, req: &Value) -> Result<Value, String> {
+    let node = geti(req, "node", 1);
+    let col = geti(req, "col", 0);
+    let top = geti(req, "top", 1000).clamp(1, 100_000);
+    let ci = req.get("ci").and_then(|v| v.as_bool()).unwrap_or(false);
+    let trim = req.get("trim").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (where_sql, binds) = build_filter_where(node, req);
+
+    let mut expr = String::from("c.value");
+    if trim { expr = format!("TRIM({})", expr); }
+    if ci { expr = format!("LOWER({})", expr); }
+    let base = format!(
+        "SELECT {} AS k FROM nodes r JOIN nodes c ON c.parent_id=r.id AND c.ord={} WHERE {}",
+        expr, col, where_sql
+    );
+
+    let total_rows: i64 = {
+        let sql = format!("SELECT COUNT(*) FROM nodes r WHERE {}", where_sql);
+        conn.prepare(&sql).map_err(es)?.query_row(params_from_iter(binds.iter()), |r| r.get(0)).map_err(es)?
+    };
+    let distinct: i64 = {
+        let sql = format!("SELECT COUNT(DISTINCT k) FROM ({})", base);
+        conn.prepare(&sql).map_err(es)?.query_row(params_from_iter(binds.iter()), |r| r.get(0)).map_err(es)?
+    };
+
+    let mut items: Vec<Value> = Vec::new();
+    {
+        let sql = format!("SELECT k, COUNT(*) FROM ({}) GROUP BY k ORDER BY COUNT(*) DESC, k LIMIT {}", base, top);
+        let mut st = conn.prepare(&sql).map_err(es)?;
+        let mut rows = st.query(params_from_iter(binds.iter())).map_err(es)?;
+        while let Some(row) = rows.next().map_err(es)? {
+            items.push(json!({
+                "value": row.get::<_, Option<String>>(0).map_err(es)?,
+                "count": row.get::<_, i64>(1).map_err(es)?
+            }));
+        }
+    }
+
+    let numeric = {
+        let sql = format!(
+            "SELECT SUM(CASE WHEN k IS NOT NULL AND k<>'' THEN 1 ELSE 0 END), \
+             SUM(CASE WHEN k GLOB '-[0-9]*' OR k GLOB '[0-9]*' OR k GLOB '.[0-9]*' THEN 1 ELSE 0 END), \
+             MIN(CAST(k AS REAL)), MAX(CAST(k AS REAL)), AVG(CAST(k AS REAL)) FROM ({})",
+            base
+        );
+        let row: (Option<i64>, Option<i64>, Option<f64>, Option<f64>, Option<f64>) =
+            conn.prepare(&sql).map_err(es)?
+                .query_row(params_from_iter(binds.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+                .map_err(es)?;
+        let nonempty = row.0.unwrap_or(0);
+        let num = row.1.unwrap_or(0);
+        if nonempty > 0 && (num as f64) / (nonempty as f64) >= 0.8 {
+            json!({"min": row.2, "max": row.3, "mean": row.4})
+        } else {
+            Value::Null
+        }
+    };
+
+    Ok(json!({"items": items, "total_rows": total_rows, "distinct": distinct, "numeric": numeric}))
+}
+
+// Whole-file profile: one entry per column with distinct / non_empty / empty /
+// fill_% and the most common value.
+fn op_profile(conn: &Connection, req: &Value) -> Result<Value, String> {
+    let node = geti(req, "node", 1);
+    let headers: Vec<String> = meta_get(conn, "csv_headers")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let total_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM nodes WHERE parent_id=?1", params![node], |r| r.get(0))
+        .map_err(es)?;
+    let mut cols: Vec<Value> = Vec::new();
+    for (c, name) in headers.iter().enumerate() {
+        let base = format!(
+            "SELECT c.value AS v FROM nodes r JOIN nodes c ON c.parent_id=r.id AND c.ord={} WHERE r.parent_id={}",
+            c, node
+        );
+        let (non_empty, distinct): (i64, i64) = conn
+            .query_row(
+                &format!("SELECT SUM(CASE WHEN v IS NULL OR v='' THEN 0 ELSE 1 END), COUNT(DISTINCT v) FROM ({})", base),
+                [],
+                |r| Ok((r.get::<_, Option<i64>>(0)?.unwrap_or(0), r.get(1)?)),
+            )
+            .map_err(es)?;
+        let top: (Option<String>, i64) = conn
+            .query_row(
+                &format!("SELECT v, COUNT(*) FROM ({}) WHERE v IS NOT NULL AND v<>'' GROUP BY v ORDER BY COUNT(*) DESC, v LIMIT 1", base),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((None, 0));
+        cols.push(json!({
+            "column": name, "distinct": distinct,
+            "non_empty": non_empty, "empty": total_rows - non_empty,
+            "top_value": top.0, "top_count": top.1
+        }));
+    }
+    Ok(json!({"columns": cols, "total_rows": total_rows}))
 }
 
 // ==================================================================
