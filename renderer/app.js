@@ -239,11 +239,14 @@ function renderScreen() {
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
-  if (t.phase === 'empty') { closeRecentPanel(); refreshRecents(); refreshStats(); refreshCacheInfo(); }
+  if (t.phase === 'empty') { refreshRecents(); refreshStats(); refreshCacheInfo(); }
   else if (t.phase === 'loading') updateProgressDom(t);
   else if (t.phase === 'ready') {
     const plain = !!t.plain;
     killFlow();
+    // Keep the Recent dock's open/closed state (a remembered preference).
+    $('recent-panel').classList.toggle('open', recentPanelOpen);
+    $('btn-recent').classList.toggle('active-tool', recentPanelOpen);
     $('btn-source').classList.toggle('hidden', plain);
     // Raw File opens the file in a read-only tab, size-gated at 450 MB (V8
     // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
@@ -900,8 +903,8 @@ window.oxj.onDocReady(async (m) => {
   t.phase = 'ready';
   renderTabs();
   if (t === cur) {
-    renderScreen();
-    openSource(); // show the Source panel by default when a file opens
+    renderScreen(); // Source panel stays closed until a tree node is clicked
+    if (recentPanelOpen) renderRecentDock(); // reopen the dock if the user had it on
   }
   if (m.cached) toast('Reopened instantly from cached database', true);
   else toast('Loaded ' + fmtInt(m.nodes || t.meta.total_nodes || 0) + ' nodes', true);
