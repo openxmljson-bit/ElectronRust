@@ -1279,24 +1279,84 @@ function scrollToIdx(idx) {
 }
 
 // Keyboard navigation
+// Nearest preceding row shallower than idx = its parent in the flat tree list.
+function parentIndex(t, idx) {
+  const d = t.visible[idx].depth;
+  for (let i = idx - 1; i >= 0; i--) if (t.visible[i].depth < d) return i;
+  return -1;
+}
+async function copySelValue(t, e) {
+  try {
+    const text = isScalarKind(e.kind) ? await getScalarValue(t, e) : (await getSubtree(t, e)).text;
+    await copyText(text, 'value');
+  } catch (err) { toast(cleanErr(err)); }
+}
+async function copySelPath(t, e) {
+  try { const r = await window.oxj.query(t.id, { op: 'path', node: e.id }); await copyText(r.path, 'path'); }
+  catch (err) { toast(cleanErr(err)); }
+}
+
+// Pending prefix for multi-key shortcuts (y… yank, g… go). ~1.2s window.
+let treePrefix = null;
+let treePrefixAt = 0;
+
+// Keyboard navigation + Vim-style shortcuts for the tree.
 document.addEventListener('keydown', async (ev) => {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  if (t.view === 'table' || flowOpen) return; // tree view only
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA')) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   if (!t.visible.length || t.selectedIdx < 0) return;
-  const e = t.visible[t.selectedIdx];
-  if (ev.key === 'ArrowDown' && t.selectedIdx < t.visible.length - 1) {
-    selectAt(t, t.selectedIdx + 1); scrollToIdx(t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowUp' && t.selectedIdx > 0) {
-    selectAt(t, t.selectedIdx - 1); scrollToIdx(t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowRight' && e && !e.pseudo && !e.expanded) {
-    await toggleAt(t, t.selectedIdx); renderTree(); ev.preventDefault();
-  } else if (ev.key === 'ArrowLeft' && e && !e.pseudo) {
-    if (e.expanded) collapseAt(t, t.selectedIdx);
-    renderTree(); ev.preventDefault();
-  } else if (ev.key === 'Enter' && e && !e.pseudo) {
-    await toggleAt(t, t.selectedIdx); renderTree(); ev.preventDefault();
+  const idx = t.selectedIdx;
+  const e = t.visible[idx];
+  const k = ev.key;
+
+  const prefix = (treePrefix && Date.now() - treePrefixAt < 1200) ? treePrefix : null;
+  treePrefix = null;
+
+  // Yank (copy) — y then v/k/p/n (yy = value).
+  if (prefix === 'y') {
+    ev.preventDefault();
+    if (!e || e.pseudo) return;
+    if (k === 'v' || k === 'y') copySelValue(t, e);
+    else if (k === 'k') { if (e.name != null) copyText(e.name, 'key'); else toast('This node has no key'); }
+    else if (k === 'p') copySelPath(t, e);
+    else if (k === 'n') copyNodeAs(t, e, 'json');
+    return;
+  }
+  // Go — gg to root.
+  if (prefix === 'g') {
+    ev.preventDefault();
+    if (k === 'g') { selectAt(t, 0); scrollToIdx(0); renderTree(); }
+    return;
+  }
+  if (k === 'y') { treePrefix = 'y'; treePrefixAt = Date.now(); ev.preventDefault(); return; }
+  if (k === 'g') { treePrefix = 'g'; treePrefixAt = Date.now(); ev.preventDefault(); return; }
+
+  const moveTo = (i) => { selectAt(t, i); scrollToIdx(t.selectedIdx); renderTree(); };
+
+  if (k === 'ArrowDown' || k === 'j') {
+    ev.preventDefault(); if (idx < t.visible.length - 1) moveTo(idx + 1);
+  } else if (k === 'ArrowUp' || k === 'k') {
+    ev.preventDefault(); if (idx > 0) moveTo(idx - 1);
+  } else if (k === 'ArrowRight' || k === 'l') {
+    ev.preventDefault();
+    if (e && !e.pseudo && !e.expanded && isContainer(e.kind, e.n)) { await toggleAt(t, idx); renderTree(); }
+    else if (idx < t.visible.length - 1) moveTo(idx + 1); // already open → into first child
+  } else if (k === 'ArrowLeft' || k === 'h') {
+    ev.preventDefault();
+    if (e && !e.pseudo && e.expanded) { collapseAt(t, idx); renderTree(); }
+    else { const p = parentIndex(t, idx); if (p >= 0) moveTo(p); }
+  } else if (k === 'p') {
+    ev.preventDefault(); const p = parentIndex(t, idx); if (p >= 0) moveTo(p);
+  } else if (k === 'Enter' || k === ' ') {
+    ev.preventDefault(); if (e && !e.pseudo) { await toggleAt(t, idx); renderTree(); }
+  } else if (k === 'Home') {
+    ev.preventDefault(); moveTo(0);
+  } else if (k === 'End') {
+    ev.preventDefault(); moveTo(t.visible.length - 1);
   }
 });
 
