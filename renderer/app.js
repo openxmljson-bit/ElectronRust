@@ -513,16 +513,20 @@ async function refreshRecents() {
     size.className = 'recent-size';
     size.textContent = humanSize(r.size);
     item.append(name, size);
-    item.addEventListener('click', () => openRecent(r.path));
+    item.addEventListener('click', () => openRecent(r));
     el.appendChild(item);
   }
 }
 
-// Open a recent, focusing an already-open tab for that file instead of a dupe.
-function openRecent(p) {
+// Open a recent (entry or path), focusing an already-open tab instead of a
+// duplicate. Honors a remembered format (e.g. a .txt opened as a delimited table).
+function openRecent(r) {
+  const p = typeof r === 'string' ? r : r.path;
+  const fmt = typeof r === 'object' ? r.format : null;
   const existing = tabs.find((x) => x.file === p && x.phase !== 'empty');
   if (existing) { setCurrent(existing); return; }
-  openPath(p);
+  if (fmt === 'csv' || fmt === 'tsv') openAsCsv(p);
+  else openPath(p);
 }
 
 // ---------- Recent Files side panel (dock) ----------
@@ -612,7 +616,7 @@ async function renderRecentDock() {
         rev.innerHTML = FOLDER_SVG;
         rev.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.revealItem(r.path); });
         row.append(name, size, rev);
-        row.addEventListener('click', () => openRecent(r.path));
+        row.addEventListener('click', () => openRecent(r));
         sec.appendChild(row);
       }
     }
@@ -732,30 +736,33 @@ function targetTabForOpen() {
 
 const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 
-async function openPath(p, tab, force) {
+async function openPath(p, tab, force, opts) {
+  const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table
   const ext = String(p).split('.').pop().toLowerCase();
   if (BLOCKED_EXTS.includes(ext)) {
     toast('Excel files are not supported — export to CSV or JSON first');
     return;
   }
   // YAML loads as a structured tree (converted to JSON by the engine); other
-  // plain-text languages open read-only. (Raw File still opens YAML read-only.)
+  // plain-text languages open read-only. A forced format (fmt) skips that so a
+  // .txt can load as a table. (Raw File still opens the original read-only.)
   const isYaml = ext === 'yaml' || ext === 'yml';
   const lang = plainLangFor(p);
-  if (lang && !isYaml) return openPlainPath(p, tab, lang);
+  if (lang && !isYaml && !fmt) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();
   if (!t) return; // tab limit reached
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
   t.plain = null;
   t.plainText = null;
   t.file = p;
+  t.forcedFormat = fmt || null; // remembered so reload keeps the table view
   t.title = baseName(p);
   t.phase = 'loading';
   t.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false };
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
   try {
-    await window.oxj.loadFile(t.id, p, !!force);
+    await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
@@ -765,6 +772,9 @@ async function openPath(p, tab, force) {
   }
   return t;
 }
+
+// Open any file forcing the CSV table view (engine sniffs comma/;/tab/pipe).
+function openAsCsv(p) { return openPath(p, null, false, { format: 'csv' }); }
 
 $('btn-open').addEventListener('click', async () => {
   const p = await window.oxj.pickFile();
@@ -804,18 +814,52 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('dragleave', (e) => {
   if (!e.relatedTarget) $('drop-overlay').classList.add('hidden');
 });
-window.addEventListener('drop', (e) => {
+// Extensions that could be either a delimited table or plain text.
+const MAYBE_DELIM_EXTS = ['txt', 'dat', 'log', 'psv', 'tab'];
+function isMaybeDelim(p) {
+  const name = String(p).split(/[\\/]/).pop();
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  return ext === '' || MAYBE_DELIM_EXTS.includes(ext);
+}
+
+// Ask how to open an ambiguous dropped file. Resolves 'table' | 'text' | null.
+function askOpenAs(name) {
+  return new Promise((resolve) => {
+    const { back, box } = simpleModal('Open "' + name + '"');
+    const msg = document.createElement('div');
+    msg.className = 'ask-open-msg';
+    msg.textContent = 'This looks like a delimited text file. Open it as a table or as plain text?';
+    box.appendChild(msg);
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel';
+    const asText = document.createElement('button'); asText.className = 'btn-secondary'; asText.textContent = 'Open as Text';
+    const asTable = document.createElement('button'); asTable.className = 'btn-primary'; asTable.textContent = 'Open as Table';
+    cancel.onclick = () => { back.remove(); resolve(null); };
+    asText.onclick = () => { back.remove(); resolve('text'); };
+    asTable.onclick = () => { back.remove(); resolve('table'); };
+    back.addEventListener('mousedown', (e) => { if (e.target === back) { back.remove(); resolve(null); } });
+    actions.append(cancel, asText, asTable);
+    box.appendChild(actions);
+  });
+}
+
+window.addEventListener('drop', async (e) => {
   e.preventDefault();
   $('drop-overlay').classList.add('hidden');
   const files = (e.dataTransfer && e.dataTransfer.files) || [];
   if (!files.length) return;
-  try {
-    for (const f of [...files].slice(0, MAX_TABS)) {
-      const p = window.oxj.pathForFile(f);
-      if (p) openPath(p);
+  let paths = [];
+  try { paths = [...files].slice(0, MAX_TABS).map((f) => window.oxj.pathForFile(f)).filter(Boolean); }
+  catch { toast('Could not resolve dropped file path'); return; }
+  for (const p of paths) {
+    if (isMaybeDelim(p)) {
+      const choice = await askOpenAs(baseName(p)); // Table / Text / Cancel
+      if (choice === 'table') openAsCsv(p);
+      else if (choice === 'text') openPlainPath(p, null, plainLangFor(p) || 'plaintext');
+    } else {
+      openPath(p);
     }
-  } catch {
-    toast('Could not resolve dropped file path');
   }
 });
 
@@ -2576,8 +2620,13 @@ window.oxj.onMenu(async ({ action, arg }) => {
       if (p) openPath(p);
       break;
     }
+    case 'open-delimited': {
+      const p = await window.oxj.pickFile();
+      if (p) openAsCsv(p);
+      break;
+    }
     case 'open-path':
-      if (arg) openPath(arg);
+      if (arg) { if (typeof arg === 'object') openRecent(arg); else openPath(arg); }
       break;
     case 'open-url':
       showUrlModal();
@@ -2591,7 +2640,7 @@ window.oxj.onMenu(async ({ action, arg }) => {
       }
       break;
     case 'reload-tab':
-      if (cur && cur.file) openPath(cur.file, cur, true);
+      if (cur && cur.file) openPath(cur.file, cur, true, cur.forcedFormat ? { format: cur.forcedFormat } : undefined);
       break;
     case 'duplicate-tab': {
       // Capture the source file BEFORE creating the tab — newTab() switches

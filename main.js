@@ -213,12 +213,16 @@ function isTempPath(file) {
   return false;
 }
 
-function addRecent(file) {
+function addRecent(file, format) {
   if (!file || isTempPath(file)) return;
   let list = getRecents().filter((r) => r.path !== file);
   let size = 0;
   try { size = fs.statSync(file).size; } catch {}
-  list.unshift({ path: file, size, at: Date.now() });
+  const entry = { path: file, size, at: Date.now() };
+  // Remember a forced format (e.g. a .txt opened as a delimited table) so
+  // reopening from Recents restores the table view instead of plain text.
+  if (format === 'csv' || format === 'tsv') entry.format = format;
+  list.unshift(entry);
   list = list.slice(0, MAX_RECENTS);
   try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
   buildMenu();
@@ -527,25 +531,32 @@ function killIngest(tabId, deleteDb) {
 const MEM_MAX_BYTES = 64 * 1024 * 1024 * 1024; // absolute safety ceiling (raised for testing)
 const MEM_FREE_FRACTION = 2.5;                 // up to 2.5× available RAM (mmap pages on demand; testing)
 
-async function decideMode(filePath) {
+async function decideMode(filePath, format) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
   try {
     const size = fs.statSync(filePath).size;
     const avail = await availableMemBytes();
-    if (size <= MEM_MAX_BYTES && size <= avail * MEM_FREE_FRACTION) return 'memory';
+    if (size > MEM_MAX_BYTES) return 'db';
+    // Delimited files explode in the in-memory index (many tiny cell nodes at
+    // ~24 bytes each), so the index — not the file — must fit in RAM. Estimate
+    // ~5× the file and require it to sit in ~60% of available memory.
+    const ext = path.extname(filePath).toLowerCase();
+    const isDelim = format === 'csv' || format === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(ext);
+    if (isDelim) return (size * 5 <= avail * 0.6) ? 'memory' : 'db';
+    if (size <= avail * MEM_FREE_FRACTION) return 'memory';
   } catch {}
   return 'db';
 }
 
-function startServe(tabId, dbPath, wc, file, mode) {
+function startServe(tabId, dbPath, wc, file, mode, format) {
   return new Promise((resolve, reject) => {
     killSession(tabId);
     const bin = engineBin();
     if (!bin) return reject(new Error('Engine binary not found. Run: npm run build:engine'));
     const args = mode === 'memory'
-      ? ['serve-mem', '--file', file]
+      ? ['serve-mem', '--file', file, ...(format ? ['--format', format] : [])]
       : ['serve', '--db', dbPath];
     const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const s = { proc, pending: new Map(), file, dbPath, wc, mode: mode || 'db' };
@@ -625,20 +636,33 @@ function queryRaw(tabId, payload) {
   });
 }
 
-async function loadFile(wc, tabId, filePath, force) {
+async function loadFile(wc, tabId, filePath, force, fileFormat) {
   const t0 = Date.now();
   const bin = engineBin();
   if (!bin) throw new Error('Engine binary not found. Run: npm run build:engine');
   if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
   killIngest(tabId, true);
   killSession(tabId);
-  addRecent(filePath);
+  addRecent(filePath, fileFormat);
 
   // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
 
+  // Delimited/CSV files store every cell as a node row, so they explode in both
+  // the DB and the in-memory index. Cap them at 1 GB to avoid a doomed ingest.
+  const dext = path.extname(filePath).toLowerCase();
+  const isDelim = fileFormat === 'csv' || fileFormat === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(dext);
+  if (isDelim) {
+    let sz = 0;
+    try { sz = fs.statSync(enginePath).size; } catch {}
+    if (sz > 1024 * 1024 * 1024) {
+      throw new Error('Delimited/CSV files are supported up to 1 GB — this file is ' + fmtBytes(sz) +
+        '. Very wide or tall tables expand into billions of cells.');
+    }
+  }
+
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(enginePath)) === 'memory') {
+  if ((await decideMode(enginePath, fileFormat)) === 'memory') {
     try {
       let size = 0;
       try { size = fs.statSync(enginePath).size; } catch {}
@@ -646,7 +670,7 @@ async function loadFile(wc, tabId, filePath, force) {
         wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
         wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
       }
-      await startServe(tabId, null, wc, enginePath, 'memory');
+      await startServe(tabId, null, wc, enginePath, 'memory', fileFormat);
       const meta = await query(tabId, { op: 'meta' });
       bumpStat(meta.format);
       if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
@@ -662,15 +686,25 @@ async function loadFile(wc, tabId, filePath, force) {
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
-    indexTouch(dbPath, filePath); // refresh LRU timestamp
-    await startServe(tabId, dbPath, wc, filePath, 'db');
-    const meta = await query(tabId, { op: 'meta' });
-    bumpStat(meta.format);
-    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
-    return;
+    try {
+      indexTouch(dbPath, filePath); // refresh LRU timestamp
+      await startServe(tabId, dbPath, wc, filePath, 'db');
+      const meta = await query(tabId, { op: 'meta' });
+      bumpStat(meta.format);
+      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
+      return;
+    } catch (cacheErr) {
+      // Cached DB is corrupt or partial (e.g. an interrupted earlier ingest) —
+      // discard it and re-ingest from scratch below.
+      engineLog('cached db unusable, re-ingesting: ' + String((cacheErr && cacheErr.message) || cacheErr));
+      killSession(tabId);
+      try { fs.unlinkSync(dbPath); } catch {}
+    }
   }
 
-  const proc = spawn(bin, ['ingest', enginePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ingestArgs = ['ingest', enginePath, '--db', dbPath];
+  if (fileFormat) ingestArgs.push('--format', fileFormat);
+  const proc = spawn(bin, ingestArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   const g = { proc, dbPath, wc, file: filePath };
   ingests.set(tabId, g);
   const rl = readline.createInterface({ input: proc.stdout });
@@ -860,6 +894,7 @@ function buildMenu() {
         { label: 'New Window', accelerator: 'Shift+CmdOrCtrl+N', click: () => createWindow() },
         { type: 'separator' },
         { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: (mi, bw) => sendMenu(bw, 'open') },
+        { label: 'Open Delimited File as Table…', click: (mi, bw) => sendMenu(bw, 'open-delimited') },
         { label: 'Open URL…', accelerator: 'Alt+Shift+O', click: (mi, bw) => sendMenu(bw, 'open-url') },
         { label: 'Open Clipboard', accelerator: 'Shift+CmdOrCtrl+V', click: (mi, bw) => sendMenu(bw, 'open-clipboard') },
         {
@@ -868,7 +903,7 @@ function buildMenu() {
             ...recents.map((r) => ({
               label: middleTruncate(path.basename(r.path), 56),
               toolTip: r.path,
-              click: (mi, bw) => sendMenu(bw, 'open-path', r.path),
+              click: (mi, bw) => sendMenu(bw, 'open-path', r.format ? { path: r.path, format: r.format } : r.path),
             })),
             { type: 'separator' },
             { label: 'Clear Menu', enabled: recents.length > 0, click: () => clearRecents() },
@@ -1065,8 +1100,8 @@ app.whenReady().then(() => {
     return res.filePaths[0];
   });
 
-  ipcMain.handle('load-file', async (e, { tabId, path: p, force }) => {
-    try { await loadFile(e.sender, tabId, p, !!force); return ok(true); }
+  ipcMain.handle('load-file', async (e, { tabId, path: p, force, format }) => {
+    try { await loadFile(e.sender, tabId, p, !!force, format || null); return ok(true); }
     catch (err) { return fail(err); }
   });
 

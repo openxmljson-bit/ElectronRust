@@ -11,7 +11,7 @@ async function unwrap(channel, args) {
 
 contextBridge.exposeInMainWorld('oxj', {
   pickFile: () => ipcRenderer.invoke('pick-file'),
-  loadFile: (tabId, p, force) => unwrap('load-file', { tabId, path: p, force }),
+  loadFile: (tabId, p, force, format) => unwrap('load-file', { tabId, path: p, force, format }),
   query: (tabId, payload) => unwrap('query', { tabId, payload }),
   closeTab: (tabId) => unwrap('close-tab', tabId),
   cancelIngest: (tabId) => unwrap('cancel-ingest', tabId),
