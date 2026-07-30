@@ -164,7 +164,9 @@ function yamlToTempJson(yamlPath) {
   try { obj = yaml.load(fs.readFileSync(yamlPath, 'utf8')); }
   catch (e) { throw new Error('Could not parse YAML: ' + String((e && e.message) || e).split('\n')[0]); }
   const out = path.join(downloadsDir(), 'yamlconv_' + Date.now() + '.json');
-  fs.writeFileSync(out, JSON.stringify(obj === undefined ? null : obj));
+  // Pretty-print so the Source view reflects the structure (arrays included),
+  // not a minified single line.
+  fs.writeFileSync(out, JSON.stringify(obj === undefined ? null : obj, null, 2));
   return out;
 }
 function isYamlFile(p) {
