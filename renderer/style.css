@@ -471,6 +471,54 @@ body.light .watermark { opacity: .09; }
 .table-row.zebra { background: rgba(255,255,255,.02); }
 .table-row:hover { background: rgba(255,255,255,.05); }
 
+/* frozen row-number gutter */
+.th.idx, .td.idx { position: sticky; left: 0; z-index: 2; background: var(--bg3); }
+.table-row .td.idx { background: var(--bg); }
+.table-row.zebra .td.idx { background: var(--bg2); }
+/* pinned (frozen-left) columns */
+.th.pinned { position: sticky; z-index: 2; background: var(--bg3); }
+.td.pinned { position: sticky; z-index: 1; background: var(--bg); box-shadow: 1px 0 0 var(--border); }
+.table-row.zebra .td.pinned { background: var(--bg2); }
+.th.drop-target { box-shadow: inset 2px 0 0 var(--accent); }
+/* cell selection */
+.td.cell-sel { background: var(--sel); }
+.table-row .td { cursor: cell; user-select: none; }
+
+/* table toolbar */
+.table-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg2);
+}
+.table-toolbar .spacer { flex: 1; }
+.table-toolbar .btn-tool[disabled] { opacity: .4; cursor: default; }
+.table-body { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+
+/* columns panel (collapsible drawer) */
+.cols-panel {
+  width: 0; overflow: hidden; flex: 0 0 auto;
+  border-right: 1px solid transparent; background: var(--bg2);
+  display: flex; flex-direction: column;
+  transition: width .12s ease;
+}
+.cols-panel.open { width: 240px; border-right-color: var(--border); }
+.cols-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--fg-dim);
+}
+.cols-search {
+  margin: 0 12px 8px; padding: 6px 9px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--bg3); color: var(--fg); font-size: 12px;
+}
+.cols-actions { display: flex; gap: 12px; padding: 0 12px 8px; }
+.cols-list { flex: 1; overflow-y: auto; padding: 0 6px 8px; }
+.cols-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.cols-row:hover { background: var(--bg3); }
+.cols-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- Flow diagram (graph.js) ---------- */
 body {
   --g-bg: #0e0f12;

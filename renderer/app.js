@@ -35,6 +35,11 @@ function makeTab() {
     tableTotal: 0,
     tablePages: new Map(),
     tableInflight: new Set(),
+    colWidths: null,   // per original column index
+    colOrder: null,    // original indices in display order
+    colHidden: null,   // Set of hidden original indices
+    colPinned: null,   // Set of pinned (frozen-left) original indices
+    tableSel: null,    // { aRow, aVis, fRow, fVis } rectangular selection
     progress: null,
     plain: null,      // { language, label, size, truncated } for txt/js/html tabs
     plainText: null,
@@ -744,6 +749,11 @@ window.oxj.onDocReady(async (m) => {
   try { t.tableHeaders = JSON.parse(t.meta.csv_headers || '[]'); } catch {}
   t.tablePages = new Map();
   t.tableInflight = new Set();
+  t.colWidths = null;
+  t.colOrder = null;
+  t.colHidden = null;
+  t.colPinned = null;
+  t.tableSel = null;
   t.view = 'tree';
   try {
     await buildViewer(t);
@@ -1488,7 +1498,9 @@ function setView(name) {
   $('table-wrap').classList.toggle('hidden', !table);
   $('btn-view-tree').classList.toggle('active', !table);
   $('btn-view-table').classList.toggle('active', table);
-  if (table) { closeSource(); renderTable(); } // Source panel isn't useful in the CSV grid
+  if (table) { closeSource(); buildTableHead(t); renderTable(); renderColumnsPanel(t); }
+  else { $('cols-panel').classList.remove('open'); $('btn-cols').classList.remove('active-tool'); }
+  updateTableToolbar(t);
   updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
@@ -1496,34 +1508,81 @@ $('btn-view-table').addEventListener('click', () => setView('table'));
 
 const TABLE_COL_DEFAULT = 180;
 const TABLE_COL_MIN = 50;
+const IDX_W = 70; // row-number gutter width (matches .idx CSS)
 function colWidth(t, c) {
   return (t.colWidths && t.colWidths[c]) || TABLE_COL_DEFAULT;
 }
 
+// Lazily initialise the column order/visibility/pin state for a tab.
+function ensureColState(t) {
+  const n = t.tableHeaders.length;
+  if (!t.colWidths || t.colWidths.length !== n) t.colWidths = new Array(n).fill(TABLE_COL_DEFAULT);
+  if (!t.colOrder || t.colOrder.length !== n) t.colOrder = t.tableHeaders.map((_, i) => i);
+  if (!t.colHidden) t.colHidden = new Set();
+  if (!t.colPinned) t.colPinned = new Set();
+}
+
+// Original column indices in display order: pinned first (frozen), then the
+// rest, hidden ones removed.
+function visCols(t) {
+  ensureColState(t);
+  const shown = t.colOrder.filter((c) => !t.colHidden.has(c));
+  return shown.filter((c) => t.colPinned.has(c)).concat(shown.filter((c) => !t.colPinned.has(c)));
+}
+
 function buildTableHead(t) {
-  if (!t.colWidths || t.colWidths.length !== t.tableHeaders.length) {
-    t.colWidths = new Array(t.tableHeaders.length).fill(TABLE_COL_DEFAULT);
-  }
+  ensureColState(t);
   const head = $('table-head');
   head.textContent = '';
   const idx = document.createElement('div');
   idx.className = 'th idx';
   idx.textContent = '#';
   head.appendChild(idx);
-  t.tableHeaders.forEach((h, c) => {
+  const cols = visCols(t);
+  let pinnedLeft = IDX_W;
+  cols.forEach((c) => {
     const th = document.createElement('div');
     th.className = 'th';
-    th.textContent = h;
-    th.title = h;
+    th.textContent = t.tableHeaders[c];
+    th.title = t.tableHeaders[c];
     th.style.width = colWidth(t, c) + 'px';
-    // Drag handle on the right edge to resize this column.
+    th.dataset.col = String(c);
+    if (t.colPinned.has(c)) {
+      th.classList.add('pinned');
+      th.style.left = pinnedLeft + 'px';
+      pinnedLeft += colWidth(t, c);
+    }
+    // Resize handle (right edge).
     const grip = document.createElement('div');
     grip.className = 'col-resizer';
     grip.addEventListener('mousedown', (ev) => startColResize(ev, t, c, th));
     grip.addEventListener('click', (ev) => ev.stopPropagation());
     th.appendChild(grip);
+    // Drag to reorder.
+    th.draggable = true;
+    th.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/col', String(c)); e.dataTransfer.effectAllowed = 'move'; });
+    th.addEventListener('dragover', (e) => { e.preventDefault(); th.classList.add('drop-target'); });
+    th.addEventListener('dragleave', () => th.classList.remove('drop-target'));
+    th.addEventListener('drop', (e) => { e.preventDefault(); th.classList.remove('drop-target'); reorderCol(t, parseInt(e.dataTransfer.getData('text/col'), 10), c); });
+    // Header context menu.
+    th.addEventListener('contextmenu', (e) => { e.preventDefault(); showHeaderMenu(e, t, c); });
     head.appendChild(th);
   });
+}
+
+// Move column `from` to just before column `to` in the display order.
+function reorderCol(t, from, to) {
+  if (from === to || Number.isNaN(from)) return;
+  ensureColState(t);
+  const order = t.colOrder.slice();
+  const fi = order.indexOf(from);
+  const ti = order.indexOf(to);
+  if (fi < 0 || ti < 0) return;
+  order.splice(fi, 1);
+  order.splice(order.indexOf(to) + (fi < ti ? 0 : 0), 0, from);
+  t.colOrder = order;
+  buildTableHead(t);
+  renderTable();
 }
 
 function startColResize(ev, t, c, th) {
@@ -1560,9 +1619,21 @@ async function fetchTablePage(t, page) {
   }
 }
 
+// Selection bounds as inclusive [row0,row1] x [vis0,vis1], or null.
+function selRect(t) {
+  const s = t.tableSel;
+  if (!s) return null;
+  return {
+    r0: Math.min(s.aRow, s.fRow), r1: Math.max(s.aRow, s.fRow),
+    v0: Math.min(s.aVis, s.fVis), v1: Math.max(s.aVis, s.fVis),
+  };
+}
+
 function renderTable() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  ensureColState(t);
+  const cols = visCols(t);
   tableSpacer.style.height = t.tableTotal * ROW_H + 'px';
   const scrollTop = tableScroll.scrollTop;
   const h = tableScroll.clientHeight;
@@ -1573,6 +1644,11 @@ function renderTable() {
   const needed = new Set();
   for (let i = first; i < last; i++) needed.add(Math.floor(i / 100));
   for (const p of needed) fetchTablePage(t, p);
+  const sel = selRect(t);
+  // Precompute left offset of each pinned column for sticky positioning.
+  const pinnedLeft = [];
+  let pl = IDX_W;
+  cols.forEach((c, vi) => { if (t.colPinned.has(c)) { pinnedLeft[vi] = pl; pl += colWidth(t, c); } });
   for (let i = first; i < last; i++) {
     const page = t.tablePages.get(Math.floor(i / 100));
     const rowData = page ? page[i % 100] : null;
@@ -1584,20 +1660,213 @@ function renderTable() {
     idxCell.textContent = fmtInt(i);
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
-    for (let c = 0; c < t.tableHeaders.length; c++) {
+    cols.forEach((c, vi) => {
       const td = document.createElement('div');
       td.className = 'td';
       td.style.width = colWidth(t, c) + 'px';
+      if (t.colPinned.has(c)) { td.classList.add('pinned'); td.style.left = pinnedLeft[vi] + 'px'; }
+      if (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1) td.classList.add('cell-sel');
       const cell = cells[c];
       td.textContent = cell && cell.value != null ? cell.value : '';
       if (cell && cell.value) td.title = cell.value;
+      td.addEventListener('mousedown', (e) => startCellSelect(e, t, i, vi));
+      td.addEventListener('mouseenter', (e) => extendCellSelect(e, t, i, vi));
       row.appendChild(td);
-    }
+    });
     frag.appendChild(row);
   }
   tableRowsEl.appendChild(frag);
 }
 tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
+
+// ---------- cell selection + copy block ----------
+let cellDragging = false;
+function startCellSelect(e, t, row, vis) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  cellDragging = true;
+  if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
+  else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
+  renderTable();
+}
+function extendCellSelect(e, t, row, vis) {
+  if (!cellDragging || !t.tableSel) return;
+  t.tableSel.fRow = row;
+  t.tableSel.fVis = vis;
+  renderTable();
+}
+document.addEventListener('mouseup', () => { cellDragging = false; });
+
+// Keyboard nav within the grid (arrows move the focus cell; shift extends).
+document.addEventListener('keydown', (e) => {
+  const t = cur;
+  if (!t || t.view !== 'table' || t.plain) return;
+  if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  const cols = visCols(t);
+  if (!cols.length) return;
+  if (!t.tableSel && ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    t.tableSel = { aRow: 0, aVis: 0, fRow: 0, fVis: 0 };
+  }
+  const s = t.tableSel;
+  if (!s) return;
+  let dr = 0, dv = 0;
+  if (e.key === 'ArrowDown') dr = 1;
+  else if (e.key === 'ArrowUp') dr = -1;
+  else if (e.key === 'ArrowLeft') dv = -1;
+  else if (e.key === 'ArrowRight') dv = 1;
+  else return;
+  e.preventDefault();
+  const nr = Math.max(0, Math.min(t.tableTotal - 1, s.fRow + dr));
+  const nv = Math.max(0, Math.min(cols.length - 1, s.fVis + dv));
+  s.fRow = nr; s.fVis = nv;
+  if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
+  const y = nr * ROW_H;
+  if (y < tableScroll.scrollTop) tableScroll.scrollTop = y;
+  else if (y > tableScroll.scrollTop + tableScroll.clientHeight - ROW_H) tableScroll.scrollTop = y - tableScroll.clientHeight + ROW_H;
+  renderTable();
+});
+
+// Copy the selected block as tab/newline-separated text (fetch any rows not
+// yet loaded from the engine).
+async function copyTableSelection(t) {
+  const sel = selRect(t);
+  if (!sel) return false;
+  const cols = visCols(t);
+  const originCols = [];
+  for (let v = sel.v0; v <= sel.v1; v++) originCols.push(cols[v]);
+  const rows = [];
+  for (let r = sel.r0; r <= sel.r1; r++) {
+    let page = t.tablePages.get(Math.floor(r / 100));
+    if (!page) { await fetchTablePage(t, Math.floor(r / 100)); page = t.tablePages.get(Math.floor(r / 100)); }
+    const rd = page ? page[r % 100] : null;
+    const cells = rd ? rd.cells : [];
+    rows.push(originCols.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
+  }
+  await copyText(rows.join('\n'), 'selection');
+  return true;
+}
+
+// Cmd/Ctrl-C in the grid copies the selected block. Handle the copy event so
+// the native Edit ▸ Copy accelerator drives it; fast path writes synchronously
+// from loaded pages, otherwise fall back to the async clipboard write.
+document.addEventListener('copy', (e) => {
+  const t = cur;
+  if (!t || t.view !== 'table' || t.plain || !t.tableSel) return;
+  const sel = selRect(t);
+  if (!sel) return;
+  e.preventDefault();
+  let allLoaded = true;
+  for (let r = sel.r0; r <= sel.r1; r++) if (!t.tablePages.get(Math.floor(r / 100))) { allLoaded = false; break; }
+  if (!allLoaded) { copyTableSelection(t); return; }
+  const cols = visCols(t);
+  const oc = [];
+  for (let v = sel.v0; v <= sel.v1; v++) oc.push(cols[v]);
+  const lines = [];
+  for (let r = sel.r0; r <= sel.r1; r++) {
+    const page = t.tablePages.get(Math.floor(r / 100));
+    const rd = page ? page[r % 100] : null;
+    const cells = rd ? rd.cells : [];
+    lines.push(oc.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
+  }
+  e.clipboardData.setData('text/plain', lines.join('\n'));
+});
+
+// ---------- header context menu ----------
+function showHeaderMenu(e, t, c) {
+  const items = [
+    { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
+    { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
+    { sep: true },
+    { label: 'Show All Columns', action: () => { t.colHidden.clear(); afterColChange(t); } },
+  ];
+  showContextMenu(e.clientX, e.clientY, items);
+}
+
+// Rebuild header + grid and re-evaluate export enablement after a column change.
+function afterColChange(t) {
+  // Keep any selection within bounds of the new visible-column count.
+  const n = visCols(t).length;
+  if (t.tableSel) {
+    t.tableSel.aVis = Math.min(t.tableSel.aVis, Math.max(0, n - 1));
+    t.tableSel.fVis = Math.min(t.tableSel.fVis, Math.max(0, n - 1));
+  }
+  buildTableHead(t);
+  renderTable();
+  renderColumnsPanel(t);
+  updateTableToolbar(t);
+}
+
+// ---------- Columns panel (collapsible drawer) ----------
+function toggleColumnsPanel() {
+  const panel = $('cols-panel');
+  const open = panel.classList.toggle('open');
+  $('btn-cols').classList.toggle('active-tool', open);
+  if (open && cur) renderColumnsPanel(cur);
+}
+
+function renderColumnsPanel(t) {
+  const panel = $('cols-panel');
+  if (!panel.classList.contains('open')) return;
+  ensureColState(t);
+  const q = ($('cols-search').value || '').trim().toLowerCase();
+  const list = $('cols-list');
+  list.textContent = '';
+  t.colOrder.forEach((c) => {
+    const name = t.tableHeaders[c];
+    if (q && !String(name).toLowerCase().includes(q)) return;
+    const row = document.createElement('label');
+    row.className = 'cols-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !t.colHidden.has(c);
+    cb.addEventListener('change', () => { if (cb.checked) t.colHidden.delete(c); else t.colHidden.add(c); afterColChange(t); });
+    const span = document.createElement('span');
+    span.textContent = name;
+    span.title = name;
+    row.append(cb, span);
+    list.appendChild(row);
+  });
+}
+
+// ---------- toolbar enablement ----------
+// Pure rule (unit-tested): export is allowed only when the view differs from the
+// original (a column hidden OR a filter active), there are rows, and at least
+// one visible column remains.
+function tableExportEnabled(view) {
+  const differs = view.hiddenCount > 0 || view.filterActive;
+  return differs && view.rowCount > 0 && view.visibleCount > 0;
+}
+
+function updateTableToolbar(t) {
+  const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
+  $('table-toolbar').classList.toggle('hidden', !on);
+  if (!on) return;
+  ensureColState(t);
+  const view = {
+    hiddenCount: t.colHidden.size,
+    filterActive: !!(t.tableFilters && t.tableFilters.length),
+    rowCount: t.tableTotal,
+    visibleCount: visCols(t).length,
+  };
+  const enabled = tableExportEnabled(view);
+  $('btn-export-csv').disabled = !enabled;
+  $('btn-export-json').disabled = !enabled;
+}
+
+$('btn-cols').addEventListener('click', toggleColumnsPanel);
+$('btn-cols-close').addEventListener('click', toggleColumnsPanel);
+$('cols-search').addEventListener('input', () => { if (cur) renderColumnsPanel(cur); });
+$('btn-cols-all').addEventListener('click', () => { if (cur) { cur.colHidden.clear(); afterColChange(cur); } });
+$('btn-cols-none').addEventListener('click', () => {
+  const t = cur; if (!t) return;
+  ensureColState(t);
+  // Keep at least one column visible.
+  t.colHidden = new Set(t.colOrder.slice(1));
+  afterColChange(t);
+});
+// Streaming export lands with the Rust engine phase; keep the enablement rule live.
+$('btn-export-csv').addEventListener('click', () => toast('Streaming export arrives with the engine update'));
+$('btn-export-json').addEventListener('click', () => toast('Streaming export arrives with the engine update'));
 
 // ---------- Monaco source panel ----------
 function initMonaco() {
