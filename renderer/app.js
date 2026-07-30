@@ -1514,9 +1514,16 @@ $('btn-view-table').addEventListener('click', () => setView('table'));
 
 const TABLE_COL_DEFAULT = 180;
 const TABLE_COL_MIN = 50;
-const IDX_W = 70; // row-number gutter width (matches .idx CSS)
+const IDX_W = 70; // fallback row-number gutter width
 function colWidth(t, c) {
   return (t.colWidths && t.colWidths[c]) || TABLE_COL_DEFAULT;
+}
+
+// Gutter wide enough for the largest (comma-formatted) row number.
+function idxWidth(t) {
+  const n = Math.max(0, tableRows(t) - 1);
+  const digits = fmtInt(n).length; // includes thousands separators
+  return Math.max(IDX_W, 16 + digits * 8);
 }
 
 // Lazily initialise the column order/visibility/pin state for a tab.
@@ -1540,12 +1547,14 @@ function buildTableHead(t) {
   ensureColState(t);
   const head = $('table-head');
   head.textContent = '';
+  const iw = idxWidth(t);
   const idx = document.createElement('div');
   idx.className = 'th idx';
   idx.textContent = '#';
+  idx.style.width = iw + 'px';
   head.appendChild(idx);
   const cols = visCols(t);
-  let pinnedLeft = IDX_W;
+  let pinnedLeft = iw;
   cols.forEach((c) => {
     const th = document.createElement('div');
     th.className = 'th';
@@ -1677,9 +1686,10 @@ function renderTable() {
   for (let i = first; i < last; i++) needed.add(Math.floor(i / 100));
   for (const p of needed) fetchTablePage(t, p);
   const sel = selRect(t);
+  const iw = idxWidth(t);
   // Precompute left offset of each pinned column for sticky positioning.
   const pinnedLeft = [];
-  let pl = IDX_W;
+  let pl = iw;
   cols.forEach((c, vi) => { if (t.colPinned.has(c)) { pinnedLeft[vi] = pl; pl += colWidth(t, c); } });
   for (let i = first; i < last; i++) {
     const page = t.tablePages.get(Math.floor(i / 100));
@@ -1689,6 +1699,7 @@ function renderTable() {
     row.style.top = i * ROW_H + 'px';
     const idxCell = document.createElement('div');
     idxCell.className = 'td idx';
+    idxCell.style.width = iw + 'px';
     idxCell.textContent = fmtInt(i);
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
