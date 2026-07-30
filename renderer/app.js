@@ -40,6 +40,9 @@ function makeTab() {
     colHidden: null,   // Set of hidden original indices
     colPinned: null,   // Set of pinned (frozen-left) original indices
     tableSel: null,    // { aRow, aVis, fRow, fVis } rectangular selection
+    tableSort: null,   // { col, dir } server-side sort
+    tableFilters: [],  // [{ col, op, value }] server-side filters
+    tableViewTotal: null, // filtered row count (null = full tableTotal)
     progress: null,
     plain: null,      // { language, label, size, truncated } for txt/js/html tabs
     plainText: null,
@@ -754,6 +757,9 @@ window.oxj.onDocReady(async (m) => {
   t.colHidden = null;
   t.colPinned = null;
   t.tableSel = null;
+  t.tableSort = null;
+  t.tableFilters = [];
+  t.tableViewTotal = null;
   t.view = 'tree';
   try {
     await buildViewer(t);
@@ -1610,14 +1616,46 @@ async function fetchTablePage(t, page) {
   if (t.tablePages.has(page) || t.tableInflight.has(page)) return;
   t.tableInflight.add(page);
   try {
-    const res = await window.oxj.query(t.id, { op: 'table', node: 1, offset: page * 100, limit: 100 });
+    const q = { op: 'table', node: 1, offset: page * 100, limit: 100 };
+    if (t.tableSort) q.sort = t.tableSort;
+    if (t.tableFilters && t.tableFilters.length) q.filters = t.tableFilters;
+    const res = await window.oxj.query(t.id, q);
     if (!tabAlive(t)) return;
     t.tablePages.set(page, res.rows);
+    // Filtered/full row count from the engine drives the virtual scroll height.
+    if (res.total != null && res.total !== t.tableViewTotal) {
+      t.tableViewTotal = res.total;
+      if (t === cur && t.view === 'table') { renderTable(); return; }
+    }
     if (t === cur && t.view === 'table') renderTable();
   } catch {} finally {
     t.tableInflight.delete(page);
   }
 }
+
+function tableRows(t) {
+  return t.tableViewTotal != null ? t.tableViewTotal : t.tableTotal;
+}
+
+// Re-apply the current sort/filter view: drop cached windows, reset scroll,
+// refetch. Guarded to database mode (the memory engine can't sort/filter).
+function applyTableView(t) {
+  if (isMemTab(t) && (t.tableSort || (t.tableFilters && t.tableFilters.length))) {
+    toast('Sorting and filtering need database mode — set Cache → Engine Mode → Always Database and reload');
+    t.tableSort = null;
+    t.tableFilters = [];
+  }
+  t.tablePages = new Map();
+  t.tableInflight = new Set();
+  t.tableViewTotal = null;
+  t.tableSel = null;
+  tableScroll.scrollTop = 0;
+  buildTableHead(t);
+  renderTable();
+  updateTableToolbar(t);
+}
+
+function isMemTab(t) { return !!(t && t.meta && t.meta.mode === 'memory'); }
 
 // Selection bounds as inclusive [row0,row1] x [vis0,vis1], or null.
 function selRect(t) {
@@ -1634,11 +1672,12 @@ function renderTable() {
   if (!t || t.phase !== 'ready' || t.plain) return;
   ensureColState(t);
   const cols = visCols(t);
-  tableSpacer.style.height = t.tableTotal * ROW_H + 'px';
+  const total = tableRows(t);
+  tableSpacer.style.height = total * ROW_H + 'px';
   const scrollTop = tableScroll.scrollTop;
   const h = tableScroll.clientHeight;
   const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 5);
-  const last = Math.min(t.tableTotal, Math.ceil((scrollTop + h) / ROW_H) + 5);
+  const last = Math.min(total, Math.ceil((scrollTop + h) / ROW_H) + 5);
   tableRowsEl.textContent = '';
   const frag = document.createDocumentFragment();
   const needed = new Set();
@@ -1716,7 +1755,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowRight') dv = 1;
   else return;
   e.preventDefault();
-  const nr = Math.max(0, Math.min(t.tableTotal - 1, s.fRow + dr));
+  const nr = Math.max(0, Math.min(tableRows(t) - 1, s.fRow + dr));
   const nv = Math.max(0, Math.min(cols.length - 1, s.fVis + dv));
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
@@ -1773,12 +1812,18 @@ document.addEventListener('copy', (e) => {
 
 // ---------- header context menu ----------
 function showHeaderMenu(e, t, c) {
+  const hasFilter = t.tableFilters && t.tableFilters.some((f) => f.col === c);
   const items = [
+    { label: 'Filter "' + t.tableHeaders[c] + '"…', action: () => openFilterDialog(t, c) },
+  ];
+  if (hasFilter) items.push({ label: 'Clear this filter', action: () => { t.tableFilters = t.tableFilters.filter((f) => f.col !== c); applyTableView(t); } });
+  items.push(
+    { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
     { sep: true },
     { label: 'Show All Columns', action: () => { t.colHidden.clear(); afterColChange(t); } },
-  ];
+  );
   showContextMenu(e.clientX, e.clientY, items);
 }
 
@@ -1845,13 +1890,107 @@ function updateTableToolbar(t) {
   const view = {
     hiddenCount: t.colHidden.size,
     filterActive: !!(t.tableFilters && t.tableFilters.length),
-    rowCount: t.tableTotal,
+    rowCount: tableRows(t),
     visibleCount: visCols(t).length,
   };
   const enabled = tableExportEnabled(view);
   $('btn-export-csv').disabled = !enabled;
   $('btn-export-json').disabled = !enabled;
+  $('btn-clear-filters').disabled = !view.filterActive;
+  const info = $('table-viewinfo');
+  if (view.filterActive && t.tableViewTotal != null) info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
+  else info.textContent = '';
 }
+
+// ---------- sort / filter dialogs ----------
+const FILTER_OPS = [
+  ['contains', 'contains'], ['equals', 'equals'], ['starts-with', 'starts with'],
+  ['not-equals', 'not equals'], ['gt', '> (numeric)'], ['lt', '< (numeric)'], ['between', 'between (a,b)'],
+];
+
+function colSelect(t, selected) {
+  const sel = document.createElement('select');
+  visCols(t).forEach((c) => {
+    const o = document.createElement('option');
+    o.value = String(c);
+    o.textContent = t.tableHeaders[c];
+    if (selected === c) o.selected = true;
+    sel.appendChild(o);
+  });
+  return sel;
+}
+
+function openSortDialog(t) {
+  if (isMemTab(t)) { toast('Sorting needs database mode — set Cache → Engine Mode → Always Database and reload'); return; }
+  const { back, box } = simpleModal('Sort rows');
+  const row = document.createElement('div');
+  row.className = 'modal-row';
+  const l1 = document.createElement('label'); l1.textContent = 'Column';
+  const sel = colSelect(t, t.tableSort ? t.tableSort.col : undefined);
+  const l2 = document.createElement('label'); l2.textContent = 'Order';
+  const dir = document.createElement('select');
+  [['asc', 'Ascending'], ['desc', 'Descending']].forEach(([v, lab]) => {
+    const o = document.createElement('option'); o.value = v; o.textContent = lab;
+    if (t.tableSort && t.tableSort.dir === v) o.selected = true;
+    dir.appendChild(o);
+  });
+  row.append(l1, sel, l2, dir);
+  box.appendChild(row);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const clr = document.createElement('button'); clr.className = 'btn-secondary'; clr.textContent = 'Clear Sort';
+  clr.onclick = () => { t.tableSort = null; back.remove(); applyTableView(t); };
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Apply';
+  ok.onclick = () => { t.tableSort = { col: parseInt(sel.value, 10), dir: dir.value }; back.remove(); applyTableView(t); };
+  actions.append(clr, cancel, ok);
+  box.appendChild(actions);
+}
+
+function openFilterDialog(t, presetCol) {
+  if (isMemTab(t)) { toast('Filtering needs database mode — set Cache → Engine Mode → Always Database and reload'); return; }
+  const { back, box } = simpleModal('Filter rows');
+  const working = (t.tableFilters || []).map((f) => ({ ...f }));
+  if (presetCol != null && !working.some((f) => f.col === presetCol)) working.push({ col: presetCol, op: 'contains', value: '' });
+  if (!working.length) working.push({ col: visCols(t)[0], op: 'contains', value: '' });
+  const list = document.createElement('div');
+  list.className = 'filter-list';
+  const render = () => {
+    list.textContent = '';
+    working.forEach((f, i) => {
+      const r = document.createElement('div');
+      r.className = 'filter-row';
+      const cs = colSelect(t, f.col); cs.onchange = () => { f.col = parseInt(cs.value, 10); };
+      const os = document.createElement('select');
+      FILTER_OPS.forEach(([v, lab]) => { const o = document.createElement('option'); o.value = v; o.textContent = lab; if (f.op === v) o.selected = true; os.appendChild(o); });
+      os.onchange = () => { f.op = os.value; };
+      const vi = document.createElement('input'); vi.type = 'text'; vi.value = f.value || ''; vi.placeholder = 'value'; vi.oninput = () => { f.value = vi.value; };
+      const rm = document.createElement('button'); rm.className = 'link-btn'; rm.textContent = '✕'; rm.onclick = () => { working.splice(i, 1); render(); };
+      r.append(cs, os, vi, rm);
+      list.appendChild(r);
+    });
+  };
+  render();
+  box.appendChild(list);
+  const add = document.createElement('button'); add.className = 'link-btn'; add.textContent = '+ Add filter';
+  add.onclick = () => { working.push({ col: visCols(t)[0], op: 'contains', value: '' }); render(); };
+  box.appendChild(add);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Apply';
+  ok.onclick = () => {
+    t.tableFilters = working.filter((f) => f.value !== '' || f.op === 'not-equals').map((f) => ({ col: f.col, op: f.op, value: String(f.value) }));
+    back.remove();
+    applyTableView(t);
+  };
+  actions.append(cancel, ok);
+  box.appendChild(actions);
+}
+
+$('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
+$('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
+$('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
 
 $('btn-cols').addEventListener('click', toggleColumnsPanel);
 $('btn-cols-close').addEventListener('click', toggleColumnsPanel);

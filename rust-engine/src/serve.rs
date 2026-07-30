@@ -9,9 +9,54 @@
 //   {"id":5,"op":"search","q":"foo","scope":"all|keys|values","offset":0,"limit":100}
 //   {"id":6,"op":"table","node":1,"offset":0,"limit":100}
 //   {"id":7,"op":"subtree","node":42,"budget":50000}   -> pretty JSON/XML source
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+
+// Escape a user value for use inside a LIKE pattern (with ESCAPE '\').
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+// Build the SQL condition (on alias `f.value`) and push any bound values for one
+// column filter. Returns the condition fragment.
+fn filter_cond(op: &str, val: &str, binds: &mut Vec<String>) -> String {
+    match op {
+        "equals" => { binds.push(val.to_string()); "f.value = ?".into() }
+        "not-equals" => { binds.push(val.to_string()); "IFNULL(f.value,'') <> ?".into() }
+        "starts-with" => { binds.push(format!("{}%", like_escape(val))); "f.value LIKE ? ESCAPE '\\'".into() }
+        "gt" => { binds.push(val.to_string()); "CAST(f.value AS REAL) > CAST(? AS REAL)".into() }
+        "lt" => { binds.push(val.to_string()); "CAST(f.value AS REAL) < CAST(? AS REAL)".into() }
+        "between" => {
+            let mut it = val.splitn(2, ',');
+            binds.push(it.next().unwrap_or("").trim().to_string());
+            binds.push(it.next().unwrap_or("").trim().to_string());
+            "CAST(f.value AS REAL) BETWEEN CAST(? AS REAL) AND CAST(? AS REAL)".into()
+        }
+        _ => { binds.push(format!("%{}%", like_escape(val))); "f.value LIKE ? ESCAPE '\\'".into() } // contains
+    }
+}
+
+// WHERE clause (rows are children of `node`) + ordered bound values, from the
+// request's optional `filters` array. Column indices are inlined (safe i64).
+fn build_filter_where(node: i64, req: &Value) -> (String, Vec<String>) {
+    let mut clauses = vec![format!("r.parent_id = {}", node)];
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(fs) = req.get("filters").and_then(|v| v.as_array()) {
+        for f in fs {
+            let col = f.get("col").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if col < 0 { continue; }
+            let op = f.get("op").and_then(|v| v.as_str()).unwrap_or("contains");
+            let val = f.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            let cond = filter_cond(op, val, &mut binds);
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM nodes f WHERE f.parent_id=r.id AND f.ord={} AND {})",
+                col, cond
+            ));
+        }
+    }
+    (clauses.join(" AND "), binds)
+}
 
 fn es(e: rusqlite::Error) -> String {
     e.to_string()
@@ -845,14 +890,42 @@ fn op_table(conn: &Connection, req: &Value) -> Result<Value, String> {
     let node = geti(req, "node", 1);
     let offset = geti(req, "offset", 0).max(0);
     let limit = geti(req, "limit", 100).clamp(1, 500);
+
+    let (where_sql, binds) = build_filter_where(node, req);
+
+    // Filtered row count (drives the virtual scroll height).
+    let total: i64 = {
+        let sql = format!("SELECT COUNT(*) FROM nodes r WHERE {}", where_sql);
+        let mut st = conn.prepare(&sql).map_err(es)?;
+        st.query_row(params_from_iter(binds.iter()), |row| row.get(0)).map_err(es)?
+    };
+
+    // Optional numeric-aware sort by a column (its cell's ord). Numeric compare
+    // first (non-numeric collapse to 0.0), then case-insensitive text tiebreak.
+    let (join_sql, order_by) = match req.get("sort").filter(|s| s.is_object()) {
+        Some(sort) => {
+            let col = sort.get("col").and_then(|v| v.as_i64()).unwrap_or(-1);
+            let dir = if sort.get("dir").and_then(|v| v.as_str()) == Some("desc") { "DESC" } else { "ASC" };
+            if col >= 0 {
+                (
+                    format!("LEFT JOIN nodes sc ON sc.parent_id=r.id AND sc.ord={}", col),
+                    format!("CAST(sc.value AS REAL) {}, sc.value COLLATE NOCASE {}", dir, dir),
+                )
+            } else {
+                (String::new(), "r.ord".to_string())
+            }
+        }
+        None => (String::new(), "r.ord".to_string()),
+    };
+
     let mut row_ids: Vec<(i64, i64)> = Vec::new();
     {
-        let mut st = conn
-            .prepare_cached(
-                "SELECT id, ord FROM nodes WHERE parent_id=?1 ORDER BY ord LIMIT ?2 OFFSET ?3",
-            )
-            .map_err(es)?;
-        let mut rows = st.query(params![node, limit, offset]).map_err(es)?;
+        let sql = format!(
+            "SELECT r.id, r.ord FROM nodes r {} WHERE {} ORDER BY {} LIMIT {} OFFSET {}",
+            join_sql, where_sql, order_by, limit, offset
+        );
+        let mut st = conn.prepare(&sql).map_err(es)?;
+        let mut rows = st.query(params_from_iter(binds.iter())).map_err(es)?;
         while let Some(row) = rows.next().map_err(es)? {
             row_ids.push((row.get(0).map_err(es)?, row.get(1).map_err(es)?));
         }
@@ -874,7 +947,7 @@ fn op_table(conn: &Connection, req: &Value) -> Result<Value, String> {
         }
         out.push(json!({"id": rid, "ord": ord, "cells": cells}));
     }
-    Ok(json!({"rows": out}))
+    Ok(json!({"rows": out, "total": total}))
 }
 
 // ==================================================================
@@ -1378,4 +1451,70 @@ fn validate_value(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    // Build a tiny CSV-like DB: root(1) with 3 rows, each having columns
+    // a (text) at ord 0 and n (numeric-as-text) at ord 1.
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE nodes(id INTEGER PRIMARY KEY, parent_id INTEGER, ord INTEGER NOT NULL, \
+             depth INTEGER, kind INTEGER NOT NULL, name TEXT, value TEXT, n_children INTEGER NOT NULL DEFAULT 0);\
+             CREATE INDEX idx_np ON nodes(parent_id, ord);",
+        )
+        .unwrap();
+        let rows = [(2i64, "apple", "3"), (3, "banana", "10"), (4, "cherry", "2")];
+        conn.execute("INSERT INTO nodes(id,parent_id,ord,depth,kind,name,value) VALUES(1,NULL,0,0,1,NULL,NULL)", []).unwrap();
+        let mut cid = 5i64;
+        for (i, (rid, a, n)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO nodes(id,parent_id,ord,depth,kind,name,value) VALUES(?1,1,?2,1,0,NULL,NULL)",
+                params![rid, i as i64],
+            ).unwrap();
+            conn.execute("INSERT INTO nodes(id,parent_id,ord,depth,kind,name,value) VALUES(?1,?2,0,2,2,'a',?3)", params![cid, rid, a]).unwrap();
+            conn.execute("INSERT INTO nodes(id,parent_id,ord,depth,kind,name,value) VALUES(?1,?2,1,2,2,'n',?3)", params![cid + 1, rid, n]).unwrap();
+            cid += 2;
+        }
+        conn
+    }
+
+    fn first_a(res: &Value) -> String {
+        res["rows"][0]["cells"][0]["value"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn plain_window() {
+        let c = fixture();
+        let r = op_table(&c, &json!({"node":1,"offset":0,"limit":100})).unwrap();
+        assert_eq!(r["total"].as_i64().unwrap(), 3);
+        assert_eq!(first_a(&r), "apple"); // document order
+    }
+
+    #[test]
+    fn numeric_sort_asc() {
+        let c = fixture();
+        let r = op_table(&c, &json!({"node":1,"sort":{"col":1,"dir":"asc"},"offset":0,"limit":100})).unwrap();
+        // n: 3,10,2 -> asc numeric -> cherry(2), apple(3), banana(10)
+        assert_eq!(first_a(&r), "cherry");
+    }
+
+    #[test]
+    fn numeric_filter_gt() {
+        let c = fixture();
+        let r = op_table(&c, &json!({"node":1,"filters":[{"col":1,"op":"gt","value":"2"}],"offset":0,"limit":100})).unwrap();
+        assert_eq!(r["total"].as_i64().unwrap(), 2); // 3 and 10
+    }
+
+    #[test]
+    fn text_contains_filter() {
+        let c = fixture();
+        let r = op_table(&c, &json!({"node":1,"filters":[{"col":0,"op":"contains","value":"an"}],"offset":0,"limit":100})).unwrap();
+        assert_eq!(r["total"].as_i64().unwrap(), 1); // banana
+        assert_eq!(first_a(&r), "banana");
+    }
 }
