@@ -239,7 +239,7 @@ function renderScreen() {
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
-  if (t.phase === 'empty') { refreshRecents(); refreshStats(); refreshCacheInfo(); }
+  if (t.phase === 'empty') { closeRecentPanel(); refreshRecents(); refreshStats(); refreshCacheInfo(); }
   else if (t.phase === 'loading') updateProgressDom(t);
   else if (t.phase === 'ready') {
     const plain = !!t.plain;
@@ -436,33 +436,160 @@ function middleTruncate(s, max) {
   const tail = Math.min(16, Math.floor(max / 3));
   return s.slice(0, max - tail - 1) + '…' + s.slice(-tail);
 }
+
+// Shorten a filename with a middle ellipsis, keeping the start and the full
+// extension: very_long_export_name.json -> very_long_e…rt_name.json
+function middleEllipsis(name, limit) {
+  if (!name || name.length <= limit) return name;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const keep = limit - ext.length - 1; // room for the …
+  if (keep < 4) return name.slice(0, Math.max(1, limit - 1)) + '…';
+  const head = Math.ceil(keep * 0.6);
+  const tail = keep - head;
+  return base.slice(0, head) + '…' + base.slice(base.length - tail) + ext;
+}
+
+// Approximate, human-readable size with a leading ~ (shown orange in the UI).
+function humanSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1073741824) return '~' + (n / 1073741824).toFixed(1) + ' GB';
+  if (n >= 1048576) return '~' + (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return '~' + Math.round(n / 1024) + ' KB';
+  return '~' + n + ' B';
+}
+
+// Group a recents entry by file type (extension) for the side panel sections.
+const FILE_GROUPS = [
+  ['JSON', ['json', 'ndjson', 'jsonl']],
+  ['XML', ['xml']],
+  ['CSV', ['csv', 'tsv', 'tab']],
+  ['YAML', ['yaml', 'yml']],
+  ['Logs', ['log']],
+  ['Code', ['js', 'mjs', 'ts', 'py', 'html', 'htm', 'css', 'rs', 'go', 'java', 'c', 'cpp', 'sh']],
+  ['Text', ['txt', 'md']],
+];
+function fileGroup(pathStr) {
+  const ext = String(pathStr).split('.').pop().toLowerCase();
+  for (const [name, exts] of FILE_GROUPS) if (exts.includes(ext)) return name;
+  return 'Other';
+}
+function groupRecentsByType(list) {
+  const out = new Map();
+  for (const [name] of FILE_GROUPS) out.set(name, []);
+  out.set('Other', []);
+  for (const r of list) out.get(fileGroup(r.path)).push(r);
+  // Only non-empty groups, in the fixed order.
+  const res = [];
+  for (const [name] of [...FILE_GROUPS, ['Other']]) {
+    const items = out.get(name);
+    if (items && items.length) res.push([name, items]);
+  }
+  return res;
+}
 function cleanErr(err) {
   return String((err && err.message) || err).replace(/^.*Error:\s*/, '');
 }
 
 // ---------- welcome / recents ----------
 async function refreshRecents() {
-  const list = (await window.oxj.recents()).slice(0, 10); // last 10 files
+  const list = (await window.oxj.recents()).slice(0, 15);
   const wrap = $('recents-wrap');
   const el = $('recents-list');
   el.textContent = '';
   if (!list.length) { wrap.classList.add('hidden'); return; }
   wrap.classList.remove('hidden');
+  $('recents-head-label').textContent = 'Recent (' + list.length + ')';
   for (const r of list) {
     const item = document.createElement('div');
     item.className = 'recent-item';
     item.title = r.path; // full path on hover
     const name = document.createElement('span');
     name.className = 'recent-name';
-    name.textContent = middleTruncate(baseName(r.path), 42);
+    name.textContent = middleEllipsis(baseName(r.path), 40);
     const size = document.createElement('span');
     size.className = 'recent-size';
-    size.textContent = fmtBytes(r.size);
+    size.textContent = humanSize(r.size);
     item.append(name, size);
-    item.addEventListener('click', () => openPath(r.path));
+    item.addEventListener('click', () => openRecent(r.path));
     el.appendChild(item);
   }
 }
+
+// Open a recent, focusing an already-open tab for that file instead of a dupe.
+function openRecent(p) {
+  const existing = tabs.find((x) => x.file === p && x.phase !== 'empty');
+  if (existing) { setCurrent(existing); return; }
+  openPath(p);
+}
+
+// ---------- Recent Files side panel (dock) ----------
+let recentPanelOpen = false;
+const recentCollapsed = new Set();
+const FOLDER_SVG = '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1.5 3.75A1.25 1.25 0 0 1 2.75 2.5h2.9c.33 0 .64.13.88.37L7.7 4H13.25A1.25 1.25 0 0 1 14.5 5.25v6A1.25 1.25 0 0 1 13.25 12.5H2.75A1.25 1.25 0 0 1 1.5 11.25v-7.5Z"/></svg>';
+
+function closeRecentPanel() {
+  recentPanelOpen = false;
+  $('recent-panel').classList.remove('open');
+  $('btn-recent').classList.remove('active-tool');
+}
+function toggleRecentPanel() {
+  recentPanelOpen = !recentPanelOpen;
+  $('recent-panel').classList.toggle('open', recentPanelOpen);
+  $('btn-recent').classList.toggle('active-tool', recentPanelOpen);
+  if (recentPanelOpen) renderRecentDock();
+}
+
+async function renderRecentDock() {
+  if (!recentPanelOpen) return;
+  const list = await window.oxj.recents();
+  const el = $('recent-dock-list');
+  el.textContent = '';
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-dock-empty';
+    empty.textContent = 'No recent files';
+    el.appendChild(empty);
+    return;
+  }
+  for (const [group, items] of groupRecentsByType(list)) {
+    const sec = document.createElement('div');
+    sec.className = 'recent-sec';
+    const collapsed = recentCollapsed.has(group);
+    const head = document.createElement('div');
+    head.className = 'recent-sec-head';
+    head.innerHTML = '<span class="recent-sec-caret">' + (collapsed ? '▸' : '▾') + '</span>' +
+      '<span class="recent-sec-name">' + htmlEsc(group) + '</span><span class="recent-sec-count">' + items.length + '</span>';
+    head.addEventListener('click', () => { if (recentCollapsed.has(group)) recentCollapsed.delete(group); else recentCollapsed.add(group); renderRecentDock(); });
+    sec.appendChild(head);
+    if (!collapsed) {
+      for (const r of items) {
+        const row = document.createElement('div');
+        row.className = 'recent-file';
+        row.title = r.path;
+        const name = document.createElement('span');
+        name.className = 'recent-file-name';
+        name.textContent = middleEllipsis(baseName(r.path), 28);
+        const size = document.createElement('span');
+        size.className = 'recent-size';
+        size.textContent = humanSize(r.size);
+        const rev = document.createElement('button');
+        rev.className = 'recent-reveal';
+        rev.title = 'Reveal in folder';
+        rev.innerHTML = FOLDER_SVG;
+        rev.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.revealItem(r.path); });
+        row.append(name, size, rev);
+        row.addEventListener('click', () => openRecent(r.path));
+        sec.appendChild(row);
+      }
+    }
+    el.appendChild(sec);
+  }
+}
+
+$('btn-recent').addEventListener('click', toggleRecentPanel);
+window.oxj.onRecentsChanged(() => { refreshRecents(); renderRecentDock(); });
 
 // ---------- file activity donut chart ----------
 const STAT_PALETTE = ['#4da3ff', '#e0764a', '#7ee0a3', '#c586c0', '#e2b93b', '#8b91a3', '#66c2cd', '#d16d6d', '#9a86e8'];

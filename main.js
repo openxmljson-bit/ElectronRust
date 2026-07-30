@@ -175,12 +175,26 @@ function getRecents() {
     return [];
   }
 }
-function addRecent(file) {
-  // Only real disk files and URL downloads belong in Recents. Temp files we
-  // create ourselves (clipboard imports, copy-to-new-tab fragments, reports)
-  // live in the internal downloads dir and are excluded — except url_* fetches.
+// Notify every window so all three recents surfaces re-render.
+function emitRecentsChanged() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('recents-changed');
+  }
+}
+
+// Temp / scratch / converted-result files never belong in Recents.
+function isTempPath(file) {
+  const base = path.basename(file);
+  if (base.startsWith('oxj_') || base.startsWith('narik_')) return true;
+  try { if (file.startsWith(os.tmpdir() + path.sep)) return true; } catch {}
   const dl = downloadsDir();
-  if (file.startsWith(dl + path.sep) && !path.basename(file).startsWith('url_')) return;
+  // Our internal downloads dir is scratch, except url_* fetches (real content).
+  if (file.startsWith(dl + path.sep) && !base.startsWith('url_')) return true;
+  return false;
+}
+
+function addRecent(file) {
+  if (!file || isTempPath(file)) return;
   let list = getRecents().filter((r) => r.path !== file);
   let size = 0;
   try { size = fs.statSync(file).size; } catch {}
@@ -188,9 +202,24 @@ function addRecent(file) {
   list = list.slice(0, MAX_RECENTS);
   try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
   buildMenu();
+  emitRecentsChanged();
 }
+
 function clearRecents() {
   try { fs.unlinkSync(recentsPath()); } catch {}
+  buildMenu();
+  emitRecentsChanged();
+}
+
+// At startup, drop entries whose file is confirmed missing (moved/deleted).
+function pruneRecent() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(recentsPath(), 'utf8'));
+    const kept = raw.filter((r) => {
+      try { return fs.existsSync(r.path); } catch { return true; } // keep on transient error
+    });
+    if (kept.length !== raw.length) fs.writeFileSync(recentsPath(), JSON.stringify(kept));
+  } catch {}
   buildMenu();
 }
 
@@ -1234,7 +1263,11 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('file-stat', async (_e, p) => {
-    try { const st = fs.statSync(p); return { size: st.size }; } catch { return null; }
+    try { const st = fs.statSync(p); return { exists: true, size: st.size }; } catch { return { exists: false, size: 0 }; }
+  });
+  ipcMain.handle('reveal-item', async (_e, p) => {
+    try { if (typeof p === 'string' && p) { shell.showItemInFolder(p); return true; } } catch {}
+    return false;
   });
 
   // Dock icon in dev (`npm start`); packaged builds use build/icon.icns.
@@ -1243,6 +1276,7 @@ app.whenReady().then(() => {
   }
 
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
+  try { pruneRecent(); } catch {} // drop recents whose file no longer exists
 
   // Renderer reports whether a doc is open / a search has matches, so the
   // Export menu items enable/disable accordingly.
