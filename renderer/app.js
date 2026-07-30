@@ -2509,7 +2509,8 @@ function fullFileLang(p) {
   const ext = String(p).split('.').pop().toLowerCase();
   if (['json', 'ndjson', 'jsonl'].includes(ext)) return 'json';
   if (ext === 'xml') return 'xml';
-  return 'plaintext'; // csv/tsv and anything else: raw text
+  if (ext === 'yaml' || ext === 'yml') return 'yaml';
+  return plainLangFor(p) || 'plaintext'; // md/py/etc.; csv/tsv fall back to raw text
 }
 $('btn-full-file').addEventListener('click', () => {
   const t = cur;
