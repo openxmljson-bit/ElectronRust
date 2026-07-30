@@ -798,9 +798,10 @@ body.resizing .monaco-host, body.resizing .tree-scroll { pointer-events: none; }
 .picker-filter {
   width: 100%; box-sizing: border-box; margin: 4px 0 8px;
   padding: 7px 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--bg-2, #1a1d24); color: var(--fg);
+  border: 1px solid var(--border); background: var(--bg3); color: var(--fg);
   font-size: 13px;
 }
+.picker-filter:focus { border-color: var(--accent); outline: none; }
 .picker-list { max-height: 44vh; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 
 /* ---------- JSON DeepDive field picker ---------- */
@@ -809,14 +810,15 @@ body.resizing .monaco-host, body.resizing .tree-scroll { pointer-events: none; }
 .fp-filter {
   width: 100%; box-sizing: border-box; margin: 4px 0 8px;
   padding: 7px 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--bg-2, #1a1d24); color: var(--fg); font-size: 13px;
+  border: 1px solid var(--border); background: var(--bg3); color: var(--fg); font-size: 13px;
 }
+.fp-filter:focus { border-color: var(--accent); outline: none; }
 .fp-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
 .fp-toolbar .fp-count { margin-left: auto; font-size: 12px; color: var(--fg-dim); }
 .fp-list {
   max-height: 46vh; overflow-y: auto;
   border: 1px solid var(--border); border-radius: 8px; padding: 4px 0;
-  background: var(--bg-2, #16181e);
+  background: var(--bg);
 }
 .fp-row {
   display: flex; align-items: center; gap: 7px;
