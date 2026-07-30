@@ -644,6 +644,19 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
 
+  // Delimited/CSV files store every cell as a node row, so they explode in both
+  // the DB and the in-memory index. Cap them at 1 GB to avoid a doomed ingest.
+  const dext = path.extname(filePath).toLowerCase();
+  const isDelim = fileFormat === 'csv' || fileFormat === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(dext);
+  if (isDelim) {
+    let sz = 0;
+    try { sz = fs.statSync(enginePath).size; } catch {}
+    if (sz > 1024 * 1024 * 1024) {
+      throw new Error('Delimited/CSV files are supported up to 1 GB — this file is ' + fmtBytes(sz) +
+        '. Very wide or tall tables expand into billions of cells.');
+    }
+  }
+
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
   if ((await decideMode(enginePath, fileFormat)) === 'memory') {
     try {
