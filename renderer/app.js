@@ -709,8 +709,11 @@ async function openPath(p, tab, force) {
     toast('Excel files are not supported — export to CSV or JSON first');
     return;
   }
+  // YAML loads as a structured tree (converted to JSON by the engine); other
+  // plain-text languages open read-only. (Raw File still opens YAML read-only.)
+  const isYaml = ext === 'yaml' || ext === 'yml';
   const lang = plainLangFor(p);
-  if (lang) return openPlainPath(p, tab, lang);
+  if (lang && !isYaml) return openPlainPath(p, tab, lang);
   const t = tab || targetTabForOpen();
   if (!t) return; // tab limit reached
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }

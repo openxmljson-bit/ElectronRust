@@ -154,6 +154,24 @@ function downloadsDir() {
   return d;
 }
 
+// YAML isn't a native engine format — parse it and write a temp JSON that the
+// engine ingests. The tab still tracks the original .yaml path.
+function yamlToTempJson(yamlPath) {
+  let yaml;
+  try { yaml = require('js-yaml'); }
+  catch { throw new Error('YAML support needs a dependency — run: npm install'); }
+  let obj;
+  try { obj = yaml.load(fs.readFileSync(yamlPath, 'utf8')); }
+  catch (e) { throw new Error('Could not parse YAML: ' + String((e && e.message) || e).split('\n')[0]); }
+  const out = path.join(downloadsDir(), 'yamlconv_' + Date.now() + '.json');
+  fs.writeFileSync(out, JSON.stringify(obj === undefined ? null : obj));
+  return out;
+}
+function isYamlFile(p) {
+  const e = path.extname(p).toLowerCase();
+  return e === '.yaml' || e === '.yml';
+}
+
 function dbPathFor(file) {
   const st = fs.statSync(file);
   const h = crypto
@@ -614,16 +632,19 @@ async function loadFile(wc, tabId, filePath, force) {
   killSession(tabId);
   addRecent(filePath);
 
+  // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
+  const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
+
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(filePath)) === 'memory') {
+  if ((await decideMode(enginePath)) === 'memory') {
     try {
       let size = 0;
-      try { size = fs.statSync(filePath).size; } catch {}
+      try { size = fs.statSync(enginePath).size; } catch {}
       if (!wc.isDestroyed()) {
         wc.send('ingest-progress', { tabId, event: 'start', total_bytes: size, format: 'memory' });
         wc.send('ingest-progress', { tabId, event: 'phase', phase: 'indexing' });
       }
-      await startServe(tabId, null, wc, filePath, 'memory');
+      await startServe(tabId, null, wc, enginePath, 'memory');
       const meta = await query(tabId, { op: 'meta' });
       bumpStat(meta.format);
       if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: false, file: filePath, loadMs: Date.now() - t0 });
@@ -635,7 +656,7 @@ async function loadFile(wc, tabId, filePath, force) {
     }
   }
 
-  const dbPath = dbPathFor(filePath);
+  const dbPath = dbPathFor(enginePath);
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
@@ -647,7 +668,7 @@ async function loadFile(wc, tabId, filePath, force) {
     return;
   }
 
-  const proc = spawn(bin, ['ingest', filePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(bin, ['ingest', enginePath, '--db', dbPath], { stdio: ['ignore', 'pipe', 'pipe'] });
   const g = { proc, dbPath, wc, file: filePath };
   ingests.set(tabId, g);
   const rl = readline.createInterface({ input: proc.stdout });
@@ -1033,8 +1054,8 @@ app.whenReady().then(() => {
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [
-        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'xml', 'csv', 'tsv', 'tab'] },
-        { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py', 'yaml', 'yml'] },
+        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab'] },
+        { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py'] },
         { name: 'All files', extensions: ['*'] },
       ],
     });
