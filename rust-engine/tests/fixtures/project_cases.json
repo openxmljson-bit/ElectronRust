@@ -1,0 +1,101 @@
+[
+  {
+    "name": "nested+arrays",
+    "value": {
+      "start": 0,
+      "junk": 1,
+      "items": [
+        {
+          "price": 1,
+          "junk": 9,
+          "meta": {
+            "sku": "x",
+            "z": 1
+          }
+        },
+        {
+          "price": 2,
+          "meta": {
+            "sku": "y"
+          }
+        }
+      ],
+      "tags": [
+        "a",
+        "b"
+      ]
+    },
+    "paths": [
+      "start",
+      "items[].price",
+      "items[].meta.sku",
+      "tags[]"
+    ],
+    "expected": {
+      "start": 0,
+      "items": [
+        {
+          "price": 1,
+          "meta": {
+            "sku": "x"
+          }
+        },
+        {
+          "price": 2,
+          "meta": {
+            "sku": "y"
+          }
+        }
+      ],
+      "tags": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  {
+    "name": "missing-key",
+    "value": {
+      "a": 1
+    },
+    "paths": [
+      "a",
+      "b.c"
+    ],
+    "expected": {
+      "a": 1
+    }
+  },
+  {
+    "name": "quoted-key",
+    "value": {
+      "a b": 1,
+      "other": 2
+    },
+    "paths": [
+      "[\"a b\"]"
+    ],
+    "expected": {
+      "a b": 1
+    }
+  },
+  {
+    "name": "whole-subtree",
+    "value": {
+      "o": {
+        "x": 1,
+        "y": 2
+      },
+      "drop": 3
+    },
+    "paths": [
+      "o"
+    ],
+    "expected": {
+      "o": {
+        "x": 1,
+        "y": 2
+      }
+    }
+  }
+]
