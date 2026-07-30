@@ -244,9 +244,7 @@ function renderScreen() {
   else if (t.phase === 'ready') {
     const plain = !!t.plain;
     killFlow();
-    // Keep the Recent dock's open/closed state (a remembered preference).
-    $('recent-panel').classList.toggle('open', recentPanelOpen);
-    $('btn-recent').classList.toggle('active-tool', recentPanelOpen);
+    applyRecentPanel(); // keep the dock's open/closed + width (remembered)
     $('btn-source').classList.toggle('hidden', plain);
     // Raw File opens the file in a read-only tab, size-gated at 450 MB (V8
     // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
@@ -529,20 +527,51 @@ function openRecent(p) {
 
 // ---------- Recent Files side panel (dock) ----------
 let recentPanelOpen = false;
+let recentWidth = Math.max(180, parseInt(localStorage.getItem('oxj-recent-width'), 10) || 260);
 const recentCollapsed = new Set();
 const FOLDER_SVG = '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1.5 3.75A1.25 1.25 0 0 1 2.75 2.5h2.9c.33 0 .64.13.88.37L7.7 4H13.25A1.25 1.25 0 0 1 14.5 5.25v6A1.25 1.25 0 0 1 13.25 12.5H2.75A1.25 1.25 0 0 1 1.5 11.25v-7.5Z"/></svg>';
 
-function closeRecentPanel() {
-  recentPanelOpen = false;
-  $('recent-panel').classList.remove('open');
-  $('btn-recent').classList.remove('active-tool');
-}
-function toggleRecentPanel() {
-  recentPanelOpen = !recentPanelOpen;
+// Apply the open/closed state to the DOM (width is inline so the drag handle
+// can resize it while the toggle still fully collapses it).
+function applyRecentPanel() {
+  $('recent-panel').style.width = recentPanelOpen ? recentWidth + 'px' : '0';
   $('recent-panel').classList.toggle('open', recentPanelOpen);
   $('btn-recent').classList.toggle('active-tool', recentPanelOpen);
+}
+function closeRecentPanel() { recentPanelOpen = false; applyRecentPanel(); }
+function toggleRecentPanel() {
+  recentPanelOpen = !recentPanelOpen;
+  applyRecentPanel();
   if (recentPanelOpen) renderRecentDock();
 }
+
+// Drag the left edge of the dock to resize it.
+(function initRecentResizer() {
+  const panel = $('recent-panel');
+  const grip = $('recent-resizer');
+  if (!grip) return;
+  let startX = 0, startW = 0;
+  const onMove = (ev) => {
+    recentWidth = Math.max(180, Math.min(window.innerWidth * 0.6, startW + (startX - ev.clientX)));
+    panel.style.width = recentWidth + 'px';
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('resizing');
+    grip.classList.remove('dragging');
+    localStorage.setItem('oxj-recent-width', String(recentWidth | 0));
+  };
+  grip.addEventListener('mousedown', (ev) => {
+    ev.preventDefault();
+    startX = ev.clientX;
+    startW = panel.getBoundingClientRect().width;
+    document.body.classList.add('resizing');
+    grip.classList.add('dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
 
 async function renderRecentDock() {
   if (!recentPanelOpen) return;

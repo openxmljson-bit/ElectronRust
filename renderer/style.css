@@ -238,12 +238,14 @@ body {
 /* ---------- Recent Files side panel (dock) ---------- */
 .recent-panel {
   order: 6; /* sits to the right of the Source panel (order: 5) */
+  position: relative;
   width: 0; flex: 0 0 auto; overflow: hidden;
   border-left: 1px solid transparent; background: var(--bg2);
   display: flex; flex-direction: column;
   transition: width .12s ease;
 }
-.recent-panel.open { width: 260px; border-left-color: var(--border); }
+.recent-panel.open { border-left-color: var(--border); } /* width is set inline */
+body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 .recent-dock-head {
   padding: 10px 12px 8px; font-size: 11px; text-transform: uppercase;
   letter-spacing: 1px; color: var(--fg-dim); border-bottom: 1px solid var(--border);
