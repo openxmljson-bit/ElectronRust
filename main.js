@@ -37,6 +37,9 @@ const MAX_RECENTS = 15;
 // rebuilds of the menu (buildMenu runs on many events) keep the right state.
 let menuState = { hasDoc: false, hasMatches: false, hasTwoDocs: false };
 
+// The currently running JSON DeepDive projection process (for cancellation).
+let projProc = null;
+
 const sessions = new Map(); // tabId -> { proc, pending: Map, file, dbPath, wc }
 const ingests = new Map();  // tabId -> { proc, dbPath, wc, file }
 const lastDb = new Map();   // tabId -> { dbPath, file, wc } — for auto-revival
@@ -884,6 +887,8 @@ function buildMenu() {
         { id: 'tool-gen-schema', label: 'Generate JSON Schema', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'gen-schema') },
         { id: 'tool-validate-schema', label: 'Validate Against JSON Schema…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'validate-schema') },
         { type: 'separator' },
+        { id: 'tool-deepdive', label: 'JSON DeepDive → New Tab…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'deepdive') },
+        { type: 'separator' },
         { id: 'tool-compare', label: 'Compare With Open Tab…', enabled: menuState.hasTwoDocs, click: (mi, bw) => sendMenu(bw, 'compare-tabs') },
       ],
     },
@@ -1246,10 +1251,59 @@ app.whenReady().then(() => {
     const menu = Menu.getApplicationMenu();
     if (!menu) return;
     const set = (id, on) => { const mi = menu.getMenuItemById(id); if (mi) mi.enabled = on; };
-    for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text', 'tool-gen-schema', 'tool-validate-schema']) set(id, menuState.hasDoc);
+    for (const id of ['exp-raw', 'exp-pretty', 'exp-xml', 'exp-csv', 'exp-yaml', 'exp-sel-json', 'exp-sel-text', 'tool-gen-schema', 'tool-validate-schema', 'tool-deepdive']) set(id, menuState.hasDoc);
     set('exp-match-json', menuState.hasMatches);
     set('exp-match-csv', menuState.hasMatches);
     set('tool-compare', menuState.hasTwoDocs);
+  });
+
+  // JSON DeepDive: project selected fields out of the source file (streaming,
+  // in Rust) into a temp file, reporting progress and supporting cancellation.
+  ipcMain.handle('project', async (e, { file, format, paths }) => {
+    const stamp = Date.now();
+    const pathsFile = path.join(os.tmpdir(), 'narik_paths_' + stamp + '.json');
+    const outFile = path.join(os.tmpdir(), 'narik_projection_' + stamp + (format === 'ndjson' ? '.ndjson' : '.json'));
+    try {
+      if (!file || !fs.existsSync(file)) throw new Error('source file not found — it may have moved since it was opened');
+      fs.writeFileSync(pathsFile, JSON.stringify(paths || []));
+      const wc = e.sender;
+      const result = await new Promise((resolve, reject) => {
+        const proc = spawn(engineBin(), ['project', '--file', file, '--format', format || 'auto', '--paths', pathsFile, '--out', outFile]);
+        projProc = proc;
+        let errBuf = '';
+        let last = null;
+        const rl = readline.createInterface({ input: proc.stdout });
+        rl.on('line', (line) => {
+          line = line.trim();
+          if (!line) return;
+          try {
+            const m = JSON.parse(line);
+            if (m.event === 'start' || m.event === 'progress') { if (!wc.isDestroyed()) wc.send('project-progress', m); }
+            else if (m.event === 'done') last = m;
+            else if (m.event === 'error') errBuf = m.message || errBuf;
+          } catch { /* non-JSON line */ }
+        });
+        proc.stderr.on('data', (d) => { errBuf += d; });
+        proc.on('error', reject);
+        proc.on('exit', (code) => {
+          projProc = null;
+          try { fs.unlinkSync(pathsFile); } catch {}
+          if (code === 0 && last) { resolve({ out: outFile, kept: last.kept, records: last.records }); return; }
+          try { fs.unlinkSync(outFile); } catch {} // remove any partial output
+          const lc = (errBuf || '').toLowerCase();
+          if (code === 2 || lc.includes('usage') || lc.includes('unknown')) reject(new Error('project unsupported — rebuild the engine (npm run build:engine)'));
+          else reject(new Error((errBuf || '').slice(0, 300) || 'projection failed (code ' + code + ')'));
+        });
+      });
+      return ok(result);
+    } catch (err) {
+      try { fs.unlinkSync(pathsFile); } catch {}
+      return fail(err);
+    }
+  });
+
+  ipcMain.on('cancel-project', () => {
+    if (projProc) { try { projProc.kill('SIGTERM'); } catch {} }
   });
 
   // Write an HTML report to a temp file and open it in the default browser.

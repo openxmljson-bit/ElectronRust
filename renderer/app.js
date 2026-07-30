@@ -53,7 +53,21 @@ const FULL_FILE_MAX = 450 * 1024 * 1024; // read cap for the Full File tab (V8 s
 // Arabic/Windows feeds) which would otherwise make JSON.parse throw. Unicode
 // (Arabic, etc.) is preserved as-is by JSON.stringify.
 function prettyJsonText(src) {
-  return JSON.stringify(JSON.parse(src.replace(/^\uFEFF/, '')), null, 2);
+  const s = src.replace(/^\uFEFF/, '');
+  try {
+    // A single JSON value (object/array) \u2014 pretty-print the whole thing.
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch { /* not one value \u2014 try NDJSON (one object per line) */ }
+  const out = [];
+  let count = 0;
+  for (const ln of s.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (!t) continue;
+    out.push(JSON.stringify(JSON.parse(t), null, 2)); // throws on a bad line \u2192 caller keeps raw
+    count++;
+  }
+  if (!count) throw new Error('nothing to format');
+  return out.join('\n');
 }
 
 // A doc is "not fully pretty-printed" (worth reformatting) when its average
@@ -1837,6 +1851,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'compare-tabs':
       compareTabsFlow();
       break;
+    case 'deepdive':
+      jsonDeepDive();
+      break;
   }
 });
 
@@ -2583,6 +2600,244 @@ async function openTextAsTab(name, ext, text) {
 }
 
 // ============================================================
+// JSON DeepDive — pick fields from the schema, project into a new tab
+// ============================================================
+
+// Path-segment helpers (array-transparent grammar: items[].price).
+function fieldIsIdent(k) { return /^[A-Za-z_$][\w$]*$/.test(k); }
+function fieldAppend(prefix, key) {
+  if (!prefix) return fieldIsIdent(key) ? key : '[' + JSON.stringify(key) + ']';
+  return fieldIsIdent(key) ? prefix + '.' + key : prefix + '[' + JSON.stringify(key) + ']';
+}
+
+// Build an array-transparent field tree from a JSON Schema. A root array is the
+// record boundary (each element is a record), so paths are relative to a record;
+// nested arrays are transparent ("[]"). Returns top-level nodes:
+//   { name, path, selectPath, isLeaf, children }
+function schemaToFieldTree(schema) {
+  let rec = schema;
+  while (rec && rec.type === 'array' && rec.items) rec = rec.items; // unwrap root array(s)
+  if (!rec || rec.type !== 'object' || !rec.properties) return [];
+  const nodeFor = (key, sch, prefix) => {
+    const path = fieldAppend(prefix, key);
+    let s = sch, p = path;
+    while (s && s.type === 'array' && s.items) { p += '[]'; s = s.items; } // nested arrays transparent
+    const node = { name: key, path, selectPath: p, children: [] };
+    if (s && s.type === 'object' && s.properties) {
+      node.children = Object.keys(s.properties).map((k) => nodeFor(k, s.properties[k], p));
+      node.isLeaf = false;
+    } else {
+      node.isLeaf = true;
+    }
+    return node;
+  };
+  return Object.keys(rec.properties).map((k) => nodeFor(k, rec.properties[k], ''));
+}
+
+// Reference projection (JS) — kept for tests and parity with the Rust core.
+// Given a value and selected leaf paths, keep only the selected fields.
+function parseFieldPath(p) {
+  const segs = [];
+  let i = 0;
+  while (i < p.length) {
+    if (p[i] === '.') { i++; continue; }
+    if (p.startsWith('[]', i)) { segs.push({ arr: true }); i += 2; continue; }
+    if (p[i] === '[') {
+      const end = p.indexOf(']', i);
+      let inner = p.slice(i + 1, end);
+      try { inner = JSON.parse(inner); } catch { /* leave as-is */ }
+      segs.push({ key: String(inner) }); i = end + 1; continue;
+    }
+    let j = i;
+    while (j < p.length && p[j] !== '.' && p[j] !== '[') j++;
+    segs.push({ key: p.slice(i, j) }); i = j;
+  }
+  return segs;
+}
+function projectValue(value, paths) {
+  const specs = paths.map(parseFieldPath);
+  const build = (val, segLists) => {
+    // segLists: array of remaining-segment arrays that reached this value
+    if (segLists.some((s) => s.length === 0)) return val; // a leaf selected here → keep whole
+    if (Array.isArray(val)) {
+      // consume one array-transparent segment
+      const next = segLists.filter((s) => s[0] && s[0].arr).map((s) => s.slice(1));
+      if (!next.length) return undefined;
+      return val.map((el) => build(el, next)).filter((x) => x !== undefined);
+    }
+    if (val && typeof val === 'object') {
+      const out = {};
+      for (const k of Object.keys(val)) {
+        const forK = segLists.filter((s) => s[0] && s[0].key === k).map((s) => s.slice(1));
+        if (forK.length) {
+          const r = build(val[k], forK);
+          if (r !== undefined) out[k] = r;
+        }
+      }
+      return out;
+    }
+    return undefined; // scalar with remaining segments → nothing to keep
+  };
+  return build(value, specs);
+}
+
+async function jsonDeepDive() {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  if (t.docFormat !== 'json' && t.docFormat !== 'ndjson') {
+    toast('JSON DeepDive supports JSON and NDJSON documents'); return;
+  }
+  let schemaRes;
+  try { toast('Scanning fields…', true); schemaRes = await getDocSchema(t); }
+  catch (err) { toast('Could not read fields: ' + cleanErr(err)); return; }
+  const tree = schemaToFieldTree(schemaRes.schema);
+  if (!tree.length) { toast('No object fields found to extract'); return; }
+  const paths = await showFieldPicker(tree, schemaRes.sampled);
+  if (!paths || !paths.length) return;
+  await runProjection(t, paths);
+}
+
+// Checkbox tree picker. Returns selected leaf selectPaths, or null if cancelled.
+function showFieldPicker(tree, sampled) {
+  return new Promise((resolve) => {
+    const nodes = [];
+    (function flat(list, depth, parent) {
+      for (const n of list) {
+        const id = nodes.length;
+        nodes.push({ name: n.name, selectPath: n.selectPath, isLeaf: !!n.isLeaf, depth, parent, childIds: [] });
+        if (parent >= 0) nodes[parent].childIds.push(id);
+        if (n.children && n.children.length) flat(n.children, depth + 1, id);
+      }
+    })(tree, 0, -1);
+
+    const checked = new Set();
+    const expanded = new Set(nodes.map((_, i) => i));
+    const setSub = (id, val) => { if (val) checked.add(id); else checked.delete(id); nodes[id].childIds.forEach((c) => setSub(c, val)); };
+    const recompute = (id) => { const k = nodes[id].childIds; if (k.length && k.every((c) => checked.has(c))) checked.add(id); else checked.delete(id); };
+    const toggle = (id, val) => { setSub(id, val); let p = nodes[id].parent; while (p >= 0) { recompute(p); p = nodes[p].parent; } };
+    const someDesc = (id) => nodes[id].childIds.some((c) => checked.has(c) || someDesc(c));
+    const leaves = () => { const s = new Set(); nodes.forEach((n, i) => { if (n.isLeaf && checked.has(i)) s.add(n.selectPath); }); return [...s]; };
+
+    const back = document.createElement('div');
+    back.className = 'modal-backdrop';
+    const box = document.createElement('div');
+    box.className = 'modal fp-modal';
+    box.innerHTML =
+      '<div class="modal-title">JSON DeepDive — pick fields</div>' +
+      (sampled ? '<div class="fp-note">Fields inferred from a sample of a very large document — rare fields may be missing.</div>' : '') +
+      '<input type="search" class="fp-filter" placeholder="Filter fields…" spellcheck="false" />' +
+      '<div class="fp-toolbar"><button class="link-btn fp-all">Select all</button>' +
+      '<button class="link-btn fp-none">Select none</button><span class="fp-count"></span></div>' +
+      '<div class="fp-list"></div>' +
+      '<div class="modal-actions"><button class="btn-secondary fp-cancel">Cancel</button>' +
+      '<button class="btn-primary fp-ok">Extract to New Tab</button></div>';
+    back.appendChild(box);
+    document.body.appendChild(back);
+    const filter = box.querySelector('.fp-filter');
+    const listEl = box.querySelector('.fp-list');
+    const countEl = box.querySelector('.fp-count');
+    const done = (v) => { back.remove(); resolve(v); };
+
+    const render = () => {
+      const q = filter.value.trim().toLowerCase();
+      const matches = new Set();
+      if (q) nodes.forEach((n, i) => {
+        if ((n.name + ' ' + n.selectPath).toLowerCase().includes(q)) { let c = i; while (c >= 0) { matches.add(c); c = nodes[c].parent; } }
+      });
+      const visible = (i) => {
+        if (q) return matches.has(i);
+        let p = nodes[i].parent;
+        while (p >= 0) { if (!expanded.has(p)) return false; p = nodes[p].parent; }
+        return true;
+      };
+      listEl.innerHTML = '';
+      nodes.forEach((n, i) => {
+        if (!visible(i)) return;
+        const row = document.createElement('div');
+        row.className = 'fp-row';
+        row.style.paddingLeft = (6 + n.depth * 18) + 'px';
+        const tog = document.createElement('span');
+        tog.className = 'fp-tog';
+        if (n.childIds.length && !q) {
+          tog.textContent = expanded.has(i) ? '▾' : '▸';
+          tog.onclick = (e) => { e.stopPropagation(); if (expanded.has(i)) expanded.delete(i); else expanded.add(i); render(); };
+        }
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = checked.has(i);
+        cb.indeterminate = !checked.has(i) && someDesc(i);
+        cb.onclick = (e) => { e.stopPropagation(); toggle(i, cb.checked); render(); };
+        const lbl = document.createElement('span');
+        lbl.className = 'fp-label' + (n.isLeaf ? ' leaf' : '');
+        lbl.textContent = n.name;
+        lbl.title = n.selectPath;
+        row.append(tog, cb, lbl);
+        row.onclick = () => { toggle(i, !checked.has(i)); render(); };
+        listEl.appendChild(row);
+      });
+      countEl.textContent = leaves().length + ' field(s) selected';
+    };
+
+    filter.addEventListener('input', render);
+    box.querySelector('.fp-all').onclick = () => { nodes.forEach((_, i) => checked.add(i)); render(); };
+    box.querySelector('.fp-none').onclick = () => { checked.clear(); render(); };
+    box.querySelector('.fp-cancel').onclick = () => done(null);
+    box.querySelector('.fp-ok').onclick = () => { const p = leaves(); if (!p.length) { toast('Select at least one field'); return; } done(p); };
+    back.addEventListener('mousedown', (e) => { if (e.target === back) done(null); });
+    document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { done(null); document.removeEventListener('keydown', esc); } });
+    render();
+    setTimeout(() => filter.focus(), 20);
+  });
+}
+
+function showProjectionProgress() {
+  const back = document.createElement('div');
+  back.className = 'modal-backdrop';
+  const box = document.createElement('div');
+  box.className = 'modal';
+  box.innerHTML =
+    '<div class="modal-title">Building projection…</div>' +
+    '<div class="bar-outer"><div class="bar-inner pp-bar" style="width:0%"></div></div>' +
+    '<div class="pp-stat"></div>' +
+    '<div class="modal-actions"><button class="btn-secondary pp-cancel">Cancel</button></div>';
+  back.appendChild(box);
+  document.body.appendChild(back);
+  const bar = box.querySelector('.pp-bar');
+  const stat = box.querySelector('.pp-stat');
+  return {
+    update(done, total) {
+      if (total) { bar.style.width = Math.min(100, 100 * done / total) + '%'; stat.textContent = fmtInt(done) + ' / ' + fmtInt(total) + ' records'; }
+      else { bar.classList.add('indeterminate'); stat.textContent = fmtInt(done) + ' records'; }
+    },
+    onCancel(cb) { box.querySelector('.pp-cancel').onclick = cb; },
+    close() { back.remove(); },
+  };
+}
+
+async function runProjection(t, paths) {
+  const prog = showProjectionProgress();
+  let cancelled = false;
+  prog.onCancel(() => { cancelled = true; window.oxj.cancelProject(); prog.close(); });
+  const off = window.oxj.onProjectProgress((m) => {
+    if (m && (m.event === 'progress' || m.event === 'start')) prog.update(m.done || 0, m.total);
+  });
+  try {
+    const res = await window.oxj.project({ file: t.file, format: t.docFormat, paths });
+    off(); prog.close();
+    if (cancelled) return;
+    const nt = newTab(true);
+    if (nt) openPath(res.out, nt);
+    toast('Kept ' + (res.kept != null ? res.kept : paths.length) + ' field(s)', true);
+  } catch (err) {
+    off(); prog.close();
+    if (cancelled) return;
+    const msg = cleanErr(err);
+    if (msg.includes('rebuild') || msg.includes('unsupported')) toast('JSON DeepDive needs an engine rebuild (npm run build:engine), then restart');
+    else toast('DeepDive failed: ' + msg);
+  }
+}
+
+// ============================================================
 // Compare two open documents — structural diff + styled report
 // ============================================================
 function htmlEsc(s) {
@@ -2954,27 +3209,29 @@ async function reconstructDoc(t) {
   return r.language === 'json' ? JSON.parse(r.text) : xmlTextToObj(r.text);
 }
 
+// Get the document's JSON Schema: engine op in database mode, or a structural
+// tree-walk in memory mode. Returns { schema, sampled }. Shared by Generate
+// Schema and JSON DeepDive.
+async function getDocSchema(t) {
+  try {
+    const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
+    return { schema: res.schema, sampled: !!res.sampled };
+  } catch (err) {
+    if (!isMemoryModeErr(cleanErr(err))) throw err;
+    const root = t.visible[0];
+    const budget = { n: 200000 };
+    const inferred = await inferSchemaFromTree(t, { id: root.id, kind: root.kind, n: root.n, value: root.value }, budget);
+    return { schema: { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferred }, sampled: budget.n <= 0 };
+  }
+}
+
 async function generateSchema() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
   if (t.docFormat === 'xml') { toast('JSON Schema generation supports JSON, NDJSON and CSV documents'); return; }
   try {
     toast('Generating schema…', true);
-    let schema, sampled = false;
-    try {
-      const res = await window.oxj.query(t.id, { op: 'schema', node: t.rootId });
-      schema = res.schema;
-      sampled = res.sampled;
-    } catch (err) {
-      if (!isMemoryModeErr(cleanErr(err))) throw err;
-      // Memory mode: infer the schema by walking the tree structurally, so we
-      // never reconstruct (and truncate) the whole document as one JSON string.
-      const root = t.visible[0];
-      const budget = { n: 200000 };
-      const inferred = await inferSchemaFromTree(t, { id: root.id, kind: root.kind, n: root.n, value: root.value }, budget);
-      schema = { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferred };
-      sampled = budget.n <= 0;
-    }
+    const { schema, sampled } = await getDocSchema(t);
     const text = JSON.stringify(schema, null, 2);
     await openTextAsTab(baseName(t.file).replace(/\.[^.]+$/, '') + '_schema', 'json', text);
     if (sampled) toast('Schema inferred from a sample of a very large document', true);

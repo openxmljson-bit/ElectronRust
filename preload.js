@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('oxj', {
   clipboardToFile: () => unwrap('clipboard-to-file'),
   setMenuState: (s) => ipcRenderer.send('menu-state', s),
   openHtmlInBrowser: (html) => unwrap('open-html', html),
+  project: (args) => unwrap('project', args),
+  onProjectProgress: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('project-progress', h);
+    return () => ipcRenderer.removeListener('project-progress', h);
+  },
+  cancelProject: () => ipcRenderer.send('cancel-project'),
   loadText: (p, full) => unwrap('load-text', { path: p, full: !!full }),
   saveText: (defaultName, text) => unwrap('save-text', { defaultName, text }),
   readFileText: (p) => unwrap('read-file-text', p),
