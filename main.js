@@ -213,12 +213,16 @@ function isTempPath(file) {
   return false;
 }
 
-function addRecent(file) {
+function addRecent(file, format) {
   if (!file || isTempPath(file)) return;
   let list = getRecents().filter((r) => r.path !== file);
   let size = 0;
   try { size = fs.statSync(file).size; } catch {}
-  list.unshift({ path: file, size, at: Date.now() });
+  const entry = { path: file, size, at: Date.now() };
+  // Remember a forced format (e.g. a .txt opened as a delimited table) so
+  // reopening from Recents restores the table view instead of plain text.
+  if (format === 'csv' || format === 'tsv') entry.format = format;
+  list.unshift(entry);
   list = list.slice(0, MAX_RECENTS);
   try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
   buildMenu();
@@ -639,7 +643,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   if (!fs.existsSync(filePath)) throw new Error('File not found: ' + filePath);
   killIngest(tabId, true);
   killSession(tabId);
-  addRecent(filePath);
+  addRecent(filePath, fileFormat);
 
   // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
@@ -899,7 +903,7 @@ function buildMenu() {
             ...recents.map((r) => ({
               label: middleTruncate(path.basename(r.path), 56),
               toolTip: r.path,
-              click: (mi, bw) => sendMenu(bw, 'open-path', r.path),
+              click: (mi, bw) => sendMenu(bw, 'open-path', r.format ? { path: r.path, format: r.format } : r.path),
             })),
             { type: 'separator' },
             { label: 'Clear Menu', enabled: recents.length > 0, click: () => clearRecents() },

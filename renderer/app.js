@@ -513,16 +513,20 @@ async function refreshRecents() {
     size.className = 'recent-size';
     size.textContent = humanSize(r.size);
     item.append(name, size);
-    item.addEventListener('click', () => openRecent(r.path));
+    item.addEventListener('click', () => openRecent(r));
     el.appendChild(item);
   }
 }
 
-// Open a recent, focusing an already-open tab for that file instead of a dupe.
-function openRecent(p) {
+// Open a recent (entry or path), focusing an already-open tab instead of a
+// duplicate. Honors a remembered format (e.g. a .txt opened as a delimited table).
+function openRecent(r) {
+  const p = typeof r === 'string' ? r : r.path;
+  const fmt = typeof r === 'object' ? r.format : null;
   const existing = tabs.find((x) => x.file === p && x.phase !== 'empty');
   if (existing) { setCurrent(existing); return; }
-  openPath(p);
+  if (fmt === 'csv' || fmt === 'tsv') openAsCsv(p);
+  else openPath(p);
 }
 
 // ---------- Recent Files side panel (dock) ----------
@@ -612,7 +616,7 @@ async function renderRecentDock() {
         rev.innerHTML = FOLDER_SVG;
         rev.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.revealItem(r.path); });
         row.append(name, size, rev);
-        row.addEventListener('click', () => openRecent(r.path));
+        row.addEventListener('click', () => openRecent(r));
         sec.appendChild(row);
       }
     }
@@ -2622,7 +2626,7 @@ window.oxj.onMenu(async ({ action, arg }) => {
       break;
     }
     case 'open-path':
-      if (arg) openPath(arg);
+      if (arg) { if (typeof arg === 'object') openRecent(arg); else openPath(arg); }
       break;
     case 'open-url':
       showUrlModal();
