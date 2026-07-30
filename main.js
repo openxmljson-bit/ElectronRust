@@ -669,12 +669,20 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   if (force) { try { fs.unlinkSync(dbPath); } catch {} }
 
   if (fs.existsSync(dbPath)) {
-    indexTouch(dbPath, filePath); // refresh LRU timestamp
-    await startServe(tabId, dbPath, wc, filePath, 'db');
-    const meta = await query(tabId, { op: 'meta' });
-    bumpStat(meta.format);
-    if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
-    return;
+    try {
+      indexTouch(dbPath, filePath); // refresh LRU timestamp
+      await startServe(tabId, dbPath, wc, filePath, 'db');
+      const meta = await query(tabId, { op: 'meta' });
+      bumpStat(meta.format);
+      if (!wc.isDestroyed()) wc.send('doc-ready', { tabId, meta, cached: true, file: filePath, loadMs: Date.now() - t0 });
+      return;
+    } catch (cacheErr) {
+      // Cached DB is corrupt or partial (e.g. an interrupted earlier ingest) —
+      // discard it and re-ingest from scratch below.
+      engineLog('cached db unusable, re-ingesting: ' + String((cacheErr && cacheErr.message) || cacheErr));
+      killSession(tabId);
+      try { fs.unlinkSync(dbPath); } catch {}
+    }
   }
 
   const ingestArgs = ['ingest', enginePath, '--db', dbPath];
