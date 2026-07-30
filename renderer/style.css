@@ -360,8 +360,10 @@ body.light .watermark { opacity: .09; }
 }
 .btn-tool:hover { border-color: var(--fg-dim); }
 .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.seg { background: var(--bg2); color: var(--fg-dim); border: 0; padding: 5px 14px; cursor: pointer; font-size: 12px; }
-.seg.active { background: var(--sel); color: #fff; }
+.seg { background: var(--bg2); color: var(--fg-dim); border: 0; padding: 5px 14px; cursor: pointer; font-size: 12px; outline: none; }
+.seg:hover { color: var(--fg); }
+.seg:focus, .seg:focus-visible { outline: none; }
+.seg.active { background: var(--accent); color: #fff; }
 #search-scope {
   background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 6px; font-size: 12px; outline: none;
