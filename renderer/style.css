@@ -554,48 +554,63 @@ body.light .watermark { opacity: .09; }
 .ask-open-msg { color: var(--fg-dim); font-size: 13px; margin: 6px 0 12px; line-height: 1.4; }
 
 /* ---------- Smart URL / request builder ---------- */
-.req-modal { width: min(760px, 96vw); }
-.req-titlebar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.req-top { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
+.req-modal {
+  width: min(960px, 96vw); height: min(86vh, 840px);
+  padding: 18px 20px 16px; gap: 12px;
+}
+.req-titlebar { display: flex; align-items: center; justify-content: space-between; }
+.req-titlebar .modal-title { font-size: 15px; }
+.req-titlebar .link-btn { font-size: 15px; color: var(--fg-dim); }
+.req-titlebar .link-btn:hover { color: var(--fg); }
+.req-top { display: flex; gap: 8px; align-items: stretch; }
 .req-method {
-  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 0 10px; font-size: 13px; font-weight: 700; min-width: 92px;
+  background: var(--bg3); color: var(--accent); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0 12px; font-size: 13px; font-weight: 800; min-width: 100px; letter-spacing: .3px;
 }
 .req-top #url-input {
   flex: 1; background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: var(--mono);
+  border-radius: 8px; padding: 10px 12px; font-size: 13px; font-family: var(--mono);
 }
 .req-top #url-input:focus { border-color: var(--accent); outline: none; }
-.req-top #req-send { padding: 0 22px; }
-.req-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.req-top #req-send { padding: 0 26px; font-weight: 700; }
+.req-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
 .req-tab {
   background: none; border: 0; color: var(--fg-dim); cursor: pointer;
-  padding: 8px 14px; font-size: 12.5px; border-bottom: 2px solid transparent;
+  padding: 9px 16px; font-size: 12.5px; font-weight: 600; border-bottom: 2px solid transparent;
 }
 .req-tab:hover { color: var(--fg); }
-.req-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-.req-panes { min-height: 180px; }
+.req-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* Panes fill the remaining height and scroll internally (never grow the modal). */
+.req-panes { flex: 1; min-height: 0; display: flex; }
+.req-pane { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 4px 2px; }
 .req-pane.hidden { display: none; }
 /* key-value tables (params, headers) */
-.kv-table { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.kv-row { display: flex; align-items: center; gap: 6px; }
+.kv-table { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.kv-row { display: flex; align-items: center; gap: 7px; }
 .kv-row input[type="checkbox"] { flex: 0 0 auto; margin: 0; }
 .kv-row .kv-key, .kv-row .kv-val {
   background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 8px; font-size: 12.5px; font-family: var(--mono);
+  border-radius: 7px; padding: 7px 9px; font-size: 12.5px; font-family: var(--mono);
+  min-width: 0;
 }
-.kv-row .kv-key { flex: 0 0 34%; }
-.kv-row .kv-val { flex: 1; min-width: 40px; }
-.kv-row .kv-del { flex: 0 0 auto; background: none; border: 0; color: var(--fg-dim); cursor: pointer; font-size: 14px; padding: 2px 6px; }
-.kv-row .kv-del:hover { color: #e0764a; }
-.kv-row.kv-off .kv-key, .kv-row.kv-off .kv-val { opacity: .45; }
+.kv-row .kv-key:focus, .kv-row .kv-val:focus { border-color: var(--accent); outline: none; }
+.kv-row .kv-key { flex: 0 0 38%; }
+.kv-row .kv-val { flex: 1 1 0; }
+.kv-row .kv-del { flex: 0 0 auto; background: none; border: 0; color: var(--fg-dim); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 5px; }
+.kv-row .kv-del:hover { color: #fff; background: #e0764a; }
+.kv-row.kv-off .kv-key, .kv-row.kv-off .kv-val { opacity: .4; }
 .req-body {
-  width: 100%; box-sizing: border-box; min-height: 160px; resize: vertical;
+  width: 100%; box-sizing: border-box; height: 100%; min-height: 200px; resize: none;
   background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 9px 11px; font-size: 12.5px; font-family: var(--mono);
+  border-radius: 8px; padding: 10px 12px; font-size: 12.5px; font-family: var(--mono);
 }
 .req-body:focus { border-color: var(--accent); outline: none; }
+[data-pane="auth"] .modal-row { margin-bottom: 10px; }
 #url-auth-apikey select { flex: 0 0 auto; }
+[data-pane="auth"] input, [data-pane="auth"] select {
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; font-size: 12.5px;
+}
 
 /* coverage / profile report tables (inside the light .diff-report overlay) */
 .cov-table { font-size: 12.5px; color: #1a1a1a; height: 100%; overflow-y: auto; }
