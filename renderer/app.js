@@ -4547,13 +4547,25 @@ window.oxj.onTheme((eff) => applyTheme(eff));
 
 // ---------- licensing / activation ----------
 let licensed = false;
+const EXPIRY_NUDGE_DAYS = 14;
 function setLicError(msg) { $('lic-error').textContent = msg || ''; }
 function editionValidity(expiresAt) { return expiresAt ? 'until ' + String(expiresAt).slice(0, 10) : 'Lifetime'; }
+function daysUntil(expiresAt) {
+  if (!expiresAt) return Infinity; // lifetime
+  const t = Date.parse(expiresAt);
+  return Number.isFinite(t) ? Math.ceil((t - Date.now()) / 86400000) : Infinity;
+}
 function showEdition(on, expiresAt) {
   licensed = !!on;
-  const badge = $('welcome-edition');
-  badge.classList.toggle('hidden', !on);
-  if (on) badge.title = 'NARIK EDITION · Valid ' + editionValidity(expiresAt);
+  $('welcome-license').classList.toggle('hidden', !on);
+  if (!on) return;
+  const d = daysUntil(expiresAt);
+  const v = $('welcome-validity');
+  v.classList.remove('expiring');
+  if (!expiresAt) v.textContent = '· Lifetime';
+  else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
+  else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
+  else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
@@ -4570,6 +4582,10 @@ async function initLicense() {
   if (s && s.email) $('lic-email').value = s.email;
   if (s && s.licensed) {
     showEdition(true, s.expires_at);
+    const d = daysUntil(s.expires_at);
+    if (Number.isFinite(d) && d > 0 && d <= EXPIRY_NUDGE_DAYS) {
+      toast('Your NARIK EDITION license expires in ' + d + ' day' + (d === 1 ? '' : 's') + ' — renew to avoid interruption.', true);
+    }
   } else {
     showEdition(false);
     openLicenseLock(false); // hard lock: app is unusable until activated
@@ -4608,6 +4624,7 @@ $('lic-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('li
 $('lic-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-activate').click(); });
 $('lic-close').addEventListener('click', hideLicenseLock);
 $('lic-buy').addEventListener('click', () => window.oxj.license.store());
+$('welcome-manage').addEventListener('click', () => openLicenseLock(true)); // renew / change key
 
 // ---------- init ----------
 initMonaco();
