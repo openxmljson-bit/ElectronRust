@@ -2583,8 +2583,10 @@ $('btn-copy-source').addEventListener('click', async () => {
 let builderParams = [];
 let builderHeaders = [];
 let urlSyncing = false; // guard against URL<->params feedback loops
+let builderEditTab = null; // when editing an open URL doc, reuse its tab
 
-function showUrlModal(prefill) {
+function showUrlModal(prefill, editTab) {
+  builderEditTab = editTab || null;
   const r = prefill || {};
   $('req-method').value = r.method || 'GET';
   $('url-input').value = r.url || '';
@@ -2704,10 +2706,13 @@ async function sendRequest() {
   const sendHeaders = builderHeaders.filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
   const reqState = { method, url: canonUrl, params: builderParams.filter((p) => p.key || p.val), auth, headers: builderHeaders.filter((h) => h.key), body };
   hideUrlModal();
+  // When editing an existing URL doc, reload into its tab; otherwise a new tab.
+  const target = (builderEditTab && tabAlive(builderEditTab)) ? builderEditTab : undefined;
+  builderEditTab = null;
   toast(method + ' ' + canonUrl + ' …', true);
   try {
     const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body });
-    const t = await openPath(res.file);
+    const t = await openPath(res.file, target);
     if (t) t.origin = reqState; // full request → Edit URL + Copy as cURL
     toast(res.status + ' ' + (res.statusText || '').trim() + ' · ' + res.timeMs + ' ms · ' + humanSize(res.size), res.status >= 200 && res.status < 300);
   } catch (e) {
@@ -2731,7 +2736,7 @@ $('url-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { e
 $('req-send').addEventListener('click', sendRequest);
 $('url-cancel').addEventListener('click', hideUrlModal);
 $('url-modal').addEventListener('click', (ev) => { if (ev.target === $('url-modal')) hideUrlModal(); });
-$('btn-edit-url').addEventListener('click', () => { if (cur && cur.origin) showUrlModal(cur.origin); });
+$('btn-edit-url').addEventListener('click', () => { if (cur && cur.origin) showUrlModal(cur.origin, cur); });
 
 // ---------- native menu actions ----------
 window.oxj.onMenu(async ({ action, arg }) => {
