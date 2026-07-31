@@ -4555,19 +4555,9 @@ function daysUntil(expiresAt) {
   const t = Date.parse(expiresAt);
   return Number.isFinite(t) ? Math.ceil((t - Date.now()) / 86400000) : Infinity;
 }
-function showEdition(on, expiresAt) {
+function showEdition(on) {
   licensed = !!on;
-  $('welcome-license').classList.toggle('hidden', !on);
-  if (on) {
-    const d = daysUntil(expiresAt);
-    const v = $('welcome-validity');
-    v.classList.remove('expiring');
-    if (!expiresAt) v.textContent = '· Lifetime';
-    else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
-    else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
-    else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
-  }
-  refreshMembership(); // shows/hides the Membership card to match license state
+  refreshMembership(); // the Membership card is now the sole license display
 }
 
 // Membership card on the welcome screen — visible only when a license is active.
