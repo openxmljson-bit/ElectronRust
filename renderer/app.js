@@ -2660,6 +2660,9 @@ function makeKvRow(el, rows, row, onChange) {
     }
   };
   key.oninput = upd; val.oninput = upd;
+  const onEnter = (e) => { if (e.key === 'Enter') { e.preventDefault(); sendRequest(); } };
+  key.addEventListener('keydown', onEnter);
+  val.addEventListener('keydown', onEnter);
   del.onclick = () => { const i = rows.indexOf(row); if (i >= 0) rows.splice(i, 1); r.remove(); onChange(); };
   r.append(cb, key, val, del);
   return r;
