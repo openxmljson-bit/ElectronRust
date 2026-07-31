@@ -2614,6 +2614,13 @@ function showUrlModal(prefill, editTab) {
 function hideUrlModal() { $('url-modal').classList.add('hidden'); }
 
 // URL <-> Params
+// Form-decode a query token: '+' means space, then percent-decode. Rebuilding
+// with encodeURIComponent turns spaces back into %20 (which servers read as a
+// space), so a pasted '+' isn't mangled into a literal '%2B'.
+function decParam(s) {
+  try { return decodeURIComponent(String(s).replace(/\+/g, '%20')); }
+  catch { return String(s); }
+}
 function parseParams(url) {
   const qi = String(url).indexOf('?');
   if (qi < 0) return [];
@@ -2623,8 +2630,7 @@ function parseParams(url) {
     const eq = pair.indexOf('=');
     const k = eq < 0 ? pair : pair.slice(0, eq);
     const v = eq < 0 ? '' : pair.slice(eq + 1);
-    try { out.push({ on: true, key: decodeURIComponent(k), val: decodeURIComponent(v) }); }
-    catch { out.push({ on: true, key: k, val: v }); }
+    out.push({ on: true, key: decParam(k), val: decParam(v) });
   }
   return out;
 }
