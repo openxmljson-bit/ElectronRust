@@ -10,6 +10,7 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 const https = require('https');
 const http = require('http');
+const zlib = require('zlib');
 const os = require('os');
 const si = require('systeminformation');
 
@@ -202,14 +203,15 @@ function emitRecentsChanged() {
   }
 }
 
-// Temp / scratch / converted-result files never belong in Recents.
+// Recents holds only real files the user opened/dropped. Everything the app
+// generates — URL responses, converted YAML, clipboard imports, exports and
+// fragment temps — lives in the internal downloads dir or the OS temp dir and
+// is treated as scratch, so it never enters Recents.
 function isTempPath(file) {
   const base = path.basename(file);
   if (base.startsWith('oxj_') || base.startsWith('narik_')) return true;
   try { if (file.startsWith(os.tmpdir() + path.sep)) return true; } catch {}
-  const dl = downloadsDir();
-  // Our internal downloads dir is scratch, except url_* fetches (real content).
-  if (file.startsWith(dl + path.sep) && !base.startsWith('url_')) return true;
+  if (file.startsWith(downloadsDir() + path.sep)) return true;
   return false;
 }
 
@@ -231,6 +233,13 @@ function addRecent(file, format) {
 
 function clearRecents() {
   try { fs.unlinkSync(recentsPath()); } catch {}
+  buildMenu();
+  emitRecentsChanged();
+}
+
+function removeRecent(file) {
+  const list = getRecents().filter((r) => r.path !== file);
+  try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
   buildMenu();
   emitRecentsChanged();
 }
@@ -812,6 +821,61 @@ function downloadUrl(url, headers) {
   });
 }
 
+// A full HTTP request (any method/body/headers). Unlike downloadUrl it does not
+// reject on non-2xx — the builder shows the status and the response body.
+function httpRequest({ method, url, headers, body }) {
+  return new Promise((resolve, reject) => {
+    headers = headers || {};
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === 'accept-encoding')) headers['Accept-Encoding'] = 'gzip, deflate, br';
+    const started = Date.now();
+    const tmp = path.join(downloadsDir(), 'url_' + Date.now());
+    const out = fs.createWriteStream(tmp);
+    let redirects = 0;
+    const run = (u, meth) => {
+      const mod = u.startsWith('https:') ? https : http;
+      const req = mod.request(u, { method: meth, headers }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
+          redirects++;
+          res.resume();
+          run(new URL(res.headers.location, u).toString(), res.statusCode === 303 ? 'GET' : meth);
+          return;
+        }
+        // Decompress gzip/deflate/br responses (Node doesn't do it automatically).
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+        let stream = res;
+        if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
+        else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
+        else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
+        stream.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
+        stream.pipe(out);
+        out.on('finish', () => out.close(() => {
+          const ct = String(res.headers['content-type'] || '');
+          let ext = ct.includes('json') ? '.json' : ct.includes('xml') ? '.xml' : ct.includes('csv') ? '.csv' : null;
+          if (!ext) {
+            try {
+              const fd = fs.openSync(tmp, 'r');
+              const buf = Buffer.alloc(2048);
+              const n = fs.readSync(fd, buf, 0, 2048, 0);
+              fs.closeSync(fd);
+              ext = sniffExt(buf.slice(0, n).toString('utf8'));
+            } catch { ext = '.txt'; }
+          }
+          const final = tmp + ext;
+          try { fs.renameSync(tmp, final); } catch {}
+          let size = 0;
+          try { size = fs.statSync(final).size; } catch {}
+          resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
+        }));
+      });
+      req.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
+      req.setTimeout(60000, () => { req.destroy(new Error('request timed out')); });
+      if (body != null && body !== '' && meth !== 'GET' && meth !== 'HEAD') req.write(body);
+      req.end();
+    };
+    try { run(url, String(method || 'GET').toUpperCase()); } catch (e) { reject(e); }
+  });
+}
+
 function authHeaders(auth) {
   const h = { 'User-Agent': 'NARIKJSON/0.1' };
   if (!auth || auth.type === 'none') return h;
@@ -894,7 +958,6 @@ function buildMenu() {
         { label: 'New Window', accelerator: 'Shift+CmdOrCtrl+N', click: () => createWindow() },
         { type: 'separator' },
         { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: (mi, bw) => sendMenu(bw, 'open') },
-        { label: 'Open Delimited File as Table…', click: (mi, bw) => sendMenu(bw, 'open-delimited') },
         { label: 'Open URL…', accelerator: 'Alt+Shift+O', click: (mi, bw) => sendMenu(bw, 'open-url') },
         { label: 'Open Clipboard', accelerator: 'Shift+CmdOrCtrl+V', click: (mi, bw) => sendMenu(bw, 'open-clipboard') },
         {
@@ -1091,7 +1154,8 @@ app.whenReady().then(() => {
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [
-        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab'] },
+        { name: 'All files', extensions: ['*'] },
+        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab', 'txt', 'dat', 'psv'] },
         { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py'] },
         { name: 'All files', extensions: ['*'] },
       ],
@@ -1127,6 +1191,19 @@ app.whenReady().then(() => {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('URL must start with http:// or https://');
       const file = await downloadUrl(String(url), authHeaders(auth));
       return ok(file);
+    } catch (err) { return fail(err); }
+  });
+
+  // Full request builder: method + headers + body; returns response metadata.
+  ipcMain.handle('http-request', async (_e, req) => {
+    try {
+      if (!/^https?:\/\//i.test(String(req.url))) throw new Error('URL must start with http:// or https://');
+      const headers = { ...authHeaders(req.auth) };
+      for (const h of (req.headers || [])) if (h && h.key) headers[h.key] = h.value != null ? h.value : '';
+      const hasBody = req.body != null && req.body !== '' && !['GET', 'HEAD'].includes(String(req.method || 'GET').toUpperCase());
+      if (hasBody && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/json';
+      const res = await httpRequest({ method: req.method, url: String(req.url), headers, body: req.body });
+      return ok(res);
     } catch (err) { return fail(err); }
   });
 
@@ -1320,6 +1397,7 @@ app.whenReady().then(() => {
   ipcMain.handle('stats', async () => getStats());
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
+  ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
   ipcMain.handle('file-stat', async (_e, p) => {
     try { const st = fs.statSync(p); return { exists: true, size: st.size }; } catch { return { exists: false, size: 0 }; }
   });
