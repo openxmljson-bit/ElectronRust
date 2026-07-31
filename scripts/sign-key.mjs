@@ -10,9 +10,10 @@
 //   signature (8 bytes): first 8 bytes of HMAC-SHA256(header, secret)
 //
 // Usage:
-//   LICENSE_SIGNING_SECRET=... node scripts/sign-key.mjs <email> [tier] [days]
+//   LICENSE_SIGNING_SECRET=... node scripts/sign-key.mjs <email> [days]
 //     days: 0 = lifetime (never expires) · 365 = one year · 7 = 7-day test key
-//     tier: Essential | Premium | Unbxd   (index-stable, append-only)
+//
+// This build has a single edition — NARIK (tier index 0).
 //
 // IMPORTANT: this must use the SAME LICENSE_SIGNING_SECRET as your /verify
 // endpoint. After minting one key, test-activate it in the app to confirm it
@@ -20,24 +21,19 @@
 
 import crypto from 'node:crypto';
 
-const TIERS = ['Essential', 'Premium', 'Unbxd']; // append-only; NARIK uses "Unbxd"
+const TIERS = ['NARIK']; // single edition (index-stable, append-only)
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-const [, , email, tierArg = 'Unbxd', daysArg = '0'] = process.argv;
+const [, , email, daysArg = '0'] = process.argv;
 const secret = process.env.LICENSE_SIGNING_SECRET;
 
 if (!email || !secret) {
-  console.error('Usage: LICENSE_SIGNING_SECRET=... node scripts/sign-key.mjs <email> [tier] [days]');
+  console.error('Usage: LICENSE_SIGNING_SECRET=... node scripts/sign-key.mjs <email> [days]');
   console.error('  days: 0 = lifetime, N = expires N days from today');
-  console.error('  tier: ' + TIERS.join(' | '));
   process.exit(1);
 }
 
-const tierIndex = TIERS.indexOf(tierArg);
-if (tierIndex < 0) {
-  console.error('tier must be one of: ' + TIERS.join(', '));
-  process.exit(1);
-}
+const tierIndex = 0; // NARIK
 const days = parseInt(daysArg, 10) || 0;
 
 const header = Buffer.alloc(7);
@@ -60,5 +56,5 @@ if (bits > 0) out += CROCKFORD[(val << (5 - bits)) & 31];
 
 const key = out.match(/.{1,4}/g).join('-');
 const validity = days > 0 ? `expires ${new Date(expiryDays * 86400000).toISOString().slice(0, 10)} (${days} days)` : 'lifetime';
-console.error(`email: ${email}  tier: ${tierArg}  ${validity}`);
+console.error(`email: ${email}  edition: NARIK  ${validity}`);
 console.log(key);
