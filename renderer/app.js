@@ -4558,7 +4558,51 @@ function daysUntil(expiresAt) {
 function showEdition(on) {
   licensed = !!on;
   refreshMembership(); // the Membership card is now the sole license display
+  refreshEngineMode(); // Engine Mode card lives in the same left column
 }
+
+// Engine Mode card — shows the active engine and lets the user switch it.
+const ENGINE_DESC = {
+  auto: 'Picks the in-RAM engine for files that fit in memory, and the database engine for anything larger.',
+  memory: 'Always loads into the in-RAM engine — fastest, but bounded by available memory.',
+  db: 'Always uses the on-disk database engine — handles files of any size.',
+};
+async function refreshEngineMode() {
+  const wrap = $('engine-wrap');
+  if (!wrap) return;
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  let info = { mode: 'auto' };
+  try { info = await window.oxj.engineMode(); } catch {}
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  const mode = info.mode || 'auto';
+  document.querySelectorAll('#engine-seg .engine-opt').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  $('engine-desc').textContent = ENGINE_DESC[mode] || '';
+  const list = $('engine-list');
+  list.textContent = '';
+  const addRow = (k, v) => {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.textContent = v;
+    row.append(kk, vv);
+    list.appendChild(row);
+  };
+  addRow('Active engine', mode === 'db' ? 'Database' : mode === 'memory' ? 'In-RAM' : 'Auto');
+  if (info.ramFree != null) addRow('Available RAM', fmtBytes(info.ramFree));
+  if (mode !== 'db' && info.memModeLimit != null) addRow('In-RAM limit', '~' + fmtBytes(info.memModeLimit));
+  wrap.classList.remove('hidden');
+}
+document.getElementById('engine-seg').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.engine-opt');
+  if (!btn) return;
+  try {
+    await window.oxj.setEngineMode(btn.dataset.mode);
+    toast('Engine mode: ' + btn.textContent + ' — applies to files opened from now on', true);
+  } catch (err) { toast('Could not change engine mode: ' + cleanErr(err)); }
+  refreshEngineMode();
+});
 
 // Membership card on the welcome screen — visible only when a license is active.
 async function refreshMembership() {
