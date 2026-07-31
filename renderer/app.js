@@ -2771,6 +2771,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'open-url':
       showUrlModal();
       break;
+    case 'activate':
+      openLicenseLock(licensed);
+      break;
     case 'open-clipboard':
       try {
         const file = await window.oxj.clipboardToFile();
@@ -4542,7 +4545,62 @@ function applyTheme(eff) {
 }
 window.oxj.onTheme((eff) => applyTheme(eff));
 
+// ---------- licensing / activation ----------
+let licensed = false;
+function setLicError(msg) { $('lic-error').textContent = msg || ''; }
+function showEdition(on) {
+  licensed = !!on;
+  $('welcome-edition').classList.toggle('hidden', !on);
+}
+function openLicenseLock(canClose) {
+  $('lic-close').classList.toggle('hidden', !canClose);
+  $('lic-heading').textContent = licensed ? 'License active — enter a new key to re-activate' : 'Activate to unlock';
+  setLicError('');
+  $('license-lock').classList.remove('hidden');
+  setTimeout(() => ($('lic-email').value ? $('lic-key') : $('lic-email')).focus(), 30);
+}
+function hideLicenseLock() { $('license-lock').classList.add('hidden'); }
+
+async function initLicense() {
+  let s = { licensed: false };
+  try { s = await window.oxj.license.status(); } catch {}
+  if (s && s.email) $('lic-email').value = s.email;
+  if (s && s.licensed) {
+    showEdition(true);
+  } else {
+    showEdition(false);
+    openLicenseLock(false); // hard lock: app is unusable until activated
+    if (s && s.expired) setLicError('Your license has expired — re-activate to continue.');
+  }
+}
+
+$('lic-activate').addEventListener('click', async () => {
+  const email = $('lic-email').value.trim();
+  const key = $('lic-key').value.trim();
+  if (!email || !key) { setLicError('Enter your email and license key.'); return; }
+  $('lic-activate').disabled = true;
+  setLicError('Verifying…');
+  try {
+    const r = await window.oxj.license.activate(email, key);
+    if (r && r.valid) {
+      showEdition(true);
+      hideLicenseLock();
+      toast('Activated — NARIK EDITION', true);
+    } else {
+      setLicError(r && r.reason ? 'Not activated: ' + r.reason : 'Invalid email or license key.');
+    }
+  } catch (e) {
+    setLicError('Could not reach the license server: ' + cleanErr(e));
+  }
+  $('lic-activate').disabled = false;
+});
+$('lic-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-key').focus(); });
+$('lic-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-activate').click(); });
+$('lic-close').addEventListener('click', hideLicenseLock);
+$('lic-buy').addEventListener('click', () => window.oxj.license.store());
+
 // ---------- init ----------
 initMonaco();
 window.oxj.getTheme().then((eff) => applyTheme(eff)).catch(() => {});
 newTab(true);
+initLicense();

@@ -876,6 +876,60 @@ function httpRequest({ method, url, headers, body }) {
   });
 }
 
+// ---------------- licensing ----------------
+// Public config. The /verify endpoint is stateless: POST {email, licenseKey}
+// -> {valid, tier, email, status, expires_at, reason}. Override with env if the
+// deployed endpoint differs.
+const LICENSE_API_BASE = process.env.NARIK_API_BASE || 'https://checkapi.openxmljson.com';
+const LICENSE_STORE_URL = process.env.NARIK_STORE_URL || 'https://openxmljson.com';
+
+function licensePath() { return path.join(app.getPath('userData'), 'license.json'); }
+function readLicense() { try { return JSON.parse(fs.readFileSync(licensePath(), 'utf8')); } catch { return null; } }
+function writeLicense(o) { try { fs.writeFileSync(licensePath(), JSON.stringify(o)); } catch {} }
+function clearLicense() { try { fs.unlinkSync(licensePath()); } catch {} }
+
+// Current entitlement from the local cache (no network). Expired keys don't count.
+function licenseStatus() {
+  const l = readLicense();
+  if (!l || !l.valid) return { licensed: false };
+  if (l.expires_at) {
+    const exp = Date.parse(l.expires_at);
+    if (Number.isFinite(exp) && Date.now() > exp) return { licensed: false, expired: true, email: l.email };
+  }
+  return { licensed: true, email: l.email, tier: l.tier || null, expires_at: l.expires_at || null };
+}
+
+function httpsPostJson(url, body) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error('bad license URL')); }
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(u, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'User-Agent': 'NARIKJSON' },
+    }, (res) => {
+      let data = '';
+      res.on('data', (d) => { data += d; });
+      res.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { reject(new Error('unexpected response from the license server')); } });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => req.destroy(new Error('license server timed out')));
+    req.write(body);
+    req.end();
+  });
+}
+
+async function activateLicense(email, key) {
+  const res = await httpsPostJson(LICENSE_API_BASE + '/verify', JSON.stringify({ email, licenseKey: key }));
+  if (res && res.valid) {
+    writeLicense({
+      valid: true, key, email: res.email || email, tier: res.tier || null,
+      status: res.status || null, expires_at: res.expires_at || null, cachedAt: Date.now(),
+    });
+  }
+  return res || { valid: false, reason: 'no response' };
+}
+
 function authHeaders(auth) {
   const h = { 'User-Agent': 'NARIKJSON/0.1' };
   if (!auth || auth.type === 'none') return h;
@@ -1125,6 +1179,7 @@ function buildMenu() {
     {
       role: 'help',
       submenu: [
+        { label: 'Activate License…', click: (mi, bw) => sendMenu(bw, 'activate') },
         { label: 'Check for Updates…', click: (mi, bw) => checkForUpdates(bw) },
         { type: 'separator' },
         {
@@ -1398,6 +1453,14 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
+
+  ipcMain.handle('license-status', async () => licenseStatus());
+  ipcMain.handle('license-activate', async (_e, { email, key }) => {
+    try { return ok(await activateLicense(String(email || '').trim(), String(key || '').trim())); }
+    catch (err) { return fail(err); }
+  });
+  ipcMain.handle('license-clear', async () => { clearLicense(); return true; });
+  ipcMain.handle('open-store', async () => { try { shell.openExternal(LICENSE_STORE_URL); } catch {} return true; });
   ipcMain.handle('file-stat', async (_e, p) => {
     try { const st = fs.statSync(p); return { exists: true, size: st.size }; } catch { return { exists: false, size: 0 }; }
   });

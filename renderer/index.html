@@ -18,6 +18,7 @@
       <div class="welcome-row">
       <div class="welcome-card">
         <div class="logo"><span class="brace">{</span><span>N</span><span class="brace">}</span>ARIK<span>JSON</span></div>
+        <div id="welcome-edition" class="edition-badge welcome-edition hidden">NARIK EDITION</div>
         <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
         <div class="tagline-big">Built for GIGABYTES</div>
         <div class="chips">
@@ -242,6 +243,22 @@
 
   <div id="toast" class="toast hidden"></div>
   <div id="drop-overlay" class="drop-overlay hidden">Drop to open</div>
+
+  <!-- ============ License activation lock ============ -->
+  <div id="license-lock" class="license-lock hidden">
+    <div class="license-card">
+      <button id="lic-close" class="link-btn license-close hidden" title="Close">✕</button>
+      <div class="logo"><span class="brace">{</span><span>N</span><span class="brace">}</span>ARIK<span>JSON</span></div>
+      <div class="edition-badge">NARIK EDITION</div>
+      <div id="lic-heading" class="license-heading">Activate to unlock</div>
+      <div class="license-sub">Enter the email and license key from your purchase.</div>
+      <input id="lic-email" type="email" placeholder="Email address" spellcheck="false" autocomplete="off" />
+      <input id="lic-key" type="text" placeholder="License key  (XXXX-XXXX-XXXX-XXXX-XXXX-XXXX)" spellcheck="false" autocomplete="off" />
+      <div id="lic-error" class="license-error"></div>
+      <button id="lic-activate" class="btn-primary license-activate">Activate</button>
+      <button id="lic-buy" class="link-btn license-buy">Buy a license</button>
+    </div>
+  </div>
 
   <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="graph.js"></script>
