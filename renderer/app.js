@@ -252,6 +252,7 @@ function renderScreen() {
     const isCsvDoc = t.docFormat === 'csv' || t.docFormat === 'tsv';
     $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
     $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
+    $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
       plain || memMode || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
@@ -2573,44 +2574,159 @@ $('btn-copy-source').addEventListener('click', async () => {
 });
 
 // ---------- Open URL modal ----------
-function showUrlModal() {
+// ---------- Smart URL / request builder (Postman-style) ----------
+let builderParams = [];
+let builderHeaders = [];
+let urlSyncing = false; // guard against URL<->params feedback loops
+
+function showUrlModal(prefill) {
+  const r = prefill || {};
+  $('req-method').value = r.method || 'GET';
+  $('url-input').value = r.url || '';
+  $('req-body').value = r.body || '';
+  const a = r.auth || { type: 'none' };
+  $('url-auth').value = a.type || 'none';
+  $('url-user').value = a.user || '';
+  $('url-pass').value = a.pass || '';
+  $('url-token').value = a.token || '';
+  $('url-apikey-key').value = a.header || '';
+  $('url-apikey-val').value = a.value || a.token || '';
+  $('url-apikey-in').value = a.addTo || 'header';
+  updateAuthPanes();
+  builderParams = (r.params && r.params.length)
+    ? r.params.map((p) => ({ on: p.on !== false, key: p.key, val: p.val }))
+    : parseParams(r.url || '');
+  builderHeaders = (r.headers || []).map((h) => ({ on: h.on !== false, key: h.key, val: h.val }));
+  renderKv('params-table', builderParams, onParamsChange);
+  renderKv('headers-table', builderHeaders, () => {});
+  showReqTab('params');
+  $('req-title').textContent = prefill ? 'Edit Request' : 'Request';
   $('url-modal').classList.remove('hidden');
-  $('url-input').focus();
+  setTimeout(() => $('url-input').focus(), 20);
 }
-function hideUrlModal() {
-  $('url-modal').classList.add('hidden');
+function hideUrlModal() { $('url-modal').classList.add('hidden'); }
+
+// URL <-> Params
+function parseParams(url) {
+  const qi = String(url).indexOf('?');
+  if (qi < 0) return [];
+  const out = [];
+  for (const pair of url.slice(qi + 1).split('&')) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    const k = eq < 0 ? pair : pair.slice(0, eq);
+    const v = eq < 0 ? '' : pair.slice(eq + 1);
+    try { out.push({ on: true, key: decodeURIComponent(k), val: decodeURIComponent(v) }); }
+    catch { out.push({ on: true, key: k, val: v }); }
+  }
+  return out;
 }
-$('url-auth').addEventListener('change', () => {
+function baseOf(url) { const qi = url.indexOf('?'); return qi < 0 ? url : url.slice(0, qi); }
+function buildUrl() {
+  const base = baseOf($('url-input').value.trim());
+  const on = builderParams.filter((p) => p.on !== false && (p.key || p.val));
+  if (!on.length) return base;
+  return base + '?' + on.map((p) => encodeURIComponent(p.key) + '=' + encodeURIComponent(p.val)).join('&');
+}
+function onParamsChange() {
+  if (urlSyncing) return;
+  urlSyncing = true;
+  $('url-input').value = buildUrl();
+  urlSyncing = false;
+}
+
+// key-value table (append-on-type so focus is preserved)
+function makeKvRow(el, rows, row, onChange) {
+  const r = document.createElement('div');
+  r.className = 'kv-row' + (row.on === false ? ' kv-off' : '');
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = row.on !== false;
+  const key = document.createElement('input'); key.className = 'kv-key'; key.placeholder = 'key'; key.value = row.key || '';
+  const val = document.createElement('input'); val.className = 'kv-val'; val.placeholder = 'value'; val.value = row.val || '';
+  const del = document.createElement('button'); del.className = 'kv-del'; del.textContent = '×';
+  cb.onchange = () => { row.on = cb.checked; r.classList.toggle('kv-off', !row.on); onChange(); };
+  const upd = () => {
+    row.key = key.value; row.val = val.value; onChange();
+    if (rows[rows.length - 1] === row && (row.key || row.val)) {
+      const blank = { on: true, key: '', val: '' };
+      rows.push(blank);
+      el.appendChild(makeKvRow(el, rows, blank, onChange));
+    }
+  };
+  key.oninput = upd; val.oninput = upd;
+  del.onclick = () => { const i = rows.indexOf(row); if (i >= 0) rows.splice(i, 1); r.remove(); onChange(); };
+  r.append(cb, key, val, del);
+  return r;
+}
+function renderKv(tableId, rows, onChange) {
+  const el = $(tableId);
+  el.textContent = '';
+  if (!rows.length || rows[rows.length - 1].key || rows[rows.length - 1].val) rows.push({ on: true, key: '', val: '' });
+  for (const row of rows) el.appendChild(makeKvRow(el, rows, row, onChange));
+}
+
+function updateAuthPanes() {
   const v = $('url-auth').value;
   $('url-auth-basic').classList.toggle('hidden', v !== 'basic');
-  $('url-auth-token').classList.toggle('hidden', v !== 'bearer' && v !== 'apikey');
-  $('url-header').classList.toggle('hidden', v !== 'apikey');
+  $('url-auth-bearer').classList.toggle('hidden', v !== 'bearer');
+  $('url-auth-apikey').classList.toggle('hidden', v !== 'apikey');
+}
+function gatherAuth() {
+  const type = $('url-auth').value;
+  if (type === 'basic') return { type, user: $('url-user').value, pass: $('url-pass').value };
+  if (type === 'bearer') return { type, token: $('url-token').value };
+  if (type === 'apikey') return { type, header: $('url-apikey-key').value, value: $('url-apikey-val').value, token: $('url-apikey-val').value, addTo: $('url-apikey-in').value };
+  return { type: 'none' };
+}
+function showReqTab(name) {
+  document.querySelectorAll('.req-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.req-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== name));
+}
+
+async function sendRequest() {
+  const canonUrl = buildUrl();
+  if (!canonUrl) { toast('Enter a URL'); return; }
+  const method = $('req-method').value;
+  const auth = gatherAuth();
+  const body = $('req-body').value;
+  let sendUrl = canonUrl;
+  let sendAuth = auth;
+  if (auth.type === 'apikey' && auth.addTo === 'query' && auth.header) {
+    sendUrl += (sendUrl.includes('?') ? '&' : '?') + encodeURIComponent(auth.header) + '=' + encodeURIComponent(auth.value || '');
+    sendAuth = { type: 'none' };
+  } else if (auth.type === 'apikey') {
+    sendAuth = { type: 'apikey', header: auth.header, token: auth.value };
+  }
+  const sendHeaders = builderHeaders.filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
+  const reqState = { method, url: canonUrl, params: builderParams.filter((p) => p.key || p.val), auth, headers: builderHeaders.filter((h) => h.key), body };
+  hideUrlModal();
+  toast(method + ' ' + canonUrl + ' …', true);
+  try {
+    const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body });
+    const t = await openPath(res.file);
+    if (t) t.origin = reqState; // full request → Edit URL + Copy as cURL
+    toast(res.status + ' ' + (res.statusText || '').trim() + ' · ' + res.timeMs + ' ms · ' + humanSize(res.size), res.status >= 200 && res.status < 300);
+  } catch (e) {
+    toast('Request failed: ' + cleanErr(e));
+  }
+}
+
+// One-time wiring
+$('url-auth').addEventListener('change', updateAuthPanes);
+document.querySelectorAll('.req-tab').forEach((b) => b.addEventListener('click', () => showReqTab(b.dataset.tab)));
+$('params-add').addEventListener('click', () => { const b = { on: true, key: '', val: '' }; builderParams.push(b); $('params-table').appendChild(makeKvRow($('params-table'), builderParams, b, onParamsChange)); });
+$('headers-add').addEventListener('click', () => { const b = { on: true, key: '', val: '' }; builderHeaders.push(b); $('headers-table').appendChild(makeKvRow($('headers-table'), builderHeaders, b, () => {})); });
+$('url-input').addEventListener('input', () => {
+  if (urlSyncing) return;
+  urlSyncing = true;
+  builderParams = parseParams($('url-input').value);
+  renderKv('params-table', builderParams, onParamsChange);
+  urlSyncing = false;
 });
+$('url-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); sendRequest(); } });
+$('req-send').addEventListener('click', sendRequest);
 $('url-cancel').addEventListener('click', hideUrlModal);
 $('url-modal').addEventListener('click', (ev) => { if (ev.target === $('url-modal')) hideUrlModal(); });
-$('url-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('url-ok').click(); });
-$('url-ok').addEventListener('click', async () => {
-  const url = $('url-input').value.trim();
-  if (!url) return;
-  const type = $('url-auth').value;
-  const auth = {
-    type,
-    user: $('url-user').value,
-    pass: $('url-pass').value,
-    token: $('url-token').value,
-    header: $('url-header').value || 'X-API-Key',
-  };
-  hideUrlModal();
-  toast('Fetching ' + url + '…', true);
-  try {
-    const file = await window.oxj.downloadUrl(url, auth);
-    const t = await openPath(file);
-    // Remember the request so "Copy as cURL" can reproduce it.
-    if (t) t.origin = { url, auth };
-  } catch (e) {
-    toast('Fetch failed: ' + cleanErr(e));
-  }
-});
+$('btn-edit-url').addEventListener('click', () => { if (cur && cur.origin) showUrlModal(cur.origin); });
 
 // ---------- native menu actions ----------
 window.oxj.onMenu(async ({ action, arg }) => {

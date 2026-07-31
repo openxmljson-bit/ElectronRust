@@ -812,6 +812,52 @@ function downloadUrl(url, headers) {
   });
 }
 
+// A full HTTP request (any method/body/headers). Unlike downloadUrl it does not
+// reject on non-2xx — the builder shows the status and the response body.
+function httpRequest({ method, url, headers, body }) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tmp = path.join(downloadsDir(), 'url_' + Date.now());
+    const out = fs.createWriteStream(tmp);
+    let redirects = 0;
+    const run = (u, meth) => {
+      const mod = u.startsWith('https:') ? https : http;
+      const req = mod.request(u, { method: meth, headers }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
+          redirects++;
+          res.resume();
+          run(new URL(res.headers.location, u).toString(), res.statusCode === 303 ? 'GET' : meth);
+          return;
+        }
+        res.pipe(out);
+        out.on('finish', () => out.close(() => {
+          const ct = String(res.headers['content-type'] || '');
+          let ext = ct.includes('json') ? '.json' : ct.includes('xml') ? '.xml' : ct.includes('csv') ? '.csv' : null;
+          if (!ext) {
+            try {
+              const fd = fs.openSync(tmp, 'r');
+              const buf = Buffer.alloc(2048);
+              const n = fs.readSync(fd, buf, 0, 2048, 0);
+              fs.closeSync(fd);
+              ext = sniffExt(buf.slice(0, n).toString('utf8'));
+            } catch { ext = '.txt'; }
+          }
+          const final = tmp + ext;
+          try { fs.renameSync(tmp, final); } catch {}
+          let size = 0;
+          try { size = fs.statSync(final).size; } catch {}
+          resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
+        }));
+      });
+      req.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
+      req.setTimeout(60000, () => { req.destroy(new Error('request timed out')); });
+      if (body != null && body !== '' && meth !== 'GET' && meth !== 'HEAD') req.write(body);
+      req.end();
+    };
+    try { run(url, String(method || 'GET').toUpperCase()); } catch (e) { reject(e); }
+  });
+}
+
 function authHeaders(auth) {
   const h = { 'User-Agent': 'NARIKJSON/0.1' };
   if (!auth || auth.type === 'none') return h;
@@ -1127,6 +1173,19 @@ app.whenReady().then(() => {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('URL must start with http:// or https://');
       const file = await downloadUrl(String(url), authHeaders(auth));
       return ok(file);
+    } catch (err) { return fail(err); }
+  });
+
+  // Full request builder: method + headers + body; returns response metadata.
+  ipcMain.handle('http-request', async (_e, req) => {
+    try {
+      if (!/^https?:\/\//i.test(String(req.url))) throw new Error('URL must start with http:// or https://');
+      const headers = { ...authHeaders(req.auth) };
+      for (const h of (req.headers || [])) if (h && h.key) headers[h.key] = h.value != null ? h.value : '';
+      const hasBody = req.body != null && req.body !== '' && !['GET', 'HEAD'].includes(String(req.method || 'GET').toUpperCase());
+      if (hasBody && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/json';
+      const res = await httpRequest({ method: req.method, url: String(req.url), headers, body: req.body });
+      return ok(res);
     } catch (err) { return fail(err); }
   });
 
