@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('oxj', {
   clearCache: () => unwrap('clear-cache'),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
+  removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),
   fileStat: (p) => ipcRenderer.invoke('file-stat', p),
   revealItem: (p) => ipcRenderer.invoke('reveal-item', p),
   onRecentsChanged: (cb) => ipcRenderer.on('recents-changed', () => cb()),

@@ -235,6 +235,13 @@ function clearRecents() {
   emitRecentsChanged();
 }
 
+function removeRecent(file) {
+  const list = getRecents().filter((r) => r.path !== file);
+  try { fs.writeFileSync(recentsPath(), JSON.stringify(list)); } catch {}
+  buildMenu();
+  emitRecentsChanged();
+}
+
 // At startup, drop entries whose file is confirmed missing (moved/deleted).
 function pruneRecent() {
   try {
@@ -1379,6 +1386,7 @@ app.whenReady().then(() => {
   ipcMain.handle('stats', async () => getStats());
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
+  ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
   ipcMain.handle('file-stat', async (_e, p) => {
     try { const st = fs.statSync(p); return { exists: true, size: st.size }; } catch { return { exists: false, size: 0 }; }
   });

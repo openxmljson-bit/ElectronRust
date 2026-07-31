@@ -616,7 +616,12 @@ async function renderRecentDock() {
         rev.title = 'Reveal in folder';
         rev.innerHTML = FOLDER_SVG;
         rev.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.revealItem(r.path); });
-        row.append(name, size, rev);
+        const rm = document.createElement('button');
+        rm.className = 'recent-remove';
+        rm.title = 'Remove from recents';
+        rm.textContent = '✕';
+        rm.addEventListener('click', (e) => { e.stopPropagation(); window.oxj.removeRecent(r.path); });
+        row.append(name, size, rev, rm);
         row.addEventListener('click', () => openRecent(r));
         sec.appendChild(row);
       }

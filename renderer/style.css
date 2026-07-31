@@ -280,6 +280,12 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
   color: var(--accent); cursor: pointer; opacity: .7; display: inline-flex; align-items: center;
 }
 .recent-reveal:hover { opacity: 1; }
+.recent-remove {
+  flex: 0 0 auto; background: none; border: 0; padding: 2px 5px;
+  color: var(--fg-dim); cursor: pointer; font-size: 12px; opacity: 0; border-radius: 5px;
+}
+.recent-file:hover .recent-remove { opacity: .7; }
+.recent-remove:hover { opacity: 1; color: #fff; background: #e0764a; }
 
 /* ---------- Files Served stats ---------- */
 .welcome-row {
