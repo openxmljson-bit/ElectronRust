@@ -2488,11 +2488,17 @@ async function updateSource() {
   try {
     const res = await window.oxj.query(t.id, { op: 'subtree', node: e.id, budget: 50000 });
     if (t !== cur) return;
+    // Always pretty-print JSON in the Source pane — minified sources (e.g. API
+    // responses) are sliced raw by the engine, so reformat here.
+    let text = res.text;
+    if (res.language === 'json' && !res.truncated) {
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    }
     $('source-title').textContent = 'Source — ' + (e.label || '') + ' (' + res.language.toUpperCase() + ')';
     if (monacoReady && monacoEditor) {
       $('source-fallback').classList.add('hidden');
       $('monaco-host').classList.remove('hidden');
-      const model = window.monaco.editor.createModel(res.text, res.language);
+      const model = window.monaco.editor.createModel(text, res.language);
       const old = monacoEditor.getModel();
       monacoEditor.setModel(model);
       if (old) old.dispose();
@@ -2500,9 +2506,9 @@ async function updateSource() {
       $('monaco-host').classList.add('hidden');
       const fb = $('source-fallback');
       fb.classList.remove('hidden');
-      fb.textContent = res.text;
+      fb.textContent = text;
     }
-    updateSource._text = res.text;
+    updateSource._text = text;
   } catch (err) {
     $('source-title').textContent = 'Source — unavailable';
     const msg = cleanErr(err).replace(/\s*\(raise the budget[^)]*\)/, '');
