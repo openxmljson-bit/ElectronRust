@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('oxj', {
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),
+  license: {
+    status: () => ipcRenderer.invoke('license-status'),
+    activate: (email, key) => unwrap('license-activate', { email, key }),
+    clear: () => ipcRenderer.invoke('license-clear'),
+    store: () => ipcRenderer.invoke('open-store'),
+    onRevoked: (cb) => ipcRenderer.on('license-revoked', () => cb()),
+  },
   fileStat: (p) => ipcRenderer.invoke('file-stat', p),
   revealItem: (p) => ipcRenderer.invoke('reveal-item', p),
   onRecentsChanged: (cb) => ipcRenderer.on('recents-changed', () => cb()),

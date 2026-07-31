@@ -2771,6 +2771,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
     case 'open-url':
       showUrlModal();
       break;
+    case 'activate':
+      openLicenseLock(licensed);
+      break;
     case 'open-clipboard':
       try {
         const file = await window.oxj.clipboardToFile();
@@ -4542,7 +4545,89 @@ function applyTheme(eff) {
 }
 window.oxj.onTheme((eff) => applyTheme(eff));
 
+// ---------- licensing / activation ----------
+let licensed = false;
+const EXPIRY_NUDGE_DAYS = 14;
+function setLicError(msg) { $('lic-error').textContent = msg || ''; }
+function editionValidity(expiresAt) { return expiresAt ? 'until ' + String(expiresAt).slice(0, 10) : 'Lifetime'; }
+function daysUntil(expiresAt) {
+  if (!expiresAt) return Infinity; // lifetime
+  const t = Date.parse(expiresAt);
+  return Number.isFinite(t) ? Math.ceil((t - Date.now()) / 86400000) : Infinity;
+}
+function showEdition(on, expiresAt) {
+  licensed = !!on;
+  $('welcome-license').classList.toggle('hidden', !on);
+  if (!on) return;
+  const d = daysUntil(expiresAt);
+  const v = $('welcome-validity');
+  v.classList.remove('expiring');
+  if (!expiresAt) v.textContent = '· Lifetime';
+  else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
+  else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
+  else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
+}
+function openLicenseLock(canClose) {
+  $('lic-close').classList.toggle('hidden', !canClose);
+  $('lic-heading').textContent = licensed ? 'License active — enter a new key to re-activate' : 'Activate to unlock';
+  setLicError('');
+  $('license-lock').classList.remove('hidden');
+  setTimeout(() => ($('lic-email').value ? $('lic-key') : $('lic-email')).focus(), 30);
+}
+function hideLicenseLock() { $('license-lock').classList.add('hidden'); }
+
+async function initLicense() {
+  let s = { licensed: false };
+  try { s = await window.oxj.license.status(); } catch {}
+  if (s && s.email) $('lic-email').value = s.email;
+  if (s && s.licensed) {
+    showEdition(true, s.expires_at);
+    const d = daysUntil(s.expires_at);
+    if (Number.isFinite(d) && d > 0 && d <= EXPIRY_NUDGE_DAYS) {
+      toast('Your NARIK EDITION license expires in ' + d + ' day' + (d === 1 ? '' : 's') + ' — renew to avoid interruption.', true);
+    }
+  } else {
+    showEdition(false);
+    openLicenseLock(false); // hard lock: app is unusable until activated
+    if (s && s.expired) setLicError('Your license has expired — re-activate to continue.');
+  }
+}
+
+// The server rejected the cached key during a periodic re-check → re-lock.
+window.oxj.license.onRevoked(() => {
+  showEdition(false);
+  openLicenseLock(false);
+  setLicError('Your license is no longer valid — please re-activate.');
+});
+
+$('lic-activate').addEventListener('click', async () => {
+  const email = $('lic-email').value.trim();
+  const key = $('lic-key').value.trim();
+  if (!email || !key) { setLicError('Enter your email and license key.'); return; }
+  $('lic-activate').disabled = true;
+  setLicError('Verifying…');
+  try {
+    const r = await window.oxj.license.activate(email, key);
+    if (r && r.valid) {
+      showEdition(true, r.expires_at);
+      hideLicenseLock();
+      toast('Activated — NARIK EDITION (' + editionValidity(r.expires_at) + ')', true);
+    } else {
+      setLicError(r && r.reason ? 'Not activated: ' + r.reason : 'Invalid email or license key.');
+    }
+  } catch (e) {
+    setLicError('Could not reach the license server: ' + cleanErr(e));
+  }
+  $('lic-activate').disabled = false;
+});
+$('lic-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-key').focus(); });
+$('lic-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-activate').click(); });
+$('lic-close').addEventListener('click', hideLicenseLock);
+$('lic-buy').addEventListener('click', () => window.oxj.license.store());
+$('welcome-manage').addEventListener('click', () => openLicenseLock(true)); // renew / change key
+
 // ---------- init ----------
 initMonaco();
 window.oxj.getTheme().then((eff) => applyTheme(eff)).catch(() => {});
 newTab(true);
+initLicense();
