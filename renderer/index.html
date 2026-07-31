@@ -16,6 +16,15 @@
     <!-- ============ Welcome screen ============ -->
     <div id="screen-welcome" class="screen">
       <div class="welcome-row">
+      <div class="side-col-left">
+        <div id="membership-wrap" class="stats membership hidden">
+          <div class="stats-head membership-head">Membership <span class="edition-badge">NARIK EDITION</span></div>
+          <div id="membership-list"></div>
+          <div class="cache-actions">
+            <button id="welcome-manage" class="link-btn">Manage / Renew</button>
+          </div>
+        </div>
+      </div>
       <div class="welcome-card">
         <div class="logo"><span class="brace">{</span><span>N</span><span class="brace">}</span>ARIK<span>JSON</span></div>
         <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
@@ -47,13 +56,6 @@
           <div id="cache-list"></div>
           <div class="cache-actions">
             <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
-          </div>
-        </div>
-        <div id="membership-wrap" class="stats membership hidden">
-          <div class="stats-head membership-head">Membership <span class="edition-badge">NARIK EDITION</span></div>
-          <div id="membership-list"></div>
-          <div class="cache-actions">
-            <button id="welcome-manage" class="link-btn">Manage / Renew</button>
           </div>
         </div>
       </div>
