@@ -4548,9 +4548,12 @@ window.oxj.onTheme((eff) => applyTheme(eff));
 // ---------- licensing / activation ----------
 let licensed = false;
 function setLicError(msg) { $('lic-error').textContent = msg || ''; }
-function showEdition(on) {
+function editionValidity(expiresAt) { return expiresAt ? 'until ' + String(expiresAt).slice(0, 10) : 'Lifetime'; }
+function showEdition(on, expiresAt) {
   licensed = !!on;
-  $('welcome-edition').classList.toggle('hidden', !on);
+  const badge = $('welcome-edition');
+  badge.classList.toggle('hidden', !on);
+  if (on) badge.title = 'NARIK EDITION · Valid ' + editionValidity(expiresAt);
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
@@ -4566,13 +4569,20 @@ async function initLicense() {
   try { s = await window.oxj.license.status(); } catch {}
   if (s && s.email) $('lic-email').value = s.email;
   if (s && s.licensed) {
-    showEdition(true);
+    showEdition(true, s.expires_at);
   } else {
     showEdition(false);
     openLicenseLock(false); // hard lock: app is unusable until activated
     if (s && s.expired) setLicError('Your license has expired — re-activate to continue.');
   }
 }
+
+// The server rejected the cached key during a periodic re-check → re-lock.
+window.oxj.license.onRevoked(() => {
+  showEdition(false);
+  openLicenseLock(false);
+  setLicError('Your license is no longer valid — please re-activate.');
+});
 
 $('lic-activate').addEventListener('click', async () => {
   const email = $('lic-email').value.trim();
@@ -4583,9 +4593,9 @@ $('lic-activate').addEventListener('click', async () => {
   try {
     const r = await window.oxj.license.activate(email, key);
     if (r && r.valid) {
-      showEdition(true);
+      showEdition(true, r.expires_at);
       hideLicenseLock();
-      toast('Activated — NARIK EDITION', true);
+      toast('Activated — NARIK EDITION (' + editionValidity(r.expires_at) + ')', true);
     } else {
       setLicError(r && r.reason ? 'Not activated: ' + r.reason : 'Invalid email or license key.');
     }

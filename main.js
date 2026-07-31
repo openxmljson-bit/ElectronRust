@@ -924,10 +924,38 @@ async function activateLicense(email, key) {
   if (res && res.valid) {
     writeLicense({
       valid: true, key, email: res.email || email, tier: res.tier || null,
-      status: res.status || null, expires_at: res.expires_at || null, cachedAt: Date.now(),
+      status: res.status || null, expires_at: res.expires_at || null,
+      cachedAt: Date.now(), lastVerified: Date.now(),
     });
   }
   return res || { valid: false, reason: 'no response' };
+}
+
+// Re-verify the cached key with the server every REVERIFY_DAYS. Success refreshes
+// the cache; an explicit invalid (revoked/expired) locks the app; a network
+// failure is tolerated (offline grace) and retried later.
+const REVERIFY_DAYS = 20;
+function broadcastLicenseRevoked() {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('license-revoked');
+}
+async function reverifyIfDue() {
+  const l = readLicense();
+  if (!l || !l.valid) return;
+  const last = l.lastVerified || l.cachedAt || 0;
+  if (Date.now() - last < REVERIFY_DAYS * 86400000) return; // not due yet
+  let res;
+  try {
+    res = await httpsPostJson(LICENSE_API_BASE + '/verify', JSON.stringify({ email: l.email, licenseKey: l.key }));
+  } catch {
+    return; // offline / server error — keep the cached entitlement, retry later
+  }
+  if (res && res.valid) {
+    writeLicense({ ...l, valid: true, tier: res.tier || l.tier, status: res.status || l.status,
+      expires_at: res.expires_at !== undefined ? res.expires_at : l.expires_at, lastVerified: Date.now() });
+  } else {
+    clearLicense(); // server says the key is no longer valid → lock
+    broadcastLicenseRevoked();
+  }
 }
 
 function authHeaders(auth) {
@@ -1476,6 +1504,10 @@ app.whenReady().then(() => {
 
   try { pruneCache(); } catch {} // startup pruning: orphans + size cap
   try { pruneRecent(); } catch {} // drop recents whose file no longer exists
+  // Re-verify the license shortly after launch, then every 12h (fires only when
+  // the 20-day window has elapsed).
+  setTimeout(() => { reverifyIfDue().catch(() => {}); }, 4000);
+  setInterval(() => { reverifyIfDue().catch(() => {}); }, 12 * 3600 * 1000);
 
   // Renderer reports whether a doc is open / a search has matches, so the
   // Export menu items enable/disable accordingly.
