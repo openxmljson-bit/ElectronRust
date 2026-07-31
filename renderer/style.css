@@ -312,6 +312,10 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 }
 .side-col .stats { box-shadow: 0 18px 60px rgba(0,0,0,.45); }
 .cache-actions { margin-top: 10px; text-align: right; }
+/* Membership card — 1.5x the Cache Manager width, right edge aligned */
+.membership { width: 420px; align-self: flex-end; }
+.membership .stat-kv .v { font-weight: 700; }
+.membership .stat-kv .v.expiring { color: #e0a02c; }
 .stats-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
 /* Donut chart */
 .stats-chart { display: flex; align-items: center; gap: 16px; }

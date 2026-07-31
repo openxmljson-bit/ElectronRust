@@ -4558,14 +4558,50 @@ function daysUntil(expiresAt) {
 function showEdition(on, expiresAt) {
   licensed = !!on;
   $('welcome-license').classList.toggle('hidden', !on);
-  if (!on) return;
-  const d = daysUntil(expiresAt);
-  const v = $('welcome-validity');
-  v.classList.remove('expiring');
-  if (!expiresAt) v.textContent = '· Lifetime';
-  else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
-  else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
-  else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
+  if (on) {
+    const d = daysUntil(expiresAt);
+    const v = $('welcome-validity');
+    v.classList.remove('expiring');
+    if (!expiresAt) v.textContent = '· Lifetime';
+    else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
+    else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
+    else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
+  }
+  refreshMembership(); // shows/hides the Membership card to match license state
+}
+
+// Membership card on the welcome screen — visible only when a license is active.
+async function refreshMembership() {
+  const wrap = $('membership-wrap');
+  if (!wrap) return;
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  let s = {};
+  try { s = await window.oxj.license.status(); } catch {}
+  if (!licensed) { wrap.classList.add('hidden'); return; } // may have changed while awaiting
+  const list = $('membership-list');
+  list.textContent = '';
+  const addRow = (k, v, cls) => {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.className = 'v'; vv.textContent = v;
+    if (cls) vv.classList.add(cls);
+    row.append(kk, vv);
+    list.appendChild(row);
+  };
+  const exp = s.expires_at;
+  const d = daysUntil(exp);
+  let valid = 'Lifetime', validCls = '';
+  if (exp) {
+    if (d <= 0) { valid = 'Expired'; validCls = 'expiring'; }
+    else if (d <= EXPIRY_NUDGE_DAYS) { valid = 'Expires in ' + d + ' day' + (d === 1 ? '' : 's'); validCls = 'expiring'; }
+    else valid = 'Until ' + String(exp).slice(0, 10);
+  }
+  addRow('Status', 'Active');
+  addRow('Plan', 'Netcore Unbxd');
+  addRow('Account', s.email || '');
+  addRow('Valid', valid, validCls);
+  wrap.classList.remove('hidden');
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
