@@ -4555,17 +4555,87 @@ function daysUntil(expiresAt) {
   const t = Date.parse(expiresAt);
   return Number.isFinite(t) ? Math.ceil((t - Date.now()) / 86400000) : Infinity;
 }
-function showEdition(on, expiresAt) {
+function showEdition(on) {
   licensed = !!on;
-  $('welcome-license').classList.toggle('hidden', !on);
-  if (!on) return;
-  const d = daysUntil(expiresAt);
-  const v = $('welcome-validity');
-  v.classList.remove('expiring');
-  if (!expiresAt) v.textContent = '· Lifetime';
-  else if (d <= 0) { v.textContent = '· Expired'; v.classList.add('expiring'); }
-  else if (d <= EXPIRY_NUDGE_DAYS) { v.textContent = '· Expires in ' + d + ' day' + (d === 1 ? '' : 's'); v.classList.add('expiring'); }
-  else v.textContent = '· Valid until ' + String(expiresAt).slice(0, 10);
+  refreshMembership(); // the Membership card is now the sole license display
+  refreshEngineMode(); // Engine Mode card lives in the same left column
+}
+
+// Engine Mode card — shows the active engine and lets the user switch it.
+const ENGINE_DESC = {
+  auto: 'Picks the in-RAM engine for files that fit in memory, and the database engine for anything larger.',
+  memory: 'Always loads into the in-RAM engine — fastest, but bounded by available memory.',
+  db: 'Always uses the on-disk database engine — handles files of any size.',
+};
+async function refreshEngineMode() {
+  const wrap = $('engine-wrap');
+  if (!wrap) return;
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  let info = { mode: 'auto' };
+  try { info = await window.oxj.engineMode(); } catch {}
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  const mode = info.mode || 'auto';
+  document.querySelectorAll('#engine-seg .engine-opt').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  $('engine-desc').textContent = ENGINE_DESC[mode] || '';
+  const list = $('engine-list');
+  list.textContent = '';
+  const addRow = (k, v) => {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.textContent = v;
+    row.append(kk, vv);
+    list.appendChild(row);
+  };
+  addRow('Active engine', mode === 'db' ? 'Database' : mode === 'memory' ? 'In-RAM' : 'Auto');
+  if (info.ramFree != null) addRow('Available RAM', fmtBytes(info.ramFree));
+  if (mode !== 'db' && info.memModeLimit != null) addRow('In-RAM limit', '~' + fmtBytes(info.memModeLimit));
+  wrap.classList.remove('hidden');
+}
+document.getElementById('engine-seg').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.engine-opt');
+  if (!btn) return;
+  try {
+    await window.oxj.setEngineMode(btn.dataset.mode);
+    toast('Engine mode: ' + btn.textContent + ' — applies to files opened from now on', true);
+  } catch (err) { toast('Could not change engine mode: ' + cleanErr(err)); }
+  refreshEngineMode();
+});
+
+// Membership card on the welcome screen — visible only when a license is active.
+async function refreshMembership() {
+  const wrap = $('membership-wrap');
+  if (!wrap) return;
+  if (!licensed) { wrap.classList.add('hidden'); return; }
+  let s = {};
+  try { s = await window.oxj.license.status(); } catch {}
+  if (!licensed) { wrap.classList.add('hidden'); return; } // may have changed while awaiting
+  const list = $('membership-list');
+  list.textContent = '';
+  const addRow = (k, v, cls) => {
+    const row = document.createElement('div');
+    row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.className = 'v'; vv.textContent = v;
+    if (cls) vv.classList.add(cls);
+    row.append(kk, vv);
+    list.appendChild(row);
+  };
+  const exp = s.expires_at;
+  const d = daysUntil(exp);
+  let valid = 'Lifetime', validCls = '';
+  if (exp) {
+    if (d <= 0) { valid = 'Expired'; validCls = 'expiring'; }
+    else if (d <= EXPIRY_NUDGE_DAYS) { valid = 'Expires in ' + d + ' day' + (d === 1 ? '' : 's'); validCls = 'expiring'; }
+    else valid = 'Until ' + String(exp).slice(0, 10);
+  }
+  addRow('Status', 'Active');
+  addRow('Plan', 'Netcore Unbxd');
+  addRow('Account', s.email || '');
+  addRow('Valid', valid, validCls);
+  wrap.classList.remove('hidden');
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);

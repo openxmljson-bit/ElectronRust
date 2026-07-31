@@ -16,13 +16,27 @@
     <!-- ============ Welcome screen ============ -->
     <div id="screen-welcome" class="screen">
       <div class="welcome-row">
+      <div class="side-col-left">
+        <div id="membership-wrap" class="stats membership hidden">
+          <div class="stats-head membership-head">Membership <span class="edition-badge">NARIK EDITION</span></div>
+          <div id="membership-list"></div>
+          <div class="cache-actions">
+            <button id="welcome-manage" class="link-btn">Manage / Renew</button>
+          </div>
+        </div>
+        <div id="engine-wrap" class="stats engine-card hidden">
+          <div class="stats-head">Engine Mode</div>
+          <div id="engine-seg" class="engine-seg">
+            <button class="engine-opt" data-mode="auto">Auto</button>
+            <button class="engine-opt" data-mode="memory">Memory</button>
+            <button class="engine-opt" data-mode="db">Database</button>
+          </div>
+          <div id="engine-desc" class="engine-desc"></div>
+          <div id="engine-list"></div>
+        </div>
+      </div>
       <div class="welcome-card">
         <div class="logo"><span class="brace">{</span><span>N</span><span class="brace">}</span>ARIK<span>JSON</span></div>
-        <div id="welcome-license" class="welcome-license hidden">
-          <span class="edition-badge">NARIK EDITION</span>
-          <span id="welcome-validity" class="welcome-validity"></span>
-          <button id="welcome-manage" class="link-btn welcome-manage">Manage / Renew</button>
-        </div>
         <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
         <div class="tagline-big">Built for GIGABYTES</div>
         <div class="chips">

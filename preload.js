@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('oxj', {
   buildIndex: (tabId) => unwrap('build-index', tabId),
   onIndexProgress: (cb) => ipcRenderer.on('index-progress', (_e, m) => cb(m)),
   clearCache: () => unwrap('clear-cache'),
+  engineMode: () => ipcRenderer.invoke('engine-mode'),
+  setEngineMode: (mode) => unwrap('set-engine-mode', mode),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),

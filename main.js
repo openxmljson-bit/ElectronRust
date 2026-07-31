@@ -1477,6 +1477,22 @@ app.whenReady().then(() => {
     return ok(freed);
   });
 
+  ipcMain.handle('engine-mode', async () => {
+    const avail = await availableMemBytes();
+    return {
+      mode: getSettings().engineMode || 'auto',
+      ramFree: avail,
+      ramTotal: os.totalmem(),
+      memModeLimit: Math.min(MEM_MAX_BYTES, avail * MEM_FREE_FRACTION),
+    };
+  });
+  ipcMain.handle('set-engine-mode', async (_e, mode) => {
+    if (!['auto', 'memory', 'db'].includes(mode)) return fail(new Error('invalid mode'));
+    saveSetting('engineMode', mode);
+    buildMenu(); // keep the native Engine Mode menu radio in sync
+    return ok(mode);
+  });
+
   ipcMain.handle('stats', async () => getStats());
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
