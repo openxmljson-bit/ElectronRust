@@ -784,7 +784,7 @@ function openAsCsv(p) { return openPath(p, null, false, { format: 'csv' }); }
 
 $('btn-open').addEventListener('click', async () => {
   const p = await window.oxj.pickFile();
-  if (p) openPath(p);
+  if (p) openFileWithPrompt(p);
 });
 $('btn-open-url').addEventListener('click', () => showUrlModal());
 $('btn-open-clip').addEventListener('click', async () => {
@@ -821,7 +821,7 @@ window.addEventListener('dragleave', (e) => {
   if (!e.relatedTarget) $('drop-overlay').classList.add('hidden');
 });
 // Extensions that could be either a delimited table or plain text.
-const MAYBE_DELIM_EXTS = ['txt', 'dat', 'log', 'psv', 'tab'];
+const MAYBE_DELIM_EXTS = ['txt', 'dat', 'psv', 'tab'];
 function isMaybeDelim(p) {
   const name = String(p).split(/[\\/]/).pop();
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
@@ -850,6 +850,18 @@ function askOpenAs(name) {
   });
 }
 
+// User-initiated open of a real file: prompt Table/Text for ambiguous delimited
+// files, otherwise open normally. Used by Open File and drag-and-drop.
+async function openFileWithPrompt(p) {
+  if (isMaybeDelim(p)) {
+    const choice = await askOpenAs(baseName(p)); // Table / Text / Cancel
+    if (choice === 'table') openAsCsv(p);
+    else if (choice === 'text') openPlainPath(p, null, plainLangFor(p) || 'plaintext');
+  } else {
+    openPath(p);
+  }
+}
+
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
   $('drop-overlay').classList.add('hidden');
@@ -858,15 +870,7 @@ window.addEventListener('drop', async (e) => {
   let paths = [];
   try { paths = [...files].slice(0, MAX_TABS).map((f) => window.oxj.pathForFile(f)).filter(Boolean); }
   catch { toast('Could not resolve dropped file path'); return; }
-  for (const p of paths) {
-    if (isMaybeDelim(p)) {
-      const choice = await askOpenAs(baseName(p)); // Table / Text / Cancel
-      if (choice === 'table') openAsCsv(p);
-      else if (choice === 'text') openPlainPath(p, null, plainLangFor(p) || 'plaintext');
-    } else {
-      openPath(p);
-    }
-  }
+  for (const p of paths) await openFileWithPrompt(p);
 });
 
 // ---------- ingest progress ----------
@@ -2758,12 +2762,7 @@ window.oxj.onMenu(async ({ action, arg }) => {
   switch (action) {
     case 'open': {
       const p = await window.oxj.pickFile();
-      if (p) openPath(p);
-      break;
-    }
-    case 'open-delimited': {
-      const p = await window.oxj.pickFile();
-      if (p) openAsCsv(p);
+      if (p) openFileWithPrompt(p);
       break;
     }
     case 'open-path':

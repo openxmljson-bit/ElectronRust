@@ -958,7 +958,6 @@ function buildMenu() {
         { label: 'New Window', accelerator: 'Shift+CmdOrCtrl+N', click: () => createWindow() },
         { type: 'separator' },
         { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: (mi, bw) => sendMenu(bw, 'open') },
-        { label: 'Open Delimited File as Table…', click: (mi, bw) => sendMenu(bw, 'open-delimited') },
         { label: 'Open URL…', accelerator: 'Alt+Shift+O', click: (mi, bw) => sendMenu(bw, 'open-url') },
         { label: 'Open Clipboard', accelerator: 'Shift+CmdOrCtrl+V', click: (mi, bw) => sendMenu(bw, 'open-clipboard') },
         {
@@ -1155,7 +1154,8 @@ app.whenReady().then(() => {
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
       filters: [
-        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab'] },
+        { name: 'All files', extensions: ['*'] },
+        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab', 'txt', 'dat', 'psv'] },
         { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py'] },
         { name: 'All files', extensions: ['*'] },
       ],
