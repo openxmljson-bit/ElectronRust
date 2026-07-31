@@ -202,14 +202,15 @@ function emitRecentsChanged() {
   }
 }
 
-// Temp / scratch / converted-result files never belong in Recents.
+// Recents holds only real files the user opened/dropped. Everything the app
+// generates — URL responses, converted YAML, clipboard imports, exports and
+// fragment temps — lives in the internal downloads dir or the OS temp dir and
+// is treated as scratch, so it never enters Recents.
 function isTempPath(file) {
   const base = path.basename(file);
   if (base.startsWith('oxj_') || base.startsWith('narik_')) return true;
   try { if (file.startsWith(os.tmpdir() + path.sep)) return true; } catch {}
-  const dl = downloadsDir();
-  // Our internal downloads dir is scratch, except url_* fetches (real content).
-  if (file.startsWith(dl + path.sep) && !base.startsWith('url_')) return true;
+  if (file.startsWith(downloadsDir() + path.sep)) return true;
   return false;
 }
 
