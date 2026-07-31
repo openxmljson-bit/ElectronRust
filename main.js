@@ -10,6 +10,7 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 const https = require('https');
 const http = require('http');
+const zlib = require('zlib');
 const os = require('os');
 const si = require('systeminformation');
 
@@ -824,6 +825,8 @@ function downloadUrl(url, headers) {
 // reject on non-2xx — the builder shows the status and the response body.
 function httpRequest({ method, url, headers, body }) {
   return new Promise((resolve, reject) => {
+    headers = headers || {};
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === 'accept-encoding')) headers['Accept-Encoding'] = 'gzip, deflate, br';
     const started = Date.now();
     const tmp = path.join(downloadsDir(), 'url_' + Date.now());
     const out = fs.createWriteStream(tmp);
@@ -837,7 +840,14 @@ function httpRequest({ method, url, headers, body }) {
           run(new URL(res.headers.location, u).toString(), res.statusCode === 303 ? 'GET' : meth);
           return;
         }
-        res.pipe(out);
+        // Decompress gzip/deflate/br responses (Node doesn't do it automatically).
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+        let stream = res;
+        if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
+        else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
+        else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
+        stream.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
+        stream.pipe(out);
         out.on('finish', () => out.close(() => {
           const ct = String(res.headers['content-type'] || '');
           let ext = ct.includes('json') ? '.json' : ct.includes('xml') ? '.xml' : ct.includes('csv') ? '.csv' : null;
