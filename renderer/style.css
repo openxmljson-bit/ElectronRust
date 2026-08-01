@@ -433,7 +433,7 @@ body.light .engine-opt.active { color: #fff; }
 .narik-card {
   text-align: center;
   overflow: hidden;
-  padding: 22px 10px;
+  padding: 22px 8px;
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 .narik-card:hover {
@@ -442,10 +442,11 @@ body.light .engine-opt.active { color: #fff; }
 }
 .narik-brand {
   font-weight: 800;
-  letter-spacing: 6px;
-  font-size: 64px;
+  letter-spacing: 1px;
+  font-size: 48px;
   line-height: 1.05;
-  margin-right: -6px;                 /* cancel the trailing letter-spacing */
+  white-space: nowrap;
+  margin-right: -1px;                 /* cancel the trailing letter-spacing */
   /* Faint letters (watermark-like), but a BRIGHT blue sheen sweeps across.
      Alpha lives in the gradient stops so the sheen isn't dimmed with the base. */
   background: linear-gradient(110deg,
