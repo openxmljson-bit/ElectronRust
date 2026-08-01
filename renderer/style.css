@@ -433,7 +433,7 @@ body.light .engine-opt.active { color: #fff; }
 .narik-card {
   text-align: center;
   overflow: hidden;
-  padding: 22px 22px 20px;
+  padding: 22px 10px;
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 .narik-card:hover {
@@ -442,24 +442,20 @@ body.light .engine-opt.active { color: #fff; }
 }
 .narik-brand {
   font-weight: 800;
-  letter-spacing: 8px;
-  font-size: 40px;
-  line-height: 1.1;
-  margin-right: -8px;                 /* cancel the trailing letter-spacing */
-  /* base colour stays --fg; a blue sheen sweeps across the letters */
+  letter-spacing: 6px;
+  font-size: 64px;
+  line-height: 1.05;
+  margin-right: -6px;                 /* cancel the trailing letter-spacing */
+  /* faint, like the old watermark; a blue sheen sweeps across the letters */
   background: linear-gradient(110deg, var(--fg) 0%, var(--fg) 42%, #6db6ff 50%, var(--fg) 58%, var(--fg) 100%);
   background-size: 250% 100%;
   -webkit-background-clip: text; background-clip: text;
   color: transparent; -webkit-text-fill-color: transparent;
+  opacity: .14;
   animation: narikShimmer 3.4s linear infinite;
   user-select: none;
 }
-.narik-sub {
-  margin-top: 6px;
-  font-size: 11px; font-weight: 700; letter-spacing: 4px;
-  color: var(--fg-dim);
-  user-select: none;
-}
+body.light .narik-brand { opacity: .16; }
 @keyframes narikShimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -60% 0; }
