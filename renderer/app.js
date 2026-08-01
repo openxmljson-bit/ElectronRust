@@ -255,7 +255,7 @@ function renderScreen() {
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
-      plain || memMode || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
+      plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
     $('search-scope').classList.toggle('hidden', plain);
     $('search-box').classList.toggle('hidden', plain);
     $('btn-find').classList.toggle('hidden', plain);
@@ -4527,13 +4527,94 @@ $('btn-tools').addEventListener('click', (ev) => {
   if (!t || t.phase !== 'ready' || t.plain) return;
   if (t.docFormat !== 'json' && t.docFormat !== 'ndjson') return; // JSON documents only
   const r = ev.currentTarget.getBoundingClientRect();
-  showContextMenu(r.left, r.bottom + 4, [
-    { label: 'Generate JSON Schema', action: generateSchema },
-    { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
-    { sep: true },
-    { label: 'Compare With Open Tab…', action: compareWithTab },
-  ]);
+  // jq runs on the source file, so it works in any engine mode. The schema /
+  // compare tools use the database engine and aren't available in RAM mode.
+  const memMode = t.meta && t.meta.mode === 'memory';
+  const items = [{ label: 'jq Filter…', action: () => openJqModal(cur) }];
+  if (!memMode) {
+    items.push(
+      { sep: true },
+      { label: 'Generate JSON Schema', action: generateSchema },
+      { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
+      { sep: true },
+      { label: 'Compare With Open Tab…', action: compareWithTab },
+    );
+  }
+  showContextMenu(r.left, r.bottom + 4, items);
 });
+
+// ---------- jq filter (system jq, result in a new tab) ----------
+async function openJqModal(t) {
+  if (!t || t.phase !== 'ready' || !t.file) { toast('Open a JSON file first.'); return; }
+  const { back, box } = simpleModal('jq Filter');
+  box.classList.add('jq-modal');
+
+  const banner = document.createElement('div');
+  banner.className = 'jq-banner hidden';
+  box.appendChild(banner);
+
+  const lbl = document.createElement('div'); lbl.className = 'jq-lbl'; lbl.textContent = 'Filter';
+  const ta = document.createElement('textarea');
+  ta.className = 'jq-filter'; ta.spellcheck = false;
+  ta.placeholder = 'e.g.  .items[] | {name, price}';
+  ta.value = t.jqLast || '.';
+  box.append(lbl, ta);
+
+  const opts = document.createElement('div'); opts.className = 'jq-opts';
+  const mkOpt = (key, label, title) => {
+    const l = document.createElement('label'); l.className = 'jq-opt'; l.title = title || '';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.k = key;
+    const s = document.createElement('span'); s.textContent = label;
+    l.append(cb, s); opts.appendChild(l); return cb;
+  };
+  const rawCb = mkOpt('raw', 'Raw output (-r)', 'Emit raw strings instead of JSON-quoted values');
+  const compactCb = mkOpt('compact', 'Compact (-c)', 'One compact JSON value per line');
+  const slurpCb = mkOpt('slurp', 'Slurp (-s)', 'Read the entire input into a single array');
+  const sortCb = mkOpt('sortKeys', 'Sort keys (-S)', 'Sort object keys in the output');
+  box.appendChild(opts);
+
+  const hint = document.createElement('div'); hint.className = 'jq-hint';
+  hint.textContent = 'Runs jq on this file; the result opens in a new tab. jq reads the whole file into memory, so very large files may be slow.';
+  box.appendChild(hint);
+
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
+  actions.append(cancel, run); box.appendChild(actions);
+
+  let avail = { available: false };
+  try { avail = await window.oxj.jqAvailable(); } catch {}
+  if (!avail.available) {
+    banner.classList.remove('hidden');
+    banner.innerHTML = 'jq is not installed. Install it with <code>brew install jq</code> (macOS), then reopen this dialog.';
+    run.disabled = true; ta.disabled = true;
+  }
+
+  const doRun = async () => {
+    const filter = ta.value.trim();
+    if (!filter) { ta.focus(); return; }
+    t.jqLast = filter;
+    banner.classList.remove('jq-error');
+    run.disabled = true; run.textContent = 'Running…';
+    const flags = { raw: rawCb.checked, compact: compactCb.checked, slurp: slurpCb.checked, sortKeys: sortCb.checked };
+    try {
+      const res = await window.oxj.jqRun(t.id, filter, flags);
+      const text = res && res.text != null ? res.text : '';
+      if (!text.trim()) { toast('jq produced no output.'); run.disabled = false; run.textContent = 'Run'; return; }
+      back.remove();
+      openTextAsTab('jq_result', flags.raw ? 'txt' : 'json', text);
+    } catch (e) {
+      banner.classList.remove('hidden'); banner.classList.add('jq-error');
+      banner.textContent = 'jq error: ' + cleanErr(e);
+      run.disabled = false; run.textContent = 'Run';
+    }
+  };
+  run.onclick = doRun;
+  ta.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doRun(); }
+  });
+  setTimeout(() => ta.focus(), 30);
+}
 
 // ---------- theme ----------
 function applyTheme(eff) {
