@@ -36,7 +36,13 @@
     "files": [
       "main.js",
       "preload.js",
-      "renderer/**"
+      "renderer/**",
+      "!node_modules/monaco-editor/dev/**",
+      "!node_modules/monaco-editor/esm/**",
+      "!node_modules/monaco-editor/min-maps/**",
+      "!node_modules/monaco-editor/monaco.d.ts",
+      "!node_modules/monaco-editor/CHANGELOG.md",
+      "!node_modules/monaco-editor/ThirdPartyNotices.txt"
     ],
     "mac": {
       "target": [
