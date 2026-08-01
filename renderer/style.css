@@ -446,16 +446,25 @@ body.light .engine-opt.active { color: #fff; }
   font-size: 64px;
   line-height: 1.05;
   margin-right: -6px;                 /* cancel the trailing letter-spacing */
-  /* faint, like the old watermark; a blue sheen sweeps across the letters */
-  background: linear-gradient(110deg, var(--fg) 0%, var(--fg) 42%, #6db6ff 50%, var(--fg) 58%, var(--fg) 100%);
+  /* Faint letters (watermark-like), but a BRIGHT blue sheen sweeps across.
+     Alpha lives in the gradient stops so the sheen isn't dimmed with the base. */
+  background: linear-gradient(110deg,
+    rgba(215, 218, 226, .13) 0%, rgba(215, 218, 226, .13) 40%,
+    rgba(130, 195, 255, .95) 50%,
+    rgba(215, 218, 226, .13) 60%, rgba(215, 218, 226, .13) 100%);
   background-size: 250% 100%;
   -webkit-background-clip: text; background-clip: text;
   color: transparent; -webkit-text-fill-color: transparent;
-  opacity: .14;
   animation: narikShimmer 3.4s linear infinite;
   user-select: none;
 }
-body.light .narik-brand { opacity: .16; }
+body.light .narik-brand {
+  background: linear-gradient(110deg,
+    rgba(31, 35, 41, .16) 0%, rgba(31, 35, 41, .16) 40%,
+    rgba(26, 115, 232, .9) 50%,
+    rgba(31, 35, 41, .16) 60%, rgba(31, 35, 41, .16) 100%);
+  background-size: 250% 100%;
+}
 @keyframes narikShimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -60% 0; }
