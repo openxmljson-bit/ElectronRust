@@ -446,24 +446,28 @@ body.light .engine-opt.active { color: #fff; }
   font-size: 64px;
   line-height: 1.05;
   margin-right: -6px;                 /* cancel the trailing letter-spacing */
-  /* Liquid fill: letters outlined; two crossing wave layers fill from the
-     bottom and roll horizontally. Above the waterline only the outline shows. */
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  -webkit-text-stroke: 1.2px rgba(109, 182, 255, .85);
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='100' preserveAspectRatio='none' viewBox='0 0 120 100'%3E%3Cpath d='M0 50 Q30 42 60 50 T120 50 V100 H0 Z' fill='%234da3ff' fill-opacity='0.9'/%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='100' preserveAspectRatio='none' viewBox='0 0 150 100'%3E%3Cpath d='M0 56 Q37 64 75 56 T150 56 V100 H0 Z' fill='%234da3ff' fill-opacity='0.5'/%3E%3C/svg%3E");
-  background-repeat: repeat-x, repeat-x;
-  background-size: 120px 100%, 150px 100%;
-  background-position: 0 0, 0 0;
+  /* Faint letters (watermark-like), but a BRIGHT blue sheen sweeps across.
+     Alpha lives in the gradient stops so the sheen isn't dimmed with the base. */
+  background: linear-gradient(110deg,
+    rgba(215, 218, 226, .13) 0%, rgba(215, 218, 226, .13) 40%,
+    rgba(130, 195, 255, .95) 50%,
+    rgba(215, 218, 226, .13) 60%, rgba(215, 218, 226, .13) 100%);
+  background-size: 250% 100%;
   -webkit-background-clip: text; background-clip: text;
-  animation: narikWaves 3.2s linear infinite;
+  color: transparent; -webkit-text-fill-color: transparent;
+  animation: narikShimmer 3.4s linear infinite;
   user-select: none;
 }
-@keyframes narikWaves {
-  from { background-position: 0 0, 0 0; }
-  to   { background-position: 120px 0, -150px 0; }
+body.light .narik-brand {
+  background: linear-gradient(110deg,
+    rgba(31, 35, 41, .16) 0%, rgba(31, 35, 41, .16) 40%,
+    rgba(26, 115, 232, .9) 50%,
+    rgba(31, 35, 41, .16) 60%, rgba(31, 35, 41, .16) 100%);
+  background-size: 250% 100%;
+}
+@keyframes narikShimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -60% 0; }
 }
 
 /* ---------- Progress ---------- */
