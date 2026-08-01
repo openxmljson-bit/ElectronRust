@@ -324,6 +324,22 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 .membership .stat-kv .v.expiring { color: #e0a02c; }
 .membership-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .membership-head .edition-badge { font-size: 10px; padding: 2px 10px; }
+/* jq filter dialog */
+.jq-modal { width: 560px; }
+.jq-lbl { color: var(--fg-dim); font-size: 12px; }
+.jq-filter {
+  width: 100%; min-height: 84px; resize: vertical;
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 9px 11px; outline: none;
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+}
+.jq-filter:focus { border-color: var(--accent); }
+.jq-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.jq-opt { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg); cursor: pointer; }
+.jq-hint { color: var(--fg-dim); font-size: 11.5px; line-height: 1.5; }
+.jq-banner { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--fg); }
+.jq-banner code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-family: var(--mono); }
+.jq-banner.jq-error { border-color: #e0554a; color: #e0817a; background: rgba(224,85,74,.08); }
 /* Engine Mode card */
 .engine-card { width: 420px; }
 .engine-seg {

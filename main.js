@@ -1493,6 +1493,52 @@ app.whenReady().then(() => {
     return ok(mode);
   });
 
+  // ---- jq filter (system jq binary) ----
+  ipcMain.handle('jq-available', async () => new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const p = spawn('jq', ['--version']);
+      let out = '';
+      p.stdout.on('data', (d) => { out += d; });
+      p.on('error', () => finish({ available: false }));
+      p.on('close', (code) => finish({ available: code === 0, version: out.trim() }));
+    } catch { finish({ available: false }); }
+  }));
+
+  ipcMain.handle('jq-run', async (_e, { tabId, filter, flags }) => {
+    const info = sessions.get(tabId) || lastDb.get(tabId);
+    const file = info && info.file;
+    if (!file) return fail(new Error('No source file for this tab.'));
+    if (!filter || !String(filter).trim()) return fail(new Error('Enter a jq filter.'));
+    const args = [];
+    if (flags) {
+      if (flags.raw) args.push('-r');
+      if (flags.compact) args.push('-c');
+      if (flags.slurp) args.push('-s');
+      if (flags.sortKeys) args.push('-S');
+    }
+    args.push(String(filter), file);
+    return new Promise((resolve) => {
+      let out = '', err = '', tooBig = false;
+      const CAP = 256 * 1024 * 1024; // guard against a runaway result in memory
+      let p;
+      try { p = spawn('jq', args); }
+      catch { return resolve(fail(new Error('jq is not installed.'))); }
+      p.on('error', (e) => resolve(fail(new Error(e && e.code === 'ENOENT' ? 'jq is not installed.' : (e && e.message) || 'jq failed to start.'))));
+      p.stdout.on('data', (d) => {
+        out += d;
+        if (out.length > CAP && !tooBig) { tooBig = true; try { p.kill(); } catch {} }
+      });
+      p.stderr.on('data', (d) => { if (err.length < 8192) err += d; });
+      p.on('close', (code) => {
+        if (tooBig) return resolve(fail(new Error('Result exceeds 256 MB — narrow the filter.')));
+        if (code === 0) return resolve(ok({ text: out }));
+        resolve(fail(new Error(err.trim() || ('jq exited with code ' + code))));
+      });
+    });
+  });
+
   ipcMain.handle('stats', async () => getStats());
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });

@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('oxj', {
   clearCache: () => unwrap('clear-cache'),
   engineMode: () => ipcRenderer.invoke('engine-mode'),
   setEngineMode: (mode) => unwrap('set-engine-mode', mode),
+  jqAvailable: () => ipcRenderer.invoke('jq-available'),
+  jqRun: (tabId, filter, flags) => unwrap('jq-run', { tabId, filter, flags }),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),
