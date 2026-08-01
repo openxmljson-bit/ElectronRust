@@ -34,14 +34,17 @@
           <div id="engine-desc" class="engine-desc"></div>
           <div id="engine-list"></div>
         </div>
+        <div id="formats-wrap" class="stats formats-card hidden">
+          <div class="stats-head">Supported Files</div>
+          <div class="format-chips">
+            <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">JSONL</span><span class="chip">XML</span><span class="chip">YAML</span><span class="chip">YML</span><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">TAB</span><span class="chip">PSV</span><span class="chip">TXT</span><span class="chip">DAT</span><span class="chip">MD</span><span class="chip">LOG</span><span class="chip">JS</span><span class="chip">MJS</span><span class="chip">HTML</span><span class="chip">HTM</span><span class="chip">PY</span>
+          </div>
+        </div>
       </div>
+      <div class="welcome-center">
       <div class="welcome-card">
         <div class="logo"><span class="brace">{</span><span>N</span><span class="brace">}</span>ARIK<span>JSON</span></div>
         <div class="tagline">A rapid JSON&middot;XML&middot;CSV loading engine</div>
-        <div class="tagline-big">Built for GIGABYTES</div>
-        <div class="chips">
-          <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">YAML</span><span class="chip">XML</span><span class="chip">CSV</span><span class="chip">TSV</span>
-        </div>
         <div class="welcome-actions">
           <button id="btn-open" class="btn-primary">Open File…</button>
           <button id="btn-open-url" class="btn-secondary">Open URL…</button>
@@ -56,6 +59,10 @@
           <div id="recents-list"></div>
         </div>
       </div>
+      <div class="gigabyte-card">
+        <div class="tagline-big">Built for GIGABYTES</div>
+      </div>
+      </div>
       <div class="side-col">
         <div id="stats-wrap" class="stats hidden">
           <div class="stats-head">File Activity</div>
@@ -68,9 +75,11 @@
             <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
           </div>
         </div>
+        <div class="stats narik-card">
+          <div class="narik-brand"><span class="brace">{</span>N<span class="brace">}</span>ARIK</div>
+        </div>
       </div>
       </div>
-      <div class="watermark">NARIK</div>
     </div>
 
     <!-- ============ Ingest progress screen ============ -->

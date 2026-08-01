@@ -4640,6 +4640,8 @@ function showEdition(on) {
   licensed = !!on;
   refreshMembership(); // the Membership card is now the sole license display
   refreshEngineMode(); // Engine Mode card lives in the same left column
+  const fw = $('formats-wrap'); // Supported Files card, same left column
+  if (fw) fw.classList.toggle('hidden', !on);
 }
 
 // Engine Mode card — shows the active engine and lets the user switch it.
