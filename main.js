@@ -1238,9 +1238,6 @@ app.whenReady().then(() => {
       properties: ['openFile'],
       filters: [
         { name: 'All files', extensions: ['*'] },
-        { name: 'Data files', extensions: ['json', 'ndjson', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv', 'tab', 'txt', 'dat', 'psv'] },
-        { name: 'Text files', extensions: ['txt', 'log', 'md', 'js', 'mjs', 'html', 'htm', 'py'] },
-        { name: 'All files', extensions: ['*'] },
       ],
     });
     if (res.canceled || !res.filePaths.length) return null;
