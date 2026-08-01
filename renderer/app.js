@@ -255,7 +255,7 @@ function renderScreen() {
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
-      plain || memMode || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
+      plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
     $('search-scope').classList.toggle('hidden', plain);
     $('search-box').classList.toggle('hidden', plain);
     $('btn-find').classList.toggle('hidden', plain);
@@ -4527,14 +4527,20 @@ $('btn-tools').addEventListener('click', (ev) => {
   if (!t || t.phase !== 'ready' || t.plain) return;
   if (t.docFormat !== 'json' && t.docFormat !== 'ndjson') return; // JSON documents only
   const r = ev.currentTarget.getBoundingClientRect();
-  showContextMenu(r.left, r.bottom + 4, [
-    { label: 'jq Filter…', action: () => openJqModal(cur) },
-    { sep: true },
-    { label: 'Generate JSON Schema', action: generateSchema },
-    { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
-    { sep: true },
-    { label: 'Compare With Open Tab…', action: compareWithTab },
-  ]);
+  // jq runs on the source file, so it works in any engine mode. The schema /
+  // compare tools use the database engine and aren't available in RAM mode.
+  const memMode = t.meta && t.meta.mode === 'memory';
+  const items = [{ label: 'jq Filter…', action: () => openJqModal(cur) }];
+  if (!memMode) {
+    items.push(
+      { sep: true },
+      { label: 'Generate JSON Schema', action: generateSchema },
+      { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
+      { sep: true },
+      { label: 'Compare With Open Tab…', action: compareWithTab },
+    );
+  }
+  showContextMenu(r.left, r.bottom + 4, items);
 });
 
 // ---------- jq filter (system jq, result in a new tab) ----------
