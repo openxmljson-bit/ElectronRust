@@ -441,11 +441,12 @@ body.light .engine-opt.active { color: #fff; }
   animation: chipGlow 1.1s ease-in-out infinite;
 }
 .narik-brand {
+  font-family: 'Didot', 'Bodoni 72', 'Playfair Display', Georgia, 'Times New Roman', serif;
   font-weight: 800;
-  letter-spacing: 6px;
-  font-size: 64px;
+  letter-spacing: 5px;
+  font-size: 62px;
   line-height: 1.05;
-  margin-right: -6px;                 /* cancel the trailing letter-spacing */
+  margin-right: -5px;                 /* cancel the trailing letter-spacing */
   /* Faint letters (watermark-like), but a BRIGHT blue sheen sweeps across.
      Alpha lives in the gradient stops so the sheen isn't dimmed with the base. */
   background: linear-gradient(110deg,
