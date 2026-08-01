@@ -57,6 +57,7 @@ body.light .toast.info { background: #e8f0fe; color: #1a73e8; border-color: #c6d
 body.light .drop-overlay { background: rgba(26,115,232,.08); }
 body.light .welcome-card,
 body.light .progress-card,
+body.light .gigabyte-card,
 body.light .side-col .stats,
 body.light .side-col-left .stats { box-shadow: 0 12px 40px rgba(30,40,60,.14); }
 
@@ -175,6 +176,15 @@ body {
 .logo span { color: var(--accent); }
 .logo .brace, .brand .brace { color: var(--fg-dim); font-weight: 700; }
 .tagline { color: var(--fg-dim); margin-top: 8px; }
+/* Center column: welcome card stacked above the GIGABYTES card */
+.welcome-center { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.gigabyte-card {
+  align-self: stretch;              /* match the welcome card's width */
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 14px; padding: 16px 24px; text-align: center;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .45);
+}
+.gigabyte-card .tagline-big { margin: 0; font-size: 24px; letter-spacing: 2.5px; }
 .tagline-big {
   margin-top: 4px;
   font-size: 17px;
