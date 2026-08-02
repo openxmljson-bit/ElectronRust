@@ -878,16 +878,29 @@ function httpRequest({ method, url, headers, body }) {
 // deployed endpoint differs.
 const LICENSE_API_BASE = process.env.NARIK_API_BASE || 'https://checkapi.openxmljson.com';
 const LICENSE_STORE_URL = process.env.NARIK_STORE_URL || 'https://openxmljson.com';
+// The shared backend serves several products off one signing secret, so every
+// request MUST scope itself to "narik", and only these tiers unlock this app.
+const NARIK_PRODUCT = 'narik';
+const NARIK_TIERS = ['Narik', 'Unbxd'];
+
+// Keys are XXXX-XXXX-XXXX-XXXX-XXXX-XXXX. The server is lenient, but normalise to
+// canonical form (uppercase, dashed, no spaces) before sending.
+function normalizeKey(k) {
+  const clean = String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return clean.replace(/(.{4})(?=.)/g, '$1-');
+}
 
 function licensePath() { return path.join(app.getPath('userData'), 'license.json'); }
 function readLicense() { try { return JSON.parse(fs.readFileSync(licensePath(), 'utf8')); } catch { return null; } }
 function writeLicense(o) { try { fs.writeFileSync(licensePath(), JSON.stringify(o)); } catch {} }
 function clearLicense() { try { fs.unlinkSync(licensePath()); } catch {} }
 
-// Current entitlement from the local cache (no network). Expired keys don't count.
+// Current entitlement from the local cache (no network). Expired keys and any
+// tier that isn't ours don't count (local backstop against a stale entitlement).
 function licenseStatus() {
   const l = readLicense();
   if (!l || !l.valid) return { licensed: false };
+  if (!NARIK_TIERS.includes(l.tier)) return { licensed: false };
   if (l.expires_at) {
     const exp = Date.parse(l.expires_at);
     if (Number.isFinite(exp) && Date.now() > exp) return { licensed: false, expired: true, email: l.email };
@@ -895,6 +908,7 @@ function licenseStatus() {
   return { licensed: true, email: l.email, tier: l.tier || null, expires_at: l.expires_at || null };
 }
 
+// Resolves { status, data } — never rejects on a non-2xx; only on transport error.
 function httpsPostJson(url, body) {
   return new Promise((resolve, reject) => {
     let u;
@@ -906,7 +920,11 @@ function httpsPostJson(url, body) {
     }, (res) => {
       let data = '';
       res.on('data', (d) => { data += d; });
-      res.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { reject(new Error('unexpected response from the license server')); } });
+      res.on('end', () => {
+        let json = {};
+        try { json = JSON.parse(data || '{}'); } catch { json = {}; }
+        resolve({ status: res.statusCode || 0, data: json });
+      });
     });
     req.on('error', reject);
     req.setTimeout(15000, () => req.destroy(new Error('license server timed out')));
@@ -916,40 +934,63 @@ function httpsPostJson(url, body) {
 }
 
 async function activateLicense(email, key) {
-  const res = await httpsPostJson(LICENSE_API_BASE + '/verify', JSON.stringify({ email, licenseKey: key }));
-  if (res && res.valid) {
+  const cleanEmail = String(email || '').trim();
+  const cleanKey = normalizeKey(key);
+  const { status, data } = await httpsPostJson(
+    LICENSE_API_BASE + '/verify',
+    JSON.stringify({ email: cleanEmail, licenseKey: cleanKey, product: NARIK_PRODUCT }),
+  );
+  // Any non-200 (429 rate limit, 4xx/5xx) is a transient failure — surface it,
+  // don't touch the cached state.
+  if (status !== 200) {
+    return { valid: false, reason: (data && data.message) || 'Could not reach the license server. Please try again.' };
+  }
+  // Valid AND one of our tiers → license. (Backstop: a valid OPENXMLJSON key must
+  // still be refused here, using the server's own reason.)
+  if (data && data.valid && NARIK_TIERS.includes(data.tier)) {
     writeLicense({
-      valid: true, key, email: res.email || email, tier: res.tier || null,
-      status: res.status || null, expires_at: res.expires_at || null,
+      valid: true, key: cleanKey, email: data.email || cleanEmail, tier: data.tier,
+      status: data.status || null, expires_at: data.expires_at || null,
       cachedAt: Date.now(), lastVerified: Date.now(),
     });
+    return data;
   }
-  return res || { valid: false, reason: 'no response' };
+  if (data && data.valid) {
+    return { valid: false, reason: data.reason || 'This license key is not valid for NARIK.' };
+  }
+  return data || { valid: false, reason: 'No response from the license server.' };
 }
 
-// Re-verify the cached key with the server every REVERIFY_DAYS. Success refreshes
-// the cache; an explicit invalid (revoked/expired) locks the app; a network
-// failure is tolerated (offline grace) and retried later.
-const REVERIFY_DAYS = 20;
+// Re-verify the cached key at most once every 24 h while active. Lifetime keys
+// (no expires_at) are cached permanently and never re-verified. Success refreshes
+// the cache; only an explicit 200 + invalid drops the entitlement; a network
+// failure or any non-200 is tolerated (offline grace) and retried later.
+const REVERIFY_MS = 24 * 3600 * 1000;
 function broadcastLicenseRevoked() {
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('license-revoked');
 }
 async function reverifyIfDue() {
   const l = readLicense();
   if (!l || !l.valid) return;
+  if (!l.expires_at) return;                              // lifetime → never re-verify
   const last = l.lastVerified || l.cachedAt || 0;
-  if (Date.now() - last < REVERIFY_DAYS * 86400000) return; // not due yet
-  let res;
+  if (Date.now() - last < REVERIFY_MS) return;            // not due yet (24 h)
+  let resp;
   try {
-    res = await httpsPostJson(LICENSE_API_BASE + '/verify', JSON.stringify({ email: l.email, licenseKey: l.key }));
+    resp = await httpsPostJson(
+      LICENSE_API_BASE + '/verify',
+      JSON.stringify({ email: l.email, licenseKey: l.key, product: NARIK_PRODUCT }),
+    );
   } catch {
-    return; // offline / server error — keep the cached entitlement, retry later
+    return; // offline / transport error — keep the cached entitlement, retry later
   }
-  if (res && res.valid) {
-    writeLicense({ ...l, valid: true, tier: res.tier || l.tier, status: res.status || l.status,
-      expires_at: res.expires_at !== undefined ? res.expires_at : l.expires_at, lastVerified: Date.now() });
+  if (resp.status !== 200) return; // 429 / 4xx / 5xx — transient, keep cache
+  const data = resp.data || {};
+  if (data.valid && NARIK_TIERS.includes(data.tier)) {
+    writeLicense({ ...l, valid: true, tier: data.tier, status: data.status || l.status,
+      expires_at: data.expires_at !== undefined ? data.expires_at : l.expires_at, lastVerified: Date.now() });
   } else {
-    clearLicense(); // server says the key is no longer valid → lock
+    clearLicense(); // server explicitly says the key is no longer valid → drop it
     broadcastLicenseRevoked();
   }
 }
