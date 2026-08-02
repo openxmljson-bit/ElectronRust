@@ -890,6 +890,19 @@ function normalizeKey(k) {
   return clean.replace(/(.{4})(?=.)/g, '$1-');
 }
 
+// Human plan label from the term. `refMs` should be the moment the key was first
+// seen (≈ purchase), so the span reflects the plan length rather than time left.
+function planLabel(tier, expiresAt, refMs) {
+  if (tier === 'Unbxd' || !expiresAt) return 'Lifetime';
+  const exp = Date.parse(expiresAt);
+  if (!Number.isFinite(exp)) return 'Lifetime';
+  const days = Math.round((exp - (refMs || Date.now())) / 86400000);
+  if (days >= 300) return 'Annual';
+  if (days >= 25 && days <= 45) return '30-day Trial';
+  if (days > 0 && days <= 20) return days + '-day Trial';
+  return Math.max(days, 0) + ' days';
+}
+
 function licensePath() { return path.join(app.getPath('userData'), 'license.json'); }
 function readLicense() { try { return JSON.parse(fs.readFileSync(licensePath(), 'utf8')); } catch { return null; } }
 function writeLicense(o) { try { fs.writeFileSync(licensePath(), JSON.stringify(o)); } catch {} }
@@ -905,7 +918,10 @@ function licenseStatus() {
     const exp = Date.parse(l.expires_at);
     if (Number.isFinite(exp) && Date.now() > exp) return { licensed: false, expired: true, email: l.email };
   }
-  return { licensed: true, email: l.email, tier: l.tier || null, expires_at: l.expires_at || null };
+  return {
+    licensed: true, email: l.email, tier: l.tier || null, expires_at: l.expires_at || null,
+    plan: l.plan || planLabel(l.tier, l.expires_at, l.cachedAt),
+  };
 }
 
 // Resolves { status, data } — never rejects on a non-2xx; only on transport error.
@@ -948,10 +964,12 @@ async function activateLicense(email, key) {
   // Valid AND one of our tiers → license. (Backstop: a valid OPENXMLJSON key must
   // still be refused here, using the server's own reason.)
   if (data && data.valid && NARIK_TIERS.includes(data.tier)) {
+    const now = Date.now();
     writeLicense({
       valid: true, key: cleanKey, email: data.email || cleanEmail, tier: data.tier,
       status: data.status || null, expires_at: data.expires_at || null,
-      cachedAt: Date.now(), lastVerified: Date.now(),
+      plan: planLabel(data.tier, data.expires_at, now),
+      cachedAt: now, lastVerified: now,
     });
     return data;
   }
@@ -987,8 +1005,11 @@ async function reverifyIfDue() {
   if (resp.status !== 200) return; // 429 / 4xx / 5xx — transient, keep cache
   const data = resp.data || {};
   if (data.valid && NARIK_TIERS.includes(data.tier)) {
+    const renewed = data.expires_at && data.expires_at !== l.expires_at; // term extended?
+    const nextExpiry = data.expires_at !== undefined ? data.expires_at : l.expires_at;
     writeLicense({ ...l, valid: true, tier: data.tier, status: data.status || l.status,
-      expires_at: data.expires_at !== undefined ? data.expires_at : l.expires_at, lastVerified: Date.now() });
+      expires_at: nextExpiry, lastVerified: Date.now(),
+      plan: renewed ? planLabel(data.tier, nextExpiry, Date.now()) : (l.plan || planLabel(data.tier, nextExpiry, l.cachedAt)) });
   } else {
     clearLicense(); // server explicitly says the key is no longer valid → drop it
     broadcastLicenseRevoked();
