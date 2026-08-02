@@ -4715,7 +4715,7 @@ async function refreshMembership() {
     else valid = 'Until ' + String(exp).slice(0, 10);
   }
   addRow('Status', 'Active');
-  addRow('Plan', 'Netcore Unbxd');
+  addRow('Plan', s.plan || 'NARIK Edition');
   addRow('Account', s.email || '');
   addRow('Valid', valid, validCls);
   wrap.classList.remove('hidden');
