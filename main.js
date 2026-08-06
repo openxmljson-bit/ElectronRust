@@ -1252,15 +1252,21 @@ function buildMenu() {
         {
           label: 'Engine Mode',
           submenu: [
-            { v: 'auto', label: 'Auto (RAM under 10 GB, DB above)' },
-            { v: 'memory', label: 'Always Memory' },
-            { v: 'db', label: 'Always Database' },
-          ].map((o) => ({
-            label: o.label,
-            type: 'radio',
-            checked: (getSettings().engineMode || 'auto') === o.v,
-            click: () => { saveSetting('engineMode', o.v); buildMenu(); },
-          })),
+            { label: 'For JSON, XML & YAML files only', enabled: false },
+            { type: 'separator' },
+            ...[
+              { v: 'auto', label: 'Auto (RAM under 10 GB, DB above)' },
+              { v: 'memory', label: 'Always Memory' },
+              { v: 'db', label: 'Always Database' },
+            ].map((o) => ({
+              label: o.label,
+              type: 'radio',
+              checked: (getSettings().engineMode || 'auto') === o.v,
+              click: () => { saveSetting('engineMode', o.v); buildMenu(); },
+            })),
+            { type: 'separator' },
+            { label: 'Table files (CSV, TSV, Parquet…) always use the table engine', enabled: false },
+          ],
         },
         { type: 'separator' },
         { label: 'Open Cache Folder', click: () => shell.openPath(dbCacheDir()) },
