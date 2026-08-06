@@ -1985,6 +1985,7 @@ function buildTableHead(t) {
     grip.className = 'col-resizer';
     grip.addEventListener('mousedown', (ev) => startColResize(ev, t, c, th));
     grip.addEventListener('click', (ev) => ev.stopPropagation());
+    grip.addEventListener('dblclick', (ev) => { ev.stopPropagation(); autoFitColumn(t, c); });
     th.appendChild(grip);
     // Drag to reorder.
     th.draggable = true;
@@ -2018,6 +2019,33 @@ function reorderCol(t, from, to) {
   order.splice(fi, 1);
   order.splice(order.indexOf(to) + (fi < ti ? 0 : 0), 0, from);
   t.colOrder = order;
+  buildTableHead(t);
+  renderTable();
+}
+
+// Measure text width in the grid's monospace font (cached canvas context).
+let _measureCtx = null;
+function measureCellText(s) {
+  if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+  _measureCtx.font = '12px "SF Mono", Menlo, Consolas, "Courier New", monospace';
+  return _measureCtx.measureText(s).width;
+}
+
+// Double-click the resize grip → size the column to fit its header + loaded cells.
+function autoFitColumn(t, c) {
+  ensureColState(t);
+  let max = measureCellText(t.tableHeaders[c] || '');
+  for (const page of t.tablePages.values()) {
+    if (!page) continue;
+    for (const rd of page) {
+      const cell = rd && rd.cells ? rd.cells[c] : null;
+      if (!cell || cell.value == null) continue;
+      const v = String(cell.value);
+      const w = measureCellText(v.length > 200 ? v.slice(0, 200) : v);
+      if (w > max) max = w;
+    }
+  }
+  t.colWidths[c] = Math.max(TABLE_COL_MIN, Math.min(600, Math.ceil(max) + 24)); // + cell padding/buffer
   buildTableHead(t);
   renderTable();
 }
