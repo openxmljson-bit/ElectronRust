@@ -671,8 +671,17 @@ function toggleRecentPanel() {
   });
 })();
 
+let dockTab = 'recent'; // 'recent' | 'bookmarks'
+function setDockTab(which) {
+  dockTab = which;
+  document.querySelectorAll('.dock-tab').forEach((b) => b.classList.toggle('active', b.dataset.dock === which));
+  renderRecentDock();
+}
+document.querySelectorAll('.dock-tab').forEach((b) => b.addEventListener('click', () => setDockTab(b.dataset.dock)));
+
 async function renderRecentDock() {
   if (!recentPanelOpen) return;
+  if (dockTab === 'bookmarks') return renderDockBookmarks();
   const list = await window.oxj.recents();
   const el = $('recent-dock-list');
   el.textContent = '';
@@ -720,6 +729,55 @@ async function renderRecentDock() {
       }
     }
     el.appendChild(sec);
+  }
+}
+
+// Bookmarks tab of the dock: pinned first, then most-recently used. Clicking a
+// row opens (sends) the saved request; ★ pins, ✕ deletes.
+async function renderDockBookmarks() {
+  if (!recentPanelOpen) return;
+  const list = await window.oxj.bookmarks.list();
+  const el = $('recent-dock-list');
+  el.textContent = '';
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-dock-empty';
+    empty.textContent = 'No bookmarks yet. Save one from Open URL (☆).';
+    el.appendChild(empty);
+    return;
+  }
+  list.sort((a, b) => {
+    if (!!b.pinned !== !!a.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    return (b.lastUsedAt || b.updatedAt || 0) - (a.lastUsedAt || a.updatedAt || 0);
+  });
+  for (const b of list) {
+    const row = document.createElement('div');
+    row.className = 'dock-bm';
+    row.title = (b.request && b.request.url) || b.name;
+    const star = document.createElement('button');
+    star.className = 'dock-bm-star' + (b.pinned ? ' on' : '');
+    star.textContent = b.pinned ? '★' : '☆';
+    star.title = b.pinned ? 'Unpin' : 'Pin to top';
+    star.addEventListener('click', async (e) => { e.stopPropagation(); await window.oxj.bookmarks.update(b.id, { pinned: !b.pinned }); renderDockBookmarks(); });
+    const main = document.createElement('div'); main.className = 'dock-bm-main';
+    const nameRow = document.createElement('div'); nameRow.className = 'dock-bm-name';
+    const m = (b.request && b.request.method) || 'GET';
+    const chip = document.createElement('span'); chip.className = 'dock-bm-chip'; chip.textContent = m;
+    const col = METHOD_COLOR[m] || 'var(--fg-dim)';
+    chip.style.color = col; chip.style.border = '1px solid ' + col;
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = b.name;
+    nameRow.append(chip, nm);
+    const url = document.createElement('div'); url.className = 'dock-bm-url'; url.textContent = (b.request && b.request.url) || '';
+    main.append(nameRow, url);
+    const rm = document.createElement('button'); rm.className = 'dock-bm-rm'; rm.textContent = '✕'; rm.title = 'Delete bookmark';
+    rm.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!await confirmDialog({ title: 'Delete bookmark?', body: '“' + b.name + '” will be removed.', okLabel: 'Delete' })) return;
+      await window.oxj.bookmarks.remove(b.id); renderDockBookmarks();
+    });
+    row.append(star, main, rm);
+    row.addEventListener('click', () => openBookmark(b));
+    el.appendChild(row);
   }
 }
 
@@ -3466,6 +3524,7 @@ window.oxj.bookmarks.onChanged(() => {
     const onBm = document.querySelector('.umodal-tab[data-utab="bookmarks"]').classList.contains('active');
     if (onBm) renderBookmarks();
   }
+  if (recentPanelOpen && dockTab === 'bookmarks') renderDockBookmarks();
 });
 
 // URL <-> Params
