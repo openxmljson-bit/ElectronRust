@@ -304,7 +304,7 @@ function renderScreen() {
       setView('table');
       buildTableHead(t);
       $('status-doc').textContent =
-        t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes) + ' · DuckDB';
+        t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes);
       $('status-load').textContent = t.duck.strategy === 'cache-hit'
         ? 'from cache'
         : (t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '');
@@ -467,6 +467,33 @@ function toast(msg, info) {
   t.classList.remove('hidden');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.add('hidden'), info ? 3500 : 6000);
+}
+// Styled, roomy replacement for window.confirm(). Returns a Promise<boolean>.
+function confirmDialog(opts) {
+  const { title = 'Are you sure?', body = '', okLabel = 'OK', cancelLabel = 'Cancel' } = opts || {};
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-backdrop';
+    const box = document.createElement('div');
+    box.className = 'modal confirm-modal';
+    const h = document.createElement('div'); h.className = 'confirm-title'; h.textContent = title;
+    box.appendChild(h);
+    if (body) { const p = document.createElement('div'); p.className = 'confirm-body'; p.textContent = body; box.appendChild(p); }
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = cancelLabel;
+    const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = okLabel;
+    actions.append(cancel, ok);
+    box.appendChild(actions);
+    back.appendChild(box);
+    document.body.appendChild(back);
+    const close = (val) => { document.removeEventListener('keydown', onKey); back.remove(); resolve(val); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); else if (e.key === 'Enter') close(true); };
+    cancel.addEventListener('click', () => close(false));
+    ok.addEventListener('click', () => close(true));
+    back.addEventListener('click', (e) => { if (e.target === back) close(false); });
+    document.addEventListener('keydown', onKey);
+    ok.focus();
+  });
 }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 // Middle-ellipsis so the extension always stays visible.
@@ -784,16 +811,20 @@ async function refreshDuckCache() {
     const info = await window.oxj.duckInvoke('cacheInfo');
     list.textContent = '';
     addRow('Cached files', fmtInt((info.entries || []).length));
-    addRow('Parquet cache', fmtBytes(info.totalBytes || 0));
+    addRow('Cache size', fmtBytes(info.totalBytes || 0));
     addRow('Size limit', info.limitBytes ? fmtBytes(info.limitBytes) : 'Unlimited');
   } catch (e) {
-    list.textContent = ''; addRow('DuckDB cache', 'unavailable');
+    list.textContent = ''; addRow('Cache', 'unavailable');
   }
 }
 
 $('btn-clear-cache').addEventListener('click', async () => {
   if (cacheTab === 'duck') {
-    if (!window.confirm('Clear the CSV (DuckDB) Parquet cache? Files re-ingest the next time you open them.')) return;
+    if (!await confirmDialog({
+      title: 'Clear the table cache?',
+      body: 'Your table files will load fresh the next time you open them.',
+      okLabel: 'Clear cache',
+    })) return;
     try {
       const r = await window.oxj.duckInvoke('clearCache');
       toast('CSV cache cleared' + (r && r.bytes ? ' — freed ' + fmtBytes(r.bytes) : ''), true);
@@ -801,7 +832,11 @@ $('btn-clear-cache').addEventListener('click', async () => {
     refreshDuckCache();
     return;
   }
-  if (!window.confirm('Clear the JSON document cache? Files re-ingest the next time you open them.')) return;
+  if (!await confirmDialog({
+    title: 'Clear the document cache?',
+    body: 'Your files will load fresh the next time you open them.',
+    okLabel: 'Clear cache',
+  })) return;
   try {
     const freed = await window.oxj.clearCache();
     toast('Cache cleared — freed ' + fmtBytes(freed), true);
@@ -856,7 +891,7 @@ async function openDuck(t, path) {
   try { window.oxj.noteRecent(path, 'csv'); } catch {}
   renderTabs();
   if (t === cur) { renderScreen(); if (recentPanelOpen) renderRecentDock(); }
-  toast('Loaded ' + fmtInt(vi.rowCount) + ' rows · ' + t.tableFormatLabel + ' (DuckDB)', true);
+  toast('Loaded ' + fmtInt(vi.rowCount) + ' rows · ' + t.tableFormatLabel, true);
 }
 function isDuck(t) { return t && t.engine === 'duck'; }
 
@@ -1278,7 +1313,11 @@ async function loadAll(t, pseudoIdx) {
   const pseudo = t.visible[pseudoIdx];
   const remaining = Number(e.n) - e.win.end;
   if (remaining > 300000 &&
-      !window.confirm('Load all ' + fmtInt(remaining) + ' remaining rows into the tree? This may take a while.')) {
+      !await confirmDialog({
+        title: 'Load all remaining rows?',
+        body: 'This will load ' + fmtInt(remaining) + ' more rows into the tree and may take a while.',
+        okLabel: 'Load all',
+      })) {
     return;
   }
   pseudo.loading = true;
