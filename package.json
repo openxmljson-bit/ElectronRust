@@ -10,8 +10,9 @@
     "build:engine": "cd rust-engine && cargo build --release",
     "build:duck": "node scripts/build-duck-engine.mjs",
     "build:duck:watch": "node scripts/build-duck-engine.mjs --watch",
-    "dist": "electron-builder",
-    "dist:fast": "electron-builder --config.mac.notarize=false",
+    "build:all": "npm run build:engine && npm run build:duck",
+    "dist": "npm run build:all && electron-builder",
+    "dist:fast": "npm run build:all && electron-builder --config.mac.notarize=false",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -42,7 +43,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "duck-client.js",
       "renderer/**",
+      "dist/engine/**",
       "!node_modules/monaco-editor/dev/**",
       "!node_modules/monaco-editor/esm/**",
       "!node_modules/monaco-editor/min-maps/**",
@@ -50,11 +53,16 @@
       "!node_modules/monaco-editor/CHANGELOG.md",
       "!node_modules/monaco-editor/ThirdPartyNotices.txt"
     ],
+    "asarUnpack": [
+      "**/node_modules/@duckdb/**",
+      "**/*.node"
+    ],
     "mac": {
       "target": [
         "dmg",
         "zip"
       ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
       "hardenedRuntime": true,

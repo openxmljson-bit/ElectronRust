@@ -232,6 +232,16 @@ function renderTabs() {
     });
     host.appendChild(el);
   }
+  // "+" — open another file in a new tab.
+  const add = document.createElement('button');
+  add.className = 'tab-add';
+  add.textContent = '+';
+  add.title = 'Open a file in a new tab';
+  add.addEventListener('click', async () => {
+    const p = await window.oxj.pickFile();
+    if (p) openFileWithPrompt(p); // targetTabForOpen() makes a new tab when the current one is busy
+  });
+  host.appendChild(add);
 }
 
 // ---------- screen switching ----------
@@ -295,10 +305,12 @@ function renderScreen() {
       buildTableHead(t);
       $('status-doc').textContent =
         t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes) + ' · DuckDB';
-      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
+      $('status-load').textContent = t.duck.strategy === 'cache-hit'
+        ? 'from cache'
+        : (t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '');
       updateTopBtn();
       $('status-type').textContent = '';
-      $('status-path').textContent = t.file || '';
+      $('status-path').textContent = baseName(t.file || '');
       if (sourceOpen) scheduleSourceUpdate();
       syncMenuState();
       return;
@@ -748,8 +760,48 @@ async function refreshCacheInfo() {
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
 
+// Cache Manager has two tabs: JSON (SQLite) and CSV (DuckDB Parquet).
+let cacheTab = 'db';
+function setCacheTab(which) {
+  cacheTab = which;
+  document.querySelectorAll('#cache-seg .engine-opt').forEach((b) => b.classList.toggle('active', b.dataset.cache === which));
+  $('cache-list').classList.toggle('hidden', which !== 'db');
+  $('duck-cache-list').classList.toggle('hidden', which !== 'duck');
+  if (which === 'duck') refreshDuckCache(); // lazily boots the DuckDB engine
+}
+document.querySelectorAll('#cache-seg .engine-opt').forEach((b) => b.addEventListener('click', () => setCacheTab(b.dataset.cache)));
+
+async function refreshDuckCache() {
+  const list = $('duck-cache-list');
+  const addRow = (k, v) => {
+    const row = document.createElement('div'); row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.textContent = v;
+    row.append(kk, vv); list.appendChild(row);
+  };
+  list.textContent = ''; addRow('Loading…', '');
+  try {
+    const info = await window.oxj.duckInvoke('cacheInfo');
+    list.textContent = '';
+    addRow('Cached files', fmtInt((info.entries || []).length));
+    addRow('Parquet cache', fmtBytes(info.totalBytes || 0));
+    addRow('Size limit', info.limitBytes ? fmtBytes(info.limitBytes) : 'Unlimited');
+  } catch (e) {
+    list.textContent = ''; addRow('DuckDB cache', 'unavailable');
+  }
+}
+
 $('btn-clear-cache').addEventListener('click', async () => {
-  if (!window.confirm('Clear the document cache? Files re-ingest the next time you open them.')) return;
+  if (cacheTab === 'duck') {
+    if (!window.confirm('Clear the CSV (DuckDB) Parquet cache? Files re-ingest the next time you open them.')) return;
+    try {
+      const r = await window.oxj.duckInvoke('clearCache');
+      toast('CSV cache cleared' + (r && r.bytes ? ' — freed ' + fmtBytes(r.bytes) : ''), true);
+    } catch (e) { toast('Clear failed: ' + cleanErr(e)); }
+    refreshDuckCache();
+    return;
+  }
+  if (!window.confirm('Clear the JSON document cache? Files re-ingest the next time you open them.')) return;
   try {
     const freed = await window.oxj.clearCache();
     toast('Cache cleared — freed ' + fmtBytes(freed), true);
@@ -786,7 +838,7 @@ async function openDuck(t, path) {
   const vi = await window.oxj.duckInvoke('buildView', { datasetId, view, jobId: duckJob() });
   if (!tabAlive(t)) return;
   t.engine = 'duck';
-  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
+  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man, strategy: man.strategy };
   t.docFormat = man.format === 'tsv' ? 'tsv' : 'csv'; // table logic keys off csv/tsv
   t.tableFormatLabel = DUCK_FORMAT_LABEL[man.format] || (man.format || 'CSV').toUpperCase();
   t.tableHeaders = (man.columns || []).map((c) => c.name);
@@ -799,7 +851,7 @@ async function openDuck(t, path) {
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
   t.tableSel = null; t.tableSort = null; t.tableFilters = [];
   t.view = 'table';
-  t.loadMs = vi.buildMs != null ? vi.buildMs : (man.ingestMs || null);
+  t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
   t.phase = 'ready';
   try { window.oxj.noteRecent(path, 'csv'); } catch {}
   renderTabs();
@@ -1983,6 +2035,7 @@ function buildTableHead(t) {
     grip.className = 'col-resizer';
     grip.addEventListener('mousedown', (ev) => startColResize(ev, t, c, th));
     grip.addEventListener('click', (ev) => ev.stopPropagation());
+    grip.addEventListener('dblclick', (ev) => { ev.stopPropagation(); autoFitColumn(t, c); });
     th.appendChild(grip);
     // Drag to reorder.
     th.draggable = true;
@@ -2016,6 +2069,33 @@ function reorderCol(t, from, to) {
   order.splice(fi, 1);
   order.splice(order.indexOf(to) + (fi < ti ? 0 : 0), 0, from);
   t.colOrder = order;
+  buildTableHead(t);
+  renderTable();
+}
+
+// Measure text width in the grid's monospace font (cached canvas context).
+let _measureCtx = null;
+function measureCellText(s) {
+  if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+  _measureCtx.font = '12px "SF Mono", Menlo, Consolas, "Courier New", monospace';
+  return _measureCtx.measureText(s).width;
+}
+
+// Double-click the resize grip → size the column to fit its header + loaded cells.
+function autoFitColumn(t, c) {
+  ensureColState(t);
+  let max = measureCellText(t.tableHeaders[c] || '');
+  for (const page of t.tablePages.values()) {
+    if (!page) continue;
+    for (const rd of page) {
+      const cell = rd && rd.cells ? rd.cells[c] : null;
+      if (!cell || cell.value == null) continue;
+      const v = String(cell.value);
+      const w = measureCellText(v.length > 200 ? v.slice(0, 200) : v);
+      if (w > max) max = w;
+    }
+  }
+  t.colWidths[c] = Math.max(TABLE_COL_MIN, Math.min(600, Math.ceil(max) + 24)); // + cell padding/buffer
   buildTableHead(t);
   renderTable();
 }
@@ -2360,6 +2440,7 @@ function tableExportEnabled(view) {
 
 function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
+  $('btn-cols').classList.toggle('hidden', !on);
   $('table-tools').classList.toggle('hidden', !on);
   if (!on) return;
   ensureColState(t);
@@ -2472,6 +2553,7 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
     { label: 'Filter…', action: () => openFilterDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
+    { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];

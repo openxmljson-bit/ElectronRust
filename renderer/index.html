@@ -70,7 +70,12 @@
         </div>
         <div id="cache-wrap" class="stats hidden">
           <div class="stats-head">Cache Manager</div>
+          <div id="cache-seg" class="engine-seg">
+            <button class="engine-opt active" data-cache="db">JSON</button>
+            <button class="engine-opt" data-cache="duck">CSV</button>
+          </div>
           <div id="cache-list"></div>
+          <div id="duck-cache-list" class="hidden"></div>
           <div class="cache-actions">
             <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
           </div>
@@ -108,9 +113,9 @@
           <button id="btn-view-tree" class="seg active">Tree</button>
           <button id="btn-view-table" class="seg">Table</button>
         </div>
+        <button id="btn-cols" class="btn-tool hidden" title="Show / hide columns">☰ Columns</button>
         <button id="btn-source" class="btn-tool" title="Show formatted source of the selected node">Source</button>
         <span id="table-tools" class="table-tools hidden">
-          <button id="btn-cols" class="btn-tool" title="Show / hide columns">☰ Columns</button>
           <button id="btn-tbl-actions" class="btn-tool" title="Filter, sort, profile, SQL">Actions ▾</button>
           <button id="btn-tbl-export" class="btn-tool" title="Export the current view" disabled>Export ▾</button>
           <span id="table-viewinfo" class="table-viewinfo"></span>
