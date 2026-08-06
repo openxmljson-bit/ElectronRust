@@ -342,6 +342,43 @@ function canPrettyPrint(t) {
   return text.length > 0 && text.length < 150 * 1024 * 1024 && looksMinified(text);
 }
 
+// Custom Monaco themes whose editor chrome matches the app palette (the stock
+// vs-dark background #1e1e1e reads greyer than our --bg2 panels).
+let monacoThemesDefined = false;
+function defineMonacoThemes() {
+  if (monacoThemesDefined || !window.monaco) return;
+  window.monaco.editor.defineTheme('narik-dark', {
+    base: 'vs-dark', inherit: true, rules: [],
+    colors: {
+      'editor.background': '#1b1e27',
+      'editorGutter.background': '#1b1e27',
+      'minimap.background': '#1b1e27',
+      'editorLineNumber.foreground': '#5b6270',
+      'editorLineNumber.activeForeground': '#d7dae2',
+      'editor.lineHighlightBackground': '#232734',
+      'editor.lineHighlightBorder': '#00000000',
+      'editor.selectionBackground': '#2d3446',
+      'editorIndentGuide.background': '#232734',
+      'editorIndentGuide.background1': '#232734',
+      'editorWidget.background': '#1b1e27',
+      'scrollbarSlider.background': '#2d344680',
+    },
+  });
+  window.monaco.editor.defineTheme('narik-light', {
+    base: 'vs', inherit: true, rules: [],
+    colors: {
+      'editor.background': '#ffffff',
+      'editorGutter.background': '#ffffff',
+      'minimap.background': '#ffffff',
+    },
+  });
+  monacoThemesDefined = true;
+}
+function monacoThemeName(eff) {
+  defineMonacoThemes();
+  return eff === 'light' ? 'narik-light' : 'narik-dark';
+}
+
 function showPlain(t) {
   if (monacoReady && window.monaco) {
     $('text-fallback').classList.add('hidden');
@@ -349,7 +386,7 @@ function showPlain(t) {
     if (!textEditor) {
       textEditor = window.monaco.editor.create($('text-host'), {
         value: '',
-        theme: uiTheme === 'light' ? 'vs' : 'vs-dark',
+        theme: monacoThemeName(uiTheme),
         readOnly: true,
         automaticLayout: true,
         minimap: { enabled: true },
@@ -3141,7 +3178,7 @@ function initMonaco() {
       monacoEditor = window.monaco.editor.create($('monaco-host'), {
         value: '',
         language: 'json',
-        theme: uiTheme === 'light' ? 'vs' : 'vs-dark',
+        theme: monacoThemeName(uiTheme),
         readOnly: true,
         automaticLayout: true,
         minimap: { enabled: true },
@@ -5547,7 +5584,7 @@ function applyTheme(eff) {
   uiTheme = eff;
   document.body.classList.toggle('light', eff === 'light');
   if (monacoReady && window.monaco) {
-    window.monaco.editor.setTheme(eff === 'light' ? 'vs' : 'vs-dark');
+    window.monaco.editor.setTheme(monacoThemeName(eff));
   }
 }
 window.oxj.onTheme((eff) => applyTheme(eff));
