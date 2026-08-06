@@ -114,6 +114,7 @@ async function closeTab(t) {
   const idx = tabs.indexOf(t);
   tabs.splice(idx, 1);
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
+  if (isDuck(t) && t.duck) { try { window.oxj.duckInvoke('closeDataset', { datasetId: t.duck.datasetId }); } catch {} }
   try { await window.oxj.closeTab(t.id); } catch {}
   if (!tabs.length) {
     newTab(true);
@@ -250,17 +251,20 @@ function renderScreen() {
     // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
     const srcBytes = Number((t.meta && t.meta.source_bytes) || 0);
     const isCsvDoc = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    const duck = isDuck(t);
+    // DuckDB tables: table-only (no tree/flow/raw-file/tools yet).
     $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
-    $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
+    $('btn-flow').classList.toggle('hidden', plain || duck || t.docFormat === 'xml');
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
       plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
-    $('search-scope').classList.toggle('hidden', plain);
-    $('search-box').classList.toggle('hidden', plain);
+    $('search-scope').classList.toggle('hidden', plain || duck);   // JSON scopes only
+    $('search-mode').classList.toggle('hidden', plain || !duck);   // duck: contains/exact/regex
+    $('search-box').classList.toggle('hidden', plain);             // duck: search every column
     $('btn-find').classList.toggle('hidden', plain);
-    $('match-prev').classList.toggle('hidden', plain);
-    $('match-next').classList.toggle('hidden', plain);
+    $('match-prev').classList.toggle('hidden', plain || duck);     // asFilter search: no stepping
+    $('match-next').classList.toggle('hidden', plain || duck);
     $('text-wrap').classList.toggle('hidden', !plain);
     if (plain) {
       $('view-toggle').classList.add('hidden');
@@ -278,6 +282,27 @@ function renderScreen() {
       return;
     }
     const isCsv = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    if (duck) {
+      // DuckDB: table view only, no tree.
+      $('view-toggle').classList.add('hidden');
+      $('tree-wrap').classList.add('hidden');
+      t.view = 'table';
+      $('search-box').placeholder = 'Search all columns';
+      $('search-box').value = t.duck.searchQuery || '';
+      $('search-mode').classList.remove('hidden');
+      $('search-mode').value = t.duck.searchMode || 'contains';
+      setView('table');
+      buildTableHead(t);
+      $('status-doc').textContent =
+        t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes) + ' · DuckDB';
+      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
+      updateTopBtn();
+      $('status-type').textContent = '';
+      $('status-path').textContent = t.file || '';
+      if (sourceOpen) scheduleSourceUpdate();
+      syncMenuState();
+      return;
+    }
     $('view-toggle').classList.toggle('hidden', !isCsv);
     setView(t.view);
     $('status-doc').textContent =
@@ -742,6 +767,47 @@ function targetTabForOpen() {
 
 const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 
+// ---------- DuckDB engine (delimited/tabular files) ----------
+// Extensions routed straight to DuckDB; .txt/.dat/.tab arrive via format:'csv'.
+const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet'];
+const EMPTY_VIEW = { filters: [], combine: 'and', search: null, sort: [], select: null };
+const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet' };
+let duckJobSeq = 1;
+const duckJob = () => 'job-' + (duckJobSeq++);
+
+// Open a delimited/tabular file through DuckDB and set the tab up as a table.
+async function openDuck(t, path) {
+  const openJobId = duckJob();
+  t.duckOpenJobId = openJobId; // so progress events can find this tab
+  const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: openJobId });
+  if (!tabAlive(t)) return;
+  const datasetId = man.id; // manifest keys the dataset by `id`
+  const view = { ...EMPTY_VIEW };
+  const vi = await window.oxj.duckInvoke('buildView', { datasetId, view, jobId: duckJob() });
+  if (!tabAlive(t)) return;
+  t.engine = 'duck';
+  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
+  t.docFormat = man.format === 'tsv' ? 'tsv' : 'csv'; // table logic keys off csv/tsv
+  t.tableFormatLabel = DUCK_FORMAT_LABEL[man.format] || (man.format || 'CSV').toUpperCase();
+  t.tableHeaders = (man.columns || []).map((c) => c.name);
+  t.tableTotal = vi.rowCount;
+  t.tableViewTotal = vi.rowCount;
+  t.meta = { format: t.docFormat, total_nodes: vi.rowCount, source_bytes: man.sourceSize || 0, mode: 'duck' };
+  t.rootId = 1;
+  t.tablePages = new Map();
+  t.tableInflight = new Set();
+  t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
+  t.tableSel = null; t.tableSort = null; t.tableFilters = [];
+  t.view = 'table';
+  t.loadMs = vi.buildMs != null ? vi.buildMs : (man.ingestMs || null);
+  t.phase = 'ready';
+  try { window.oxj.noteRecent(path, 'csv'); } catch {}
+  renderTabs();
+  if (t === cur) { renderScreen(); if (recentPanelOpen) renderRecentDock(); }
+  toast('Loaded ' + fmtInt(vi.rowCount) + ' rows · ' + t.tableFormatLabel + ' (DuckDB)', true);
+}
+function isDuck(t) { return t && t.engine === 'duck'; }
+
 async function openPath(p, tab, force, opts) {
   const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table
   const ext = String(p).split('.').pop().toLowerCase();
@@ -765,10 +831,15 @@ async function openPath(p, tab, force, opts) {
   t.title = baseName(p);
   t.phase = 'loading';
   t.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false };
+  t.engine = null; t.duck = null;
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
+  // Delimited/tabular files go to the DuckDB engine; everything else to Rust.
+  const wantDuck = fmt === 'csv' || DUCK_EXTS.includes(ext);
+  if (wantDuck) { t.progress.duck = true; if (t === cur) renderScreen(); }
   try {
-    await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
+    if (wantDuck) await openDuck(t, p);
+    else await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
@@ -802,7 +873,11 @@ $('btn-clear-recents').addEventListener('click', async () => {
 $('btn-cancel').addEventListener('click', async () => {
   const t = cur;
   if (t.phase !== 'loading') return;
-  try { await window.oxj.cancelIngest(t.id); } catch {}
+  if (t.progress && t.progress.duck && t.duckOpenJobId) {
+    try { await window.oxj.duckInvoke('cancel', { jobId: t.duckOpenJobId }); } catch {}
+  } else {
+    try { await window.oxj.cancelIngest(t.id); } catch {}
+  }
   t.phase = 'empty';
   t.title = 'New Tab';
   t.file = null;
@@ -893,6 +968,20 @@ function updateProgressDom(t) {
     $('prog-phase').classList.add('hidden');
     return;
   }
+  if (pr.duck) {
+    $('prog-title').textContent = 'Opening ' + baseName(t.file || '');
+    $('prog-file').textContent = t.file || '';
+    const pct = pr.percent != null ? Math.min(100, pr.percent) : null;
+    $('bar-inner').classList.toggle('indeterminate', pct == null);
+    if (pct != null) $('bar-inner').style.width = pct.toFixed(2) + '%';
+    $('prog-pct').textContent = pct != null ? pct.toFixed(1) + '%' : '';
+    $('prog-bytes').textContent = pr.bytesDone ? fmtBytes(pr.bytesDone) + (pr.bytesTotal ? ' / ' + fmtBytes(pr.bytesTotal) : '') : '';
+    $('prog-speed').textContent = '';
+    $('prog-eta').textContent = pr.etaMs ? 'ETA ' + fmtDur(pr.etaMs / 1000) : '';
+    $('prog-nodes').textContent = pr.rowsDone ? fmtInt(pr.rowsDone) + ' rows read' : (pr.phase || 'Loading into the query engine…');
+    $('prog-phase').classList.add('hidden');
+    return;
+  }
   $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
   $('prog-phase').textContent = pr.mem
     ? 'Indexing in memory — no database needed, this is quick…'
@@ -909,6 +998,25 @@ function updateProgressDom(t) {
   $('prog-nodes').textContent = pr.nodes ? fmtInt(pr.nodes) + ' nodes parsed' : (pr.startedMsg || 'Starting engine…');
   $('prog-phase').classList.toggle('hidden', !pr.indexing);
 }
+
+// DuckDB ingest progress → drive the loading screen for the matching tab.
+window.oxj.onDuckEvent((ev) => {
+  if (!ev) return;
+  if (ev.type === 'job' && ev.progress) {
+    const jp = ev.progress;
+    const t = tabs.find((x) => x.duckOpenJobId === jp.jobId && x.phase === 'loading');
+    if (!t) return;
+    const pr = t.progress;
+    pr.duck = true;
+    pr.percent = jp.percent;
+    pr.phase = jp.phase || jp.label || '';
+    pr.bytesDone = jp.bytesDone;
+    pr.bytesTotal = jp.bytesTotal;
+    pr.rowsDone = jp.rowsDone;
+    pr.etaMs = jp.etaMs;
+    if (t === cur) updateProgressDom(t);
+  }
+});
 
 window.oxj.onProgress((msg) => {
   const t = tabById(msg.tabId);
@@ -1491,19 +1599,32 @@ function currentQueryMatchesNav() {
   return matchNav.q === q && matchNav.exact === exact && matchNav.scope === $('search-scope').value;
 }
 
+// DuckDB tables: search filters the view to rows matching in ANY column.
+function duckSearch(t, q) {
+  t.duck.searchQuery = q || '';
+  t.duck.searchMode = $('search-mode').value || 'contains';
+  applyTableView(t); // rebuilds the view (search folded into duckViewSpec)
+}
+// Re-run the search when the mode changes (if there's an active query).
+$('search-mode').addEventListener('change', () => {
+  if (isDuck(cur) && cur.duck.searchQuery) duckSearch(cur, $('search-box').value.trim());
+});
 $('search-box').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') {
+    if (isDuck(cur)) { duckSearch(cur, ev.target.value.trim()); return; }
     if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
     else startSearch();
   }
-  if (ev.key === 'Escape') { ev.target.value = ''; closeSearch(); }
+  if (ev.key === 'Escape') { ev.target.value = ''; if (isDuck(cur)) duckSearch(cur, ''); else closeSearch(); }
 });
 $('btn-find').addEventListener('click', () => {
+  if (isDuck(cur)) { duckSearch(cur, $('search-box').value.trim()); return; }
   if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
   else startSearch();
 });
 // Fires when the X inside the field is clicked (or the field is emptied).
 $('search-box').addEventListener('search', (ev) => {
+  if (isDuck(cur)) { if (!ev.target.value) duckSearch(cur, ''); return; }
   if (!ev.target.value) closeSearch();
 });
 $('match-prev').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur - 1));
@@ -1840,9 +1961,18 @@ function buildTableHead(t) {
     const th = document.createElement('div');
     th.className = 'th';
     th.textContent = t.tableHeaders[c];
-    th.title = t.tableHeaders[c];
+    th.title = t.tableHeaders[c] + ' — click to sort';
     th.style.width = colWidth(t, c) + 'px';
     th.dataset.col = String(c);
+    if (t.tableSort && t.tableSort.col === c) {
+      th.classList.add('sorted');
+      const ar = document.createElement('span');
+      ar.className = 'sort-arrow';
+      ar.textContent = t.tableSort.dir === 'asc' ? ' ▲' : ' ▼';
+      th.appendChild(ar);
+    }
+    // Click the header to cycle sort: asc → desc → none.
+    th.addEventListener('click', (ev) => { if (!ev.target.classList.contains('col-resizer')) cycleSort(t, c); });
     if (t.colPinned.has(c)) {
       th.classList.add('pinned');
       th.style.left = pinnedLeft + 'px';
@@ -1864,6 +1994,15 @@ function buildTableHead(t) {
     th.addEventListener('contextmenu', (e) => { e.preventDefault(); showHeaderMenu(e, t, c); });
     head.appendChild(th);
   });
+}
+
+// Click a header to cycle its sort: unsorted → ascending → descending → none.
+function cycleSort(t, c) {
+  const s = t.tableSort;
+  if (!s || s.col !== c) t.tableSort = { col: c, dir: 'asc' };
+  else if (s.dir === 'asc') t.tableSort = { col: c, dir: 'desc' };
+  else t.tableSort = null;
+  applyTableView(t);
 }
 
 // Move column `from` to just before column `to` in the display order.
@@ -1906,6 +2045,20 @@ async function fetchTablePage(t, page) {
   if (t.tablePages.has(page) || t.tableInflight.has(page)) return;
   t.tableInflight.add(page);
   try {
+    if (isDuck(t)) {
+      const res = await window.oxj.duckInvoke('getPage', {
+        datasetId: t.duck.datasetId, view: t.duck.view, offset: page * 100, limit: 100, maxCellChars: 2000,
+      });
+      if (!tabAlive(t)) return;
+      const cols = t.duck.columns;
+      const rows = (res.rows || []).map((r, i) => ({
+        id: page * 100 + i, ord: page * 100 + i,
+        cells: cols.map((c, ci) => ({ name: c.name, value: r[ci] })),
+      }));
+      t.tablePages.set(page, rows);
+      if (t === cur && t.view === 'table') renderTable();
+      return;
+    }
     const q = { op: 'table', node: 1, offset: page * 100, limit: 100 };
     if (t.tableSort) q.sort = t.tableSort;
     if (t.tableFilters && t.tableFilters.length) q.filters = t.tableFilters;
@@ -1929,7 +2082,42 @@ function tableRows(t) {
 
 // Re-apply the current sort/filter view: drop cached windows, reset scroll,
 // refetch. Guarded to database mode (the memory engine can't sort/filter).
+// Translate the tab's sort/filter state (Rust op shape) into a DuckDB ViewSpec.
+const DUCK_FILTER_OP = {
+  contains: 'contains', equals: 'eq', 'starts-with': 'startswith',
+  'not-equals': 'ne', gt: 'gt', lt: 'lt', between: 'between',
+};
+function duckViewSpec(t) {
+  const filters = (t.tableFilters || []).map((f, i) => {
+    let value = String(f.value == null ? '' : f.value), value2 = '';
+    if (f.op === 'between') { const p = value.split(','); value = (p[0] || '').trim(); value2 = (p[1] || '').trim(); }
+    return { id: 'f' + i, column: t.tableHeaders[f.col], op: DUCK_FILTER_OP[f.op] || 'contains', value, value2, caseSensitive: false, enabled: true };
+  });
+  const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
+  const q = t.duck && t.duck.searchQuery;
+  const search = q ? { query: q, mode: (t.duck.searchMode || 'contains'), columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
+  return { filters, combine: 'and', search, sort, select: null };
+}
+
+async function applyTableViewDuck(t) {
+  t.duck.view = duckViewSpec(t);
+  t.tablePages = new Map();
+  t.tableInflight = new Set();
+  t.tableSel = null;
+  tableScroll.scrollTop = 0;
+  try {
+    const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
+    if (!tabAlive(t)) return;
+    t.duck.rowCount = vi.rowCount;
+    t.tableViewTotal = vi.rowCount;
+    buildTableHead(t);
+    renderTable();
+    updateTableToolbar(t);
+  } catch (e) { toast('View failed: ' + cleanErr(e)); }
+}
+
 function applyTableView(t) {
+  if (isDuck(t)) return applyTableViewDuck(t);
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.tableViewTotal = null;
@@ -2012,6 +2200,7 @@ function startCellSelect(e, t, row, vis) {
   if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
   else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
   renderTable();
+  if (sourceOpen) scheduleSourceUpdate(); // Source pane follows the selected row
 }
 function extendCellSelect(e, t, row, vis) {
   if (!cellDragging || !t.tableSel) return;
@@ -2171,7 +2360,7 @@ function tableExportEnabled(view) {
 
 function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
-  $('table-toolbar').classList.toggle('hidden', !on);
+  $('table-tools').classList.toggle('hidden', !on);
   if (!on) return;
   ensureColState(t);
   const view = {
@@ -2180,13 +2369,13 @@ function updateTableToolbar(t) {
     rowCount: tableRows(t),
     visibleCount: visCols(t).length,
   };
-  const enabled = tableExportEnabled(view);
-  $('btn-export-csv').disabled = !enabled;
-  $('btn-export-json').disabled = !enabled;
-  $('btn-clear-filters').disabled = !view.filterActive;
+  const enabled = isDuck(t) ? (view.rowCount > 0 && view.visibleCount > 0) : tableExportEnabled(view);
+  $('btn-tbl-export').disabled = !enabled;
   const info = $('table-viewinfo');
-  if (view.filterActive && t.tableViewTotal != null) info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
-  else info.textContent = '';
+  const narrowed = t.tableViewTotal != null && t.tableTotal != null && t.tableViewTotal !== t.tableTotal;
+  if ((view.filterActive || (isDuck(t) && t.duck.searchQuery) || narrowed) && t.tableViewTotal != null) {
+    info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
+  } else info.textContent = '';
 }
 
 // ---------- sort / filter dialogs ----------
@@ -2273,10 +2462,200 @@ function openFilterDialog(t, presetCol) {
   box.appendChild(actions);
 }
 
-$('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
-$('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
-$('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
-$('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
+// Table "Actions ▾" dropdown: filter, sort, clear filters, profile, SQL.
+$('btn-tbl-actions').addEventListener('click', (ev) => {
+  const t = cur; if (!t) return;
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  const filterActive = !!(t.tableFilters && t.tableFilters.length);
+  const items = [
+    { label: 'Filter…', action: () => openFilterDialog(t) },
+    { label: 'Sort…', action: () => openSortDialog(t) },
+    { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
+    { sep: true },
+    { label: 'Profile', action: () => runProfile(t) },
+  ];
+  if (isDuck(t)) {
+    items.push({ label: 'SQL Console…', action: () => openSqlConsole(t) });
+    items.push({ label: 'Compare with…', disabled: !otherDuckTabs(t).length, action: () => openDiffPicker(t) });
+  }
+  showContextMenu(r.left, r.bottom + 4, items);
+});
+// Table "Export ▾" dropdown: CSV / JSON.
+$('btn-tbl-export').addEventListener('click', (ev) => {
+  const t = cur; if (!t) return;
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, [
+    { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
+    { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
+  ]);
+});
+
+// ---------- DuckDB dataset diff (compare two delimited tables) ----------
+function otherDuckTabs(t) {
+  return tabs.filter((x) => x !== t && isDuck(x) && x.phase === 'ready' && x.duck);
+}
+
+function openDiffPicker(t) {
+  const others = otherDuckTabs(t);
+  if (!others.length) { toast('Open another delimited file in a tab to compare.'); return; }
+  const { back, box } = simpleModal('Compare table');
+  const r1 = document.createElement('div'); r1.className = 'modal-row';
+  const l1 = document.createElement('label'); l1.textContent = 'Against';
+  const sel = document.createElement('select');
+  others.forEach((o, i) => { const op = document.createElement('option'); op.value = String(tabs.indexOf(o)); op.textContent = baseName(o.file || o.title); if (i === 0) op.selected = true; sel.appendChild(op); });
+  r1.append(l1, sel);
+  const r2 = document.createElement('div'); r2.className = 'modal-row';
+  const l2 = document.createElement('label'); l2.textContent = 'Match by';
+  const keySel = document.createElement('select');
+  const pos = document.createElement('option'); pos.value = ''; pos.textContent = '(row position)'; keySel.appendChild(pos);
+  (t.duck.columns || []).forEach((c) => { const op = document.createElement('option'); op.value = c.name; op.textContent = c.name; keySel.appendChild(op); });
+  r2.append(l2, keySel);
+  box.append(r1, r2);
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Compare';
+  ok.onclick = () => { const other = tabs[parseInt(sel.value, 10)]; const key = keySel.value; back.remove(); runDatasetDiff(t, other, key); };
+  actions.append(cancel, ok); box.append(actions);
+}
+
+async function runDatasetDiff(t, other, keyCol) {
+  if (!tabAlive(other) || !isDuck(other)) { toast('The other table is no longer open.'); return; }
+  try {
+    toast('Comparing…', true);
+    const res = await window.oxj.duckInvoke('diffDatasets', {
+      leftId: t.duck.datasetId, rightId: other.duck.datasetId,
+      keyColumns: keyCol ? [keyCol] : [], compareColumns: null, maxExamples: 200, jobId: duckJob(),
+    });
+    showDatasetDiffReport(t, other, res);
+  } catch (err) { toast('Compare failed: ' + cleanErr(err)); }
+}
+
+function showDatasetDiffReport(t, other, res) {
+  const sub = '<span>' + htmlEsc(baseName(t.file || t.title)) + ' ↔ ' + htmlEsc(baseName(other.file || other.title)) + '</span>'
+    + '<span>' + fmtInt(res.leftRows) + ' vs ' + fmtInt(res.rightRows) + ' rows · ' + res.elapsedMs + ' ms</span>';
+  const { page } = reportOverlay('Dataset Diff', sub);
+  const bar = document.createElement('div'); bar.className = 'diff-bar';
+  const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+  bar.append(close); page.appendChild(bar);
+  const cards = document.createElement('div'); cards.className = 'diff-cards';
+  const card = (n, l, cls) => '<div class="diff-card ' + cls + '"><div class="diff-card-n">' + fmtInt(n) + '</div><div class="diff-card-l">' + l + '</div></div>';
+  cards.innerHTML = card(res.onlyLeft, 'Only left', 'c-rem') + card(res.onlyRight, 'Only right', 'c-add') + card(res.changed, 'Changed', 'c-chg') + card(res.identical, 'Identical', '');
+  page.appendChild(cards);
+  if ((res.columnsOnlyLeft || []).length || (res.columnsOnlyRight || []).length) {
+    const note = document.createElement('div'); note.className = 'diff-files'; note.style.padding = '0 22px 8px';
+    note.innerHTML = (res.columnsOnlyLeft.length ? '<span>Columns only left: ' + res.columnsOnlyLeft.map(htmlEsc).join(', ') + '</span>' : '')
+      + (res.columnsOnlyRight.length ? '<span>Columns only right: ' + res.columnsOnlyRight.map(htmlEsc).join(', ') + '</span>' : '');
+    page.appendChild(note);
+  }
+  const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+  let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-num" style="flex:0 0 96px">Change</div><div class="cov-td c-val">Key</div><div class="cov-td c-val">Changed columns</div></div>';
+  for (const ex of (res.examples || [])) {
+    const label = ex.kind === 'only-left' ? 'Only left' : ex.kind === 'only-right' ? 'Only right' : 'Changed';
+    const cls = ex.kind === 'only-left' ? 'r-rem' : ex.kind === 'only-right' ? 'r-add' : 'r-chg';
+    html += '<div class="cov-tr ' + cls + '"><div class="cov-td c-num" style="flex:0 0 96px">' + label + '</div>'
+      + '<div class="cov-td c-val">' + htmlEsc(ex.key || '') + '</div>'
+      + '<div class="cov-td c-val">' + htmlEsc((ex.changedColumns || []).join(', ')) + '</div></div>';
+  }
+  wrap.innerHTML = html + '</div>';
+  page.appendChild(wrap);
+}
+
+// ---------- DuckDB SQL console (query the file as the table `data`) ----------
+function renderSqlResult(wrap, res) {
+  wrap.textContent = '';
+  const grid = document.createElement('div');
+  grid.className = 'sql-grid';
+  let html = '<div class="sql-row sql-head">';
+  for (const c of res.columns) html += '<div class="sql-cell" title="' + htmlEsc(c.type || '') + '">' + htmlEsc(c.name) + '</div>';
+  html += '</div>';
+  for (const r of res.rows) {
+    html += '<div class="sql-row">';
+    for (const v of r) html += '<div class="sql-cell">' + htmlEsc(v == null ? '' : String(v)) + '</div>';
+    html += '</div>';
+  }
+  grid.innerHTML = html;
+  wrap.appendChild(grid);
+}
+
+function openSqlConsole(t) {
+  const { back, box } = simpleModal('SQL Console');
+  box.classList.add('sql-modal');
+  const hint = document.createElement('div');
+  hint.className = 'jq-hint';
+  hint.textContent = "Query this file as the table “data” (read-only SELECT). ⌘/Ctrl+Enter to run.";
+  const ta = document.createElement('textarea');
+  ta.className = 'jq-filter sql-input'; ta.spellcheck = false;
+  ta.value = t.sqlLast || 'SELECT * FROM data LIMIT 100';
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const status = document.createElement('span'); status.className = 'sql-status';
+  const openTable = document.createElement('button'); openTable.className = 'btn-secondary'; openTable.textContent = 'Open as table'; openTable.disabled = true;
+  const openTab = document.createElement('button'); openTab.className = 'btn-secondary'; openTab.textContent = 'Open as JSON'; openTab.disabled = true;
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Close'; cancel.onclick = () => back.remove();
+  const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
+  actions.append(status, openTable, openTab, cancel, run);
+  const result = document.createElement('div'); result.className = 'sql-result';
+  // Clickable example queries (like GigaTables).
+  const firstCol = (t.duck.columns[0] && t.duck.columns[0].name) || 'column_name';
+  const examples = [
+    'SELECT * FROM data LIMIT 100',
+    'SELECT count(*) FROM data',
+    'SELECT * FROM data ORDER BY 1 DESC LIMIT 50',
+    'SELECT "' + firstCol + '", count(*) AS c FROM data GROUP BY 1 ORDER BY c DESC LIMIT 50',
+  ];
+  const exWrap = document.createElement('div'); exWrap.className = 'sql-examples';
+  const exLbl = document.createElement('span'); exLbl.className = 'sql-ex-label'; exLbl.textContent = 'Examples';
+  exWrap.appendChild(exLbl);
+  examples.forEach((ex) => {
+    const b = document.createElement('button'); b.className = 'sql-ex'; b.textContent = ex; b.title = ex;
+    b.onclick = () => { ta.value = ex; ta.focus(); };
+    exWrap.appendChild(b);
+  });
+  box.append(hint, ta, exWrap, actions, result);
+  let last = null;
+  const doRun = async () => {
+    const sql = ta.value.trim();
+    if (!sql) { ta.focus(); return; }
+    t.sqlLast = sql;
+    run.disabled = true; run.textContent = 'Running…'; status.textContent = '';
+    try {
+      const res = await window.oxj.duckInvoke('runSql', { datasetId: t.duck.datasetId, sql, limit: 2000, jobId: duckJob() });
+      last = res; openTab.disabled = false; openTable.disabled = false;
+      renderSqlResult(result, res);
+      status.textContent = fmtInt(res.rowCount) + ' rows · ' + res.elapsedMs + ' ms' + (res.truncatedAt ? ' · capped at ' + fmtInt(res.truncatedAt) : '');
+    } catch (e) {
+      result.textContent = '';
+      const err = document.createElement('div'); err.className = 'sql-error'; err.textContent = cleanErr(e);
+      result.appendChild(err); status.textContent = '';
+    }
+    run.disabled = false; run.textContent = 'Run';
+  };
+  run.onclick = doRun;
+  openTab.onclick = () => {
+    if (!last) return;
+    const out = last.rows.map((r) => { const o = {}; last.columns.forEach((c, i) => { o[c.name] = r[i]; }); return o; });
+    back.remove();
+    openTextAsTab('sql_result', 'json', JSON.stringify(out, null, 2));
+  };
+  // Materialize the result to a CSV and reopen it as a full DuckDB table.
+  openTable.onclick = async () => {
+    if (!last) return;
+    let full = last;
+    if (last.truncatedAt) { // fetch more rows than the preview cap
+      try { full = await window.oxj.duckInvoke('runSql', { datasetId: t.duck.datasetId, sql: t.sqlLast, limit: 1000000, jobId: duckJob() }); } catch {}
+    }
+    const names = full.columns.map((c) => c.name);
+    const lines = [names.map((n) => csvCell(n, ',')).join(',')];
+    for (const r of full.rows) lines.push(r.map((v) => csvCell(v == null ? '' : String(v), ',')).join(','));
+    const file = await window.oxj.textToFile('sql_result', 'csv', lines.join('\n'));
+    back.remove();
+    const nt = newTab(true);
+    if (nt) openPath(file, nt, false, { format: 'csv' });
+  };
+  ta.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doRun(); } });
+  setTimeout(() => ta.focus(), 30);
+}
 
 // ---------- coverage / profile reports (light overlay, like the diff report) ----------
 function reportOverlay(titleText, subtitleHtml) {
@@ -2328,6 +2707,7 @@ function openCoverageDialog(t, col) {
 }
 
 async function runCoverage(t, col, opts) {
+  if (isDuck(t)) return runCoverageDuck(t, col, opts);
   try {
     toast('Computing coverage…', true);
     const res = await window.oxj.query(t.id, {
@@ -2376,7 +2756,69 @@ function showCoverageReport(t, col, res) {
   page.appendChild(wrap);
 }
 
+// ---------- DuckDB profile / coverage (profileAll / profileColumn) ----------
+async function runProfileDuck(t) {
+  try {
+    toast('Profiling columns…', true);
+    const cols = await window.oxj.duckInvoke('profileAll', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
+    const total = t.duck.rowCount || 0;
+    const { page } = reportOverlay('Column Profile', '<span>' + htmlEsc(baseName(t.file || t.title)) + '</span><span>' + fmtInt(total) + ' rows · ' + cols.length + ' columns</span>');
+    const bar = document.createElement('div'); bar.className = 'diff-bar';
+    const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+    bar.append(close); page.appendChild(bar);
+    const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+    let html = '<div class="cov-table"><div class="cov-tr cov-th">'
+      + '<div class="cov-td c-val">Column</div><div class="cov-td c-val">Type</div>'
+      + '<div class="cov-td c-num">Non-null</div><div class="cov-td c-num">Nulls</div>'
+      + '<div class="cov-td c-num">Distinct ~</div><div class="cov-td c-val">Min</div>'
+      + '<div class="cov-td c-val">Max</div><div class="cov-td c-val">Top value</div></div>';
+    for (const c of cols) {
+      const tv = (c.topValues && c.topValues[0]) ? (c.topValues[0].value == null ? '(null)' : c.topValues[0].value) : '';
+      html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(c.column) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.type || '') + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.nonNull) + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.nulls) + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.distinctApprox) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.min == null ? '' : c.min) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.max == null ? '' : c.max) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(tv) + '</div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    page.appendChild(wrap);
+  } catch (err) { toast('Profile failed: ' + cleanErr(err)); }
+}
+
+async function runCoverageDuck(t, col, opts) {
+  try {
+    toast('Computing coverage…', true);
+    const colName = t.tableHeaders[col];
+    const prof = await window.oxj.duckInvoke('profileColumn', { datasetId: t.duck.datasetId, view: t.duck.view, column: colName, topN: opts.top || 1000, jobId: duckJob() });
+    const total = prof.rows || t.duck.rowCount || 0;
+    const uniq = total ? (100 * Number(prof.distinctApprox) / total).toFixed(1) : '0';
+    let sub = '<span>' + htmlEsc(colName) + '</span><span>~' + fmtInt(prof.distinctApprox) + ' distinct of ' + fmtInt(total) + ' rows (' + uniq + '% unique)</span>';
+    if (prof.min != null || prof.max != null) sub += '<span>min ' + htmlEsc(prof.min || '') + ' · max ' + htmlEsc(prof.max || '') + (prof.avg != null ? ' · avg ' + htmlEsc(prof.avg) : '') + '</span>';
+    const { page } = reportOverlay('Column Coverage', sub);
+    const bar = document.createElement('div'); bar.className = 'diff-bar';
+    const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+    bar.append(close); page.appendChild(bar);
+    const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+    const items = prof.topValues || [];
+    const max = items.reduce((m, it) => Math.max(m, it.count), 1);
+    let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-val">Value</div><div class="cov-td c-num">Count</div><div class="cov-td c-num">Share</div><div class="cov-td c-bar"></div></div>';
+    for (const it of items) {
+      const pct = total ? (100 * it.count / total).toFixed(1) : '0';
+      const w = (100 * it.count / max).toFixed(1);
+      html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(it.value == null ? '(null)' : it.value) + '</div>' +
+        '<div class="cov-td c-num">' + fmtInt(it.count) + '</div><div class="cov-td c-num">' + pct + '%</div>' +
+        '<div class="cov-td c-bar"><div class="cov-bar" style="width:' + w + '%"></div></div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    page.appendChild(wrap);
+  } catch (err) { toast('Coverage failed: ' + cleanErr(err)); }
+}
+
 async function runProfile(t) {
+  if (isDuck(t)) return runProfileDuck(t);
   try {
     toast('Profiling columns…', true);
     const res = await window.oxj.query(t.id, { op: 'profile', node: 1 });
@@ -2431,11 +2873,37 @@ $('btn-cols-none').addEventListener('click', () => {
   t.colHidden = new Set(t.colOrder.slice(1));
   afterColChange(t);
 });
-$('btn-export-csv').addEventListener('click', () => { if (cur) runTableExport(cur, 'csv'); });
-$('btn-export-json').addEventListener('click', () => { if (cur) runTableExport(cur, 'json'); });
+// DuckDB export: CSV via the engine (COPY TO), JSON assembled from pages.
+async function runTableExportDuck(t, fmt) {
+  const visIdx = visCols(t);
+  const names = visIdx.map((c) => t.tableHeaders[c]);
+  try {
+    if (fmt === 'csv') {
+      const target = await window.oxj.pickSavePath(stampName('export_' + baseName(t.file || 'table'), 'csv'), [{ name: 'CSV', extensions: ['csv'] }]);
+      if (!target) return;
+      toast('Exporting…', true);
+      const view = { ...t.duck.view, select: names };
+      const res = await window.oxj.duckInvoke('exportView', { datasetId: t.duck.datasetId, view, targetPath: target, format: 'csv', limit: null, includeHeader: true });
+      toast('Exported ' + fmtInt(res.rowsWritten) + ' rows → ' + baseName(res.targetPath), true);
+    } else {
+      toast('Exporting JSON…', true);
+      const CAP = 200000;
+      const total = Math.min(CAP, t.duck.rowCount || 0);
+      const out = [];
+      for (let off = 0; off < total; off += 1000) {
+        const res = await window.oxj.duckInvoke('getPage', { datasetId: t.duck.datasetId, view: t.duck.view, offset: off, limit: 1000, maxCellChars: 1000000 });
+        for (const r of (res.rows || [])) { const o = {}; visIdx.forEach((c, k) => { o[names[k]] = r[c]; }); out.push(o); }
+        if (!tabAlive(t)) return;
+      }
+      const saved = await window.oxj.saveText(stampName('export_' + baseName(t.file || 'table'), 'json'), JSON.stringify(out, null, 2));
+      if (saved) toast('Exported ' + fmtInt(out.length) + (total < (t.duck.rowCount || 0) ? ' (capped at ' + fmtInt(CAP) + ')' : '') + ' rows → ' + baseName(saved), true);
+    }
+  } catch (err) { toast('Export failed: ' + cleanErr(err)); }
+}
 
 // Export the visible columns + filtered/sorted rows via the engine, into a new tab.
 async function runTableExport(t, fmt) {
+  if (isDuck(t)) return runTableExportDuck(t, fmt);
   try {
     toast('Exporting…', true);
     const cols = visCols(t).map((c) => ({ ord: c, name: t.tableHeaders[c] }));
@@ -2488,9 +2956,40 @@ function scheduleSourceUpdate() {
   sourceTimer = setTimeout(updateSource, 200);
 }
 
+// DuckDB table: Source shows the selected row as JSON (getRowJson).
+async function updateSourceDuck(t) {
+  const rowIdx = t.tableSel ? t.tableSel.fRow : 0;
+  $('source-title').textContent = 'Source — loading…';
+  try {
+    const res = await window.oxj.duckInvoke('getRowJson', { datasetId: t.duck.datasetId, view: t.duck.view, viewRow: rowIdx });
+    if (t !== cur) return;
+    let text = res && res.json != null ? res.json : '';
+    try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    $('source-title').textContent = 'Source — Row ' + (rowIdx + 1) + ' (JSON)';
+    if (monacoReady && monacoEditor) {
+      $('source-fallback').classList.add('hidden');
+      $('monaco-host').classList.remove('hidden');
+      const model = window.monaco.editor.createModel(text, 'json');
+      const old = monacoEditor.getModel();
+      monacoEditor.setModel(model);
+      if (old) old.dispose();
+    } else {
+      $('monaco-host').classList.add('hidden');
+      const fb = $('source-fallback'); fb.classList.remove('hidden'); fb.textContent = text;
+    }
+    updateSource._text = text;
+  } catch (err) {
+    $('source-title').textContent = 'Source — unavailable';
+    const msg = cleanErr(err);
+    if (monacoReady && monacoEditor) monacoEditor.setValue('// ' + msg);
+    else { $('source-fallback').classList.remove('hidden'); $('source-fallback').textContent = msg; }
+  }
+}
+
 async function updateSource() {
   const t = cur;
   if (!t || t.phase !== 'ready' || !sourceOpen) return;
+  if (isDuck(t)) return updateSourceDuck(t);
   const e = t.visible[t.selectedIdx];
   if (!e || e.pseudo) return;
   $('source-title').textContent = 'Source — loading…';

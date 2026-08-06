@@ -13,6 +13,22 @@ const http = require('http');
 const zlib = require('zlib');
 const os = require('os');
 const si = require('systeminformation');
+const { DuckClient } = require('./duck-client');
+
+// ---------------- DuckDB engine (delimited/tabular files) ----------------
+// Lazily booted on first delimited open. Events are forwarded to the renderer.
+let duck = null;
+function duckEngine() {
+  if (!duck) {
+    duck = new DuckClient();
+    duck.on('engine-event', (event) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('duck-event', event);
+      }
+    });
+  }
+  return duck;
+}
 
 // The macOS application menu (bold title, About / Hide / Quit) uses the app
 // name. Keep it the clean "NARIKJSON" everywhere (folder path, dock, window);
@@ -539,29 +555,17 @@ function killIngest(tabId, deleteDb) {
 // bigger ones stream into SQLite.
 const MEM_MAX_BYTES = 64 * 1024 * 1024 * 1024; // absolute safety ceiling (raised for testing)
 const MEM_FREE_FRACTION = 2.5;                 // up to 2.5× available RAM (mmap pages on demand; testing)
-const DELIM_DB_BYTES = 3 * 1024 * 1024 * 1024; // delimited files above this always go to the DB engine
 
-function isDelimited(filePath, format) {
-  const ext = path.extname(filePath).toLowerCase();
-  return format === 'csv' || format === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(ext);
-}
-
-async function decideMode(filePath, format) {
+// The Rust engine now only handles hierarchical formats (JSON/NDJSON/XML/YAML);
+// all delimited/tabular files are routed to the DuckDB engine by the renderer.
+async function decideMode(filePath) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
-  const isDelim = isDelimited(filePath, format);
-  let size = 0;
-  try { size = fs.statSync(filePath).size; } catch {}
-  // Delimited data explodes into one node per cell, so above 3 GB always use the
-  // on-disk DB engine — even if the user forced Memory mode — to protect RAM.
-  if (isDelim && size > DELIM_DB_BYTES) return 'db';
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
   try {
+    const size = fs.statSync(filePath).size;
     const avail = await availableMemBytes();
     if (size > MEM_MAX_BYTES) return 'db';
-    // The in-memory index (many tiny cell nodes at ~24 bytes each) must fit in
-    // RAM. Estimate ~5× the file and require it to sit in ~60% of free memory.
-    if (isDelim) return (size * 5 <= avail * 0.6) ? 'memory' : 'db';
     if (size <= avail * MEM_FREE_FRACTION) return 'memory';
   } catch {}
   return 'db';
@@ -667,7 +671,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
 
 
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(enginePath, fileFormat)) === 'memory') {
+  if ((await decideMode(enginePath)) === 'memory') {
     try {
       let size = 0;
       try { size = fs.statSync(enginePath).size; } catch {}
@@ -1197,6 +1201,7 @@ function buildMenu() {
         { type: 'separator' },
         { role: 'reload' },
         { role: 'forceReload' },
+        { role: 'toggleDevTools' },
         { type: 'separator' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
@@ -1549,6 +1554,14 @@ app.whenReady().then(() => {
   });
 
   // ---- jq filter (system jq binary) ----
+  // Generic bridge to the DuckDB engine. The renderer/adapter calls named
+  // engine methods (detect, openDataset, buildView, getPage, getRowJson,
+  // profileColumn/All, runSql, exportView, diffDatasets, cacheInfo, cancel…).
+  ipcMain.handle('duck-invoke', async (_e, { method, params }) => {
+    try { return ok(await duckEngine().invoke(String(method), params)); }
+    catch (err) { return fail(new Error((err && err.message) || 'DuckDB engine error')); }
+  });
+
   ipcMain.handle('jq-available', async () => new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
@@ -1598,6 +1611,17 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
+  // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
+  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
+  // Save-path picker (the DuckDB engine writes the file itself via COPY TO).
+  ipcMain.handle('pick-save-path', async (e, { defaultName, filters }) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const res = await dialog.showSaveDialog(win, {
+      defaultPath: defaultName || undefined,
+      filters: filters && filters.length ? filters : [{ name: 'All files', extensions: ['*'] }],
+    });
+    return res.canceled || !res.filePath ? null : res.filePath;
+  });
 
   ipcMain.handle('license-status', async () => licenseStatus());
   ipcMain.handle('license-activate', async (_e, { email, key }) => {
@@ -1713,6 +1737,7 @@ app.whenReady().then(() => {
 function killAll() {
   for (const tabId of [...ingests.keys()]) killIngest(tabId, true);
   for (const tabId of [...sessions.keys()]) killSession(tabId);
+  if (duck) { duck.stop(); duck = null; }
 }
 
 app.on('window-all-closed', () => {

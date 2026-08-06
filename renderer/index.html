@@ -37,7 +37,7 @@
         <div id="formats-wrap" class="stats formats-card hidden">
           <div class="stats-head">Supported Files</div>
           <div class="format-chips">
-            <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">JSONL</span><span class="chip">XML</span><span class="chip">YAML</span><span class="chip">YML</span><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">TAB</span><span class="chip">PSV</span><span class="chip">TXT</span><span class="chip">DAT</span><span class="chip">MD</span><span class="chip">LOG</span><span class="chip">JS</span><span class="chip">MJS</span><span class="chip">HTML</span><span class="chip">HTM</span><span class="chip">PY</span>
+            <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">JSONL</span><span class="chip">XML</span><span class="chip">YAML</span><span class="chip">YML</span><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">TAB</span><span class="chip">PSV</span><span class="chip">PARQUET</span><span class="chip">TXT</span><span class="chip">DAT</span><span class="chip">MD</span><span class="chip">LOG</span><span class="chip">JS</span><span class="chip">MJS</span><span class="chip">HTML</span><span class="chip">HTM</span><span class="chip">PY</span>
           </div>
         </div>
       </div>
@@ -109,6 +109,12 @@
           <button id="btn-view-table" class="seg">Table</button>
         </div>
         <button id="btn-source" class="btn-tool" title="Show formatted source of the selected node">Source</button>
+        <span id="table-tools" class="table-tools hidden">
+          <button id="btn-cols" class="btn-tool" title="Show / hide columns">☰ Columns</button>
+          <button id="btn-tbl-actions" class="btn-tool" title="Filter, sort, profile, SQL">Actions ▾</button>
+          <button id="btn-tbl-export" class="btn-tool" title="Export the current view" disabled>Export ▾</button>
+          <span id="table-viewinfo" class="table-viewinfo"></span>
+        </span>
         <button id="btn-full-file" class="btn-tool" title="Open the complete file in a new read-only tab">Raw File</button>
         <button id="btn-flow" class="btn-tool" title="Flow diagram of the selected node (JSON/CSV)">Flow</button>
         <button id="btn-edit-url" class="btn-tool hidden" title="Edit and resend this request">Edit URL</button>
@@ -118,6 +124,11 @@
           <option value="all" selected>All</option>
           <option value="keys">Keys</option>
           <option value="values">Values</option>
+        </select>
+        <select id="search-mode" class="hidden" title="Search mode (DuckDB tables)">
+          <option value="contains" selected>Contains</option>
+          <option value="exact">Exact</option>
+          <option value="regex">Regex</option>
         </select>
         <input id="search-box" type="search" placeholder="Find" title='Substring search. Wrap in "double quotes" for an exact match. Enter = next match.' spellcheck="false" />
         <button id="btn-find" class="btn-tool" title="Run search">Find</button>
@@ -144,17 +155,6 @@
         </div>
 
         <div id="table-wrap" class="table-wrap hidden">
-          <div id="table-toolbar" class="table-toolbar hidden">
-            <button id="btn-cols" class="btn-tool" title="Show / hide columns">☰ Columns</button>
-            <button id="btn-filter" class="btn-tool" title="Filter rows by column values">Filter…</button>
-            <button id="btn-sort" class="btn-tool" title="Sort rows by a column">Sort…</button>
-            <button id="btn-clear-filters" class="btn-tool" title="Clear all filters" disabled>Clear Filters</button>
-            <button id="btn-profile" class="btn-tool" title="Profile every column (→ report)">Profile</button>
-            <span id="table-viewinfo" class="table-viewinfo"></span>
-            <div class="spacer"></div>
-            <button id="btn-export-csv" class="btn-tool" title="Export visible columns / filtered rows as CSV" disabled>Export CSV</button>
-            <button id="btn-export-json" class="btn-tool" title="Export visible columns / filtered rows as JSON" disabled>Export JSON</button>
-          </div>
           <div class="table-body">
             <div id="cols-panel" class="cols-panel">
               <div class="cols-head">

@@ -4,7 +4,6 @@
 // Usage:
 //   openjsonxml-engine ingest <file> --db <db-path> [--format auto|json|ndjson|xml|csv|tsv]
 //   openjsonxml-engine serve --db <db-path>
-mod csvp;
 mod db;
 mod diff;
 mod ftsindex;
@@ -231,30 +230,9 @@ fn detect_format(path: &str, requested: &str) -> String {
         "ndjson".into()
     } else if lower.ends_with(".xml") {
         "xml".into()
-    } else if lower.ends_with(".csv") {
-        "csv".into()
-    } else if lower.ends_with(".tsv") || lower.ends_with(".tab") {
-        "tsv".into()
     } else {
         "json".into()
     }
-}
-
-// Sniff the field delimiter from the first line (comma/semicolon/tab/pipe),
-// preferring comma on ties — matches oxj-core's candidate order for memory mode.
-fn sniff_delim(file: &str) -> u8 {
-    use std::io::Read;
-    let mut buf = [0u8; 65536];
-    let n = std::fs::File::open(file).and_then(|mut f| f.read(&mut buf)).unwrap_or(0);
-    let end = buf[..n].iter().position(|&b| b == b'\n').unwrap_or(n);
-    let line = &buf[..end];
-    let mut best = b',';
-    let mut best_count = 0usize;
-    for &c in &[b',', b';', b'\t', b'|'] {
-        let cnt = line.iter().filter(|&&b| b == c).count();
-        if cnt > best_count { best_count = cnt; best = c; }
-    }
-    best
 }
 
 fn run_ingest(file: &str, dbp: &str, format: &str) -> Result<(), String> {
@@ -269,25 +247,20 @@ fn run_ingest(file: &str, dbp: &str, format: &str) -> Result<(), String> {
     let mut prog = progress::Progress::new(total);
     prog.emit_start(&fmt);
 
-    // CSV delimiter is sniffed (comma/semicolon/tab/pipe); TSV forces tab.
-    let delim = if fmt == "tsv" { b'\t' } else { sniff_delim(file) };
+    // Delimited/tabular files are handled by the DuckDB engine; the Rust engine
+    // only ingests hierarchical formats.
     let (total_nodes, root_children) = match fmt.as_str() {
         "json" | "ndjson" => json::ingest(&mut r, &mut dbw, &mut prog)?,
-        "csv" => csvp::ingest(&mut r, &mut dbw, &mut prog, delim)?,
-        "tsv" => csvp::ingest(&mut r, &mut dbw, &mut prog, b'\t')?,
         "xml" => xmlp::ingest(&mut r, &mut dbw, &mut prog)?,
-        other => return Err(format!("unknown format: {}", other)),
+        other => return Err(format!("unsupported format for the Rust engine: {}", other)),
     };
     if root_children == 0 {
         return Err(String::from("no data found in file"));
     }
 
     // If the document has exactly one top-level value, present it as the root.
-    let root_id: i64 = if fmt != "csv" && fmt != "tsv" && root_children == 1 { 2 } else { 1 };
+    let root_id: i64 = if root_children == 1 { 2 } else { 1 };
     dbw.put_meta("format", &fmt)?;
-    if fmt == "csv" || fmt == "tsv" {
-        dbw.put_meta("csv_delimiter", &(delim as char).to_string())?;
-    }
     dbw.put_meta("root_id", &root_id.to_string())?;
     dbw.put_meta("total_nodes", &total_nodes.to_string())?;
     dbw.put_meta("source_path", file)?;
