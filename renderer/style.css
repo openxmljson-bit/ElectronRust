@@ -413,12 +413,8 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 .engine-opt:hover { color: var(--fg); }
 .engine-opt.active { background: var(--accent); color: #0c1220; }
 body.light .engine-opt.active { color: #fff; }
-.engine-desc { color: var(--fg-dim); font-size: 12px; line-height: 1.5; margin-bottom: 8px; }
-.engine-scope {
-  color: var(--fg-dim); opacity: .8; font-size: 11px; line-height: 1.45;
-  padding: 7px 10px; margin-bottom: 10px;
-  border-left: 2px solid var(--border); border-radius: 4px; background: rgba(255,255,255,.03);
-}
+.engine-desc { color: var(--fg-dim); font-size: 12px; line-height: 1.5; margin-bottom: 10px; }
+.head-scope { color: var(--fg-dim); font-weight: 400; font-size: 12px; }
 .stats-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
 /* Donut chart */
 .stats-chart { display: flex; align-items: center; gap: 16px; }
