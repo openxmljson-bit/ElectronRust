@@ -2477,10 +2477,11 @@ function openSqlConsole(t) {
   ta.value = t.sqlLast || 'SELECT * FROM data LIMIT 100';
   const actions = document.createElement('div'); actions.className = 'modal-actions';
   const status = document.createElement('span'); status.className = 'sql-status';
-  const openTab = document.createElement('button'); openTab.className = 'btn-secondary'; openTab.textContent = 'Open result as JSON'; openTab.disabled = true;
+  const openTable = document.createElement('button'); openTable.className = 'btn-secondary'; openTable.textContent = 'Open as table'; openTable.disabled = true;
+  const openTab = document.createElement('button'); openTab.className = 'btn-secondary'; openTab.textContent = 'Open as JSON'; openTab.disabled = true;
   const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Close'; cancel.onclick = () => back.remove();
   const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
-  actions.append(status, openTab, cancel, run);
+  actions.append(status, openTable, openTab, cancel, run);
   const result = document.createElement('div'); result.className = 'sql-result';
   // Clickable example queries (like GigaTables).
   const firstCol = (t.duck.columns[0] && t.duck.columns[0].name) || 'column_name';
@@ -2507,7 +2508,7 @@ function openSqlConsole(t) {
     run.disabled = true; run.textContent = 'Running…'; status.textContent = '';
     try {
       const res = await window.oxj.duckInvoke('runSql', { datasetId: t.duck.datasetId, sql, limit: 2000, jobId: duckJob() });
-      last = res; openTab.disabled = false;
+      last = res; openTab.disabled = false; openTable.disabled = false;
       renderSqlResult(result, res);
       status.textContent = fmtInt(res.rowCount) + ' rows · ' + res.elapsedMs + ' ms' + (res.truncatedAt ? ' · capped at ' + fmtInt(res.truncatedAt) : '');
     } catch (e) {
@@ -2523,6 +2524,21 @@ function openSqlConsole(t) {
     const out = last.rows.map((r) => { const o = {}; last.columns.forEach((c, i) => { o[c.name] = r[i]; }); return o; });
     back.remove();
     openTextAsTab('sql_result', 'json', JSON.stringify(out, null, 2));
+  };
+  // Materialize the result to a CSV and reopen it as a full DuckDB table.
+  openTable.onclick = async () => {
+    if (!last) return;
+    let full = last;
+    if (last.truncatedAt) { // fetch more rows than the preview cap
+      try { full = await window.oxj.duckInvoke('runSql', { datasetId: t.duck.datasetId, sql: t.sqlLast, limit: 1000000, jobId: duckJob() }); } catch {}
+    }
+    const names = full.columns.map((c) => c.name);
+    const lines = [names.map((n) => csvCell(n, ',')).join(',')];
+    for (const r of full.rows) lines.push(r.map((v) => csvCell(v == null ? '' : String(v), ',')).join(','));
+    const file = await window.oxj.textToFile('sql_result', 'csv', lines.join('\n'));
+    back.remove();
+    const nt = newTab(true);
+    if (nt) openPath(file, nt, false, { format: 'csv' });
   };
   ta.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doRun(); } });
   setTimeout(() => ta.focus(), 30);
