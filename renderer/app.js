@@ -2503,6 +2503,7 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
     { label: 'Filter…', action: () => openFilterDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
+    { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];
