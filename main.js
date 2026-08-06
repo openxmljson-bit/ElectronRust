@@ -1623,6 +1623,8 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
+  // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
+  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
 
   ipcMain.handle('license-status', async () => licenseStatus());
   ipcMain.handle('license-activate', async (_e, { email, key }) => {

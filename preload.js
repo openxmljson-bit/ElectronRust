@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('oxj', {
   jqRun: (tabId, filter, flags) => unwrap('jq-run', { tabId, filter, flags }),
   duckInvoke: (method, params) => unwrap('duck-invoke', { method, params }),
   onDuckEvent: (cb) => ipcRenderer.on('duck-event', (_e, ev) => cb(ev)),
+  noteRecent: (p, format) => ipcRenderer.invoke('note-recent', { path: p, format }),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),

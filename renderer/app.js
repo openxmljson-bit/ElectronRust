@@ -114,6 +114,7 @@ async function closeTab(t) {
   const idx = tabs.indexOf(t);
   tabs.splice(idx, 1);
   if (t.plainModel) { try { t.plainModel.dispose(); } catch {} t.plainModel = null; }
+  if (isDuck(t) && t.duck) { try { window.oxj.duckInvoke('closeDataset', { datasetId: t.duck.datasetId }); } catch {} }
   try { await window.oxj.closeTab(t.id); } catch {}
   if (!tabs.length) {
     newTab(true);
@@ -250,17 +251,19 @@ function renderScreen() {
     // string limit). Hidden for plain tabs, oversized files, and CSV/TSV.
     const srcBytes = Number((t.meta && t.meta.source_bytes) || 0);
     const isCsvDoc = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    const duck = isDuck(t);
+    // DuckDB tables: table-only (no tree/flow/raw-file/tools yet).
     $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
-    $('btn-flow').classList.toggle('hidden', plain || t.docFormat === 'xml');
+    $('btn-flow').classList.toggle('hidden', plain || duck || t.docFormat === 'xml');
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
       plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
-    $('search-scope').classList.toggle('hidden', plain);
-    $('search-box').classList.toggle('hidden', plain);
-    $('btn-find').classList.toggle('hidden', plain);
-    $('match-prev').classList.toggle('hidden', plain);
-    $('match-next').classList.toggle('hidden', plain);
+    $('search-scope').classList.toggle('hidden', plain || duck);
+    $('search-box').classList.toggle('hidden', plain || duck);
+    $('btn-find').classList.toggle('hidden', plain || duck);
+    $('match-prev').classList.toggle('hidden', plain || duck);
+    $('match-next').classList.toggle('hidden', plain || duck);
     $('text-wrap').classList.toggle('hidden', !plain);
     if (plain) {
       $('view-toggle').classList.add('hidden');
@@ -278,6 +281,23 @@ function renderScreen() {
       return;
     }
     const isCsv = t.docFormat === 'csv' || t.docFormat === 'tsv';
+    if (duck) {
+      // DuckDB: table view only, no tree.
+      $('view-toggle').classList.add('hidden');
+      $('tree-wrap').classList.add('hidden');
+      t.view = 'table';
+      setView('table');
+      buildTableHead(t);
+      $('status-doc').textContent =
+        t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes) + ' · DuckDB';
+      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
+      updateTopBtn();
+      $('status-type').textContent = '';
+      $('status-path').textContent = t.file || '';
+      if (sourceOpen) scheduleSourceUpdate();
+      syncMenuState();
+      return;
+    }
     $('view-toggle').classList.toggle('hidden', !isCsv);
     setView(t.view);
     $('status-doc').textContent =
@@ -742,6 +762,44 @@ function targetTabForOpen() {
 
 const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 
+// ---------- DuckDB engine (delimited/tabular files) ----------
+// Extensions routed straight to DuckDB; .txt/.dat/.tab arrive via format:'csv'.
+const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet'];
+const EMPTY_VIEW = { filters: [], combine: 'and', search: null, sort: [], select: null };
+const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet' };
+let duckJobSeq = 1;
+const duckJob = () => 'job-' + (duckJobSeq++);
+
+// Open a delimited/tabular file through DuckDB and set the tab up as a table.
+async function openDuck(t, path) {
+  const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: duckJob() });
+  if (!tabAlive(t)) return;
+  const view = { ...EMPTY_VIEW };
+  const vi = await window.oxj.duckInvoke('buildView', { datasetId: man.datasetId, view, jobId: duckJob() });
+  if (!tabAlive(t)) return;
+  t.engine = 'duck';
+  t.duck = { datasetId: man.datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
+  t.docFormat = man.format === 'tsv' ? 'tsv' : 'csv'; // table logic keys off csv/tsv
+  t.tableFormatLabel = DUCK_FORMAT_LABEL[man.format] || (man.format || 'CSV').toUpperCase();
+  t.tableHeaders = (man.columns || []).map((c) => c.name);
+  t.tableTotal = vi.rowCount;
+  t.tableViewTotal = vi.rowCount;
+  t.meta = { format: t.docFormat, total_nodes: vi.rowCount, source_bytes: man.sourceSize || 0, mode: 'duck' };
+  t.rootId = 1;
+  t.tablePages = new Map();
+  t.tableInflight = new Set();
+  t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
+  t.tableSel = null; t.tableSort = null; t.tableFilters = [];
+  t.view = 'table';
+  t.loadMs = vi.buildMs != null ? vi.buildMs : (man.ingestMs || null);
+  t.phase = 'ready';
+  try { window.oxj.noteRecent(path, 'csv'); } catch {}
+  renderTabs();
+  if (t === cur) { renderScreen(); if (recentPanelOpen) renderRecentDock(); }
+  toast('Loaded ' + fmtInt(vi.rowCount) + ' rows · ' + t.tableFormatLabel + ' (DuckDB)', true);
+}
+function isDuck(t) { return t && t.engine === 'duck'; }
+
 async function openPath(p, tab, force, opts) {
   const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table
   const ext = String(p).split('.').pop().toLowerCase();
@@ -765,10 +823,14 @@ async function openPath(p, tab, force, opts) {
   t.title = baseName(p);
   t.phase = 'loading';
   t.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false };
+  t.engine = null; t.duck = null;
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
+  // Delimited/tabular files go to the DuckDB engine; everything else to Rust.
+  const wantDuck = fmt === 'csv' || DUCK_EXTS.includes(ext);
   try {
-    await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
+    if (wantDuck) await openDuck(t, p);
+    else await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
     t.phase = 'empty';
@@ -1906,6 +1968,20 @@ async function fetchTablePage(t, page) {
   if (t.tablePages.has(page) || t.tableInflight.has(page)) return;
   t.tableInflight.add(page);
   try {
+    if (isDuck(t)) {
+      const res = await window.oxj.duckInvoke('getPage', {
+        datasetId: t.duck.datasetId, view: t.duck.view, offset: page * 100, limit: 100, maxCellChars: 2000,
+      });
+      if (!tabAlive(t)) return;
+      const cols = t.duck.columns;
+      const rows = (res.rows || []).map((r, i) => ({
+        id: page * 100 + i, ord: page * 100 + i,
+        cells: cols.map((c, ci) => ({ name: c.name, value: r[ci] })),
+      }));
+      t.tablePages.set(page, rows);
+      if (t === cur && t.view === 'table') renderTable();
+      return;
+    }
     const q = { op: 'table', node: 1, offset: page * 100, limit: 100 };
     if (t.tableSort) q.sort = t.tableSort;
     if (t.tableFilters && t.tableFilters.length) q.filters = t.tableFilters;
@@ -2012,6 +2088,7 @@ function startCellSelect(e, t, row, vis) {
   if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
   else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
   renderTable();
+  if (sourceOpen) scheduleSourceUpdate(); // Source pane follows the selected row
 }
 function extendCellSelect(e, t, row, vis) {
   if (!cellDragging || !t.tableSel) return;
@@ -2104,7 +2181,7 @@ function showHeaderMenu(e, t, c) {
   if (hasFilter) items.push({ label: 'Clear this filter', action: () => { t.tableFilters = t.tableFilters.filter((f) => f.col !== c); applyTableView(t); } });
   items.push(
     { sep: true },
-    { label: 'Column coverage "' + t.tableHeaders[c] + '"…', action: () => openCoverageDialog(t, c) },
+    { label: 'Column coverage "' + t.tableHeaders[c] + '"…', action: () => { if (isDuck(t)) return toast(DUCK_SOON); openCoverageDialog(t, c); } },
     { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
@@ -2273,10 +2350,11 @@ function openFilterDialog(t, presetCol) {
   box.appendChild(actions);
 }
 
-$('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
-$('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
+const DUCK_SOON = 'Filter, sort, profile and export for DuckDB tables are coming next.';
+$('btn-sort').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); openSortDialog(cur); });
+$('btn-filter').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); openFilterDialog(cur); });
 $('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
-$('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
+$('btn-profile').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runProfile(cur); });
 
 // ---------- coverage / profile reports (light overlay, like the diff report) ----------
 function reportOverlay(titleText, subtitleHtml) {
@@ -2431,8 +2509,8 @@ $('btn-cols-none').addEventListener('click', () => {
   t.colHidden = new Set(t.colOrder.slice(1));
   afterColChange(t);
 });
-$('btn-export-csv').addEventListener('click', () => { if (cur) runTableExport(cur, 'csv'); });
-$('btn-export-json').addEventListener('click', () => { if (cur) runTableExport(cur, 'json'); });
+$('btn-export-csv').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runTableExport(cur, 'csv'); });
+$('btn-export-json').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runTableExport(cur, 'json'); });
 
 // Export the visible columns + filtered/sorted rows via the engine, into a new tab.
 async function runTableExport(t, fmt) {
@@ -2488,9 +2566,40 @@ function scheduleSourceUpdate() {
   sourceTimer = setTimeout(updateSource, 200);
 }
 
+// DuckDB table: Source shows the selected row as JSON (getRowJson).
+async function updateSourceDuck(t) {
+  const rowIdx = t.tableSel ? t.tableSel.fRow : 0;
+  $('source-title').textContent = 'Source — loading…';
+  try {
+    const res = await window.oxj.duckInvoke('getRowJson', { datasetId: t.duck.datasetId, view: t.duck.view, viewRow: rowIdx });
+    if (t !== cur) return;
+    let text = res && res.json != null ? res.json : '';
+    try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    $('source-title').textContent = 'Source — Row ' + (rowIdx + 1) + ' (JSON)';
+    if (monacoReady && monacoEditor) {
+      $('source-fallback').classList.add('hidden');
+      $('monaco-host').classList.remove('hidden');
+      const model = window.monaco.editor.createModel(text, 'json');
+      const old = monacoEditor.getModel();
+      monacoEditor.setModel(model);
+      if (old) old.dispose();
+    } else {
+      $('monaco-host').classList.add('hidden');
+      const fb = $('source-fallback'); fb.classList.remove('hidden'); fb.textContent = text;
+    }
+    updateSource._text = text;
+  } catch (err) {
+    $('source-title').textContent = 'Source — unavailable';
+    const msg = cleanErr(err);
+    if (monacoReady && monacoEditor) monacoEditor.setValue('// ' + msg);
+    else { $('source-fallback').classList.remove('hidden'); $('source-fallback').textContent = msg; }
+  }
+}
+
 async function updateSource() {
   const t = cur;
   if (!t || t.phase !== 'ready' || !sourceOpen) return;
+  if (isDuck(t)) return updateSourceDuck(t);
   const e = t.visible[t.selectedIdx];
   if (!e || e.pseudo) return;
   $('source-title').textContent = 'Source — loading…';
