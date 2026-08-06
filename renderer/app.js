@@ -260,6 +260,7 @@ function renderScreen() {
     $('btn-tools').classList.toggle('hidden',
       plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
     $('search-scope').classList.toggle('hidden', plain || duck);   // JSON scopes only
+    $('search-mode').classList.toggle('hidden', plain || !duck);   // duck: contains/exact/regex
     $('search-box').classList.toggle('hidden', plain);             // duck: search every column
     $('btn-find').classList.toggle('hidden', plain);
     $('match-prev').classList.toggle('hidden', plain || duck);     // asFilter search: no stepping
@@ -288,6 +289,8 @@ function renderScreen() {
       t.view = 'table';
       $('search-box').placeholder = 'Search all columns';
       $('search-box').value = t.duck.searchQuery || '';
+      $('search-mode').classList.remove('hidden');
+      $('search-mode').value = t.duck.searchMode || 'contains';
       setView('table');
       buildTableHead(t);
       $('status-doc').textContent =
@@ -1599,8 +1602,13 @@ function currentQueryMatchesNav() {
 // DuckDB tables: search filters the view to rows matching in ANY column.
 function duckSearch(t, q) {
   t.duck.searchQuery = q || '';
+  t.duck.searchMode = $('search-mode').value || 'contains';
   applyTableView(t); // rebuilds the view (search folded into duckViewSpec)
 }
+// Re-run the search when the mode changes (if there's an active query).
+$('search-mode').addEventListener('change', () => {
+  if (isDuck(cur) && cur.duck.searchQuery) duckSearch(cur, $('search-box').value.trim());
+});
 $('search-box').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') {
     if (isDuck(cur)) { duckSearch(cur, ev.target.value.trim()); return; }
@@ -2087,7 +2095,7 @@ function duckViewSpec(t) {
   });
   const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
   const q = t.duck && t.duck.searchQuery;
-  const search = q ? { query: q, mode: 'contains', columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
+  const search = q ? { query: q, mode: (t.duck.searchMode || 'contains'), columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
   return { filters, combine: 'and', search, sort, select: null };
 }
 

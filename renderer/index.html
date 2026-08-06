@@ -130,6 +130,11 @@
           <option value="keys">Keys</option>
           <option value="values">Values</option>
         </select>
+        <select id="search-mode" class="hidden" title="Search mode (DuckDB tables)">
+          <option value="contains" selected>Contains</option>
+          <option value="exact">Exact</option>
+          <option value="regex">Regex</option>
+        </select>
         <input id="search-box" type="search" placeholder="Find" title='Substring search. Wrap in "double quotes" for an exact match. Enter = next match.' spellcheck="false" />
         <button id="btn-find" class="btn-tool" title="Run search">Find</button>
         <button id="match-prev" class="btn-tool" title="Previous match (⇧F3 / ⇧⌘G)">▲</button>
