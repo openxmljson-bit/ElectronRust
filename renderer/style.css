@@ -532,7 +532,7 @@ body.light .narik-brand {
 .seg:hover { color: var(--fg); }
 .seg:focus, .seg:focus-visible { outline: none; }
 .seg.active { background: var(--accent); color: #fff; }
-#search-scope {
+#search-scope, #search-mode {
   background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 6px; font-size: 12px; outline: none;
 }
