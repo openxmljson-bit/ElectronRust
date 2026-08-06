@@ -48,6 +48,14 @@ contextBridge.exposeInMainWorld('oxj', {
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),
+  bookmarks: {
+    list: () => ipcRenderer.invoke('bookmarks-list'),
+    save: (bm) => ipcRenderer.invoke('bookmark-save', bm),
+    update: (id, patch) => ipcRenderer.invoke('bookmark-update', { id, patch }),
+    remove: (id) => ipcRenderer.invoke('bookmark-remove', id),
+    clear: () => ipcRenderer.invoke('bookmarks-clear'),
+    onChanged: (cb) => ipcRenderer.on('bookmarks-changed', () => cb()),
+  },
   license: {
     status: () => ipcRenderer.invoke('license-status'),
     activate: (email, key) => unwrap('license-activate', { email, key }),

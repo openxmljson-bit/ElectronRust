@@ -495,6 +495,35 @@ function confirmDialog(opts) {
     ok.focus();
   });
 }
+// Single-line text prompt styled like confirmDialog. Resolves to the trimmed
+// string, or null if cancelled / left empty.
+function promptDialog(opts) {
+  const { title = '', body = '', value = '', placeholder = '', okLabel = 'Save' } = opts || {};
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-backdrop';
+    const box = document.createElement('div');
+    box.className = 'modal confirm-modal';
+    const h = document.createElement('div'); h.className = 'confirm-title'; h.textContent = title; box.appendChild(h);
+    if (body) { const p = document.createElement('div'); p.className = 'confirm-body'; p.textContent = body; box.appendChild(p); }
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.value = value; inp.placeholder = placeholder; inp.style.width = '100%';
+    box.appendChild(inp);
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel';
+    const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = okLabel;
+    actions.append(cancel, ok); box.appendChild(actions);
+    back.appendChild(box); document.body.appendChild(back);
+    const close = (v) => { document.removeEventListener('keydown', onKey); back.remove(); resolve(v); };
+    const submit = () => { const v = inp.value.trim(); if (v) close(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(null); else if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+    cancel.addEventListener('click', () => close(null));
+    ok.addEventListener('click', submit);
+    back.addEventListener('click', (e) => { if (e.target === back) close(null); });
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => { inp.focus(); inp.select(); }, 20);
+  });
+}
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 // Middle-ellipsis so the extension always stays visible.
 function middleTruncate(s, max) {
@@ -3242,11 +3271,202 @@ function showUrlModal(prefill, editTab) {
   renderKv('params-table', builderParams, onParamsChange);
   renderKv('headers-table', builderHeaders, () => {});
   showReqTab('params');
-  $('req-title').textContent = prefill ? 'Edit Request' : 'Request';
+  $('req-bookmark').classList.remove('saved');
+  if (!prefill) bmEditingId = null;
   $('url-modal').classList.remove('hidden');
+  setUModalTab('request');
   setTimeout(() => $('url-input').focus(), 20);
 }
 function hideUrlModal() { $('url-modal').classList.add('hidden'); }
+
+// ---------- Open URL modal outer tabs: Request | Bookmarks | Recents ----------
+function setUModalTab(which) {
+  document.querySelectorAll('.umodal-tab').forEach((b) => b.classList.toggle('active', b.dataset.utab === which));
+  document.querySelectorAll('.umodal-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.upane !== which));
+  if (which === 'bookmarks') renderBookmarks();
+  else if (which === 'recents') renderRecentsTab();
+  else setTimeout(() => $('url-input').focus(), 10);
+}
+// Open the modal directly on a given tab (used by the Bookmarks Manager menu).
+function openUModalTab(which) {
+  if ($('url-modal').classList.contains('hidden')) showUrlModal();
+  setUModalTab(which);
+}
+
+function relTime(ts) {
+  if (!ts) return '';
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return 'just now';
+  const m = s / 60; if (m < 60) return Math.floor(m) + 'm ago';
+  const h = m / 60; if (h < 24) return Math.floor(h) + 'h ago';
+  const d = h / 24; if (d < 30) return Math.floor(d) + 'd ago';
+  const mo = d / 30; if (mo < 12) return Math.floor(mo) + 'mo ago';
+  return Math.floor(mo / 12) + 'y ago';
+}
+const METHOD_COLOR = { GET: '#1d9e75', POST: '#ba7517', PUT: '#378add', DELETE: '#e24b4a', PATCH: '#7f77dd' };
+function defaultBookmarkName(url) {
+  try { const u = new URL(url); return (u.host + u.pathname).replace(/\/$/, '') || url; } catch { return url; }
+}
+// A bookmark "carries a credential" (stored encrypted at rest) if its auth
+// type has a non-empty secret field.
+function bmHasSecret(b) {
+  const a = b.request && b.request.auth; if (!a) return false;
+  if (a.type === 'bearer') return !!a.token;
+  if (a.type === 'basic') return !!a.pass;
+  if (a.type === 'apikey') return !!(a.value || a.token);
+  return false;
+}
+
+// ---------- Bookmarks tab ----------
+let bmCache = [];
+let bmSort = 'recent';
+
+async function renderBookmarks() {
+  bmCache = await window.oxj.bookmarks.list();
+  drawBookmarks();
+}
+function drawBookmarks() {
+  const q = $('bm-search').value.trim().toLowerCase();
+  let list = bmCache.slice();
+  if (q) list = list.filter((b) => (b.name || '').toLowerCase().includes(q) || ((b.request && b.request.url) || '').toLowerCase().includes(q));
+  list.sort((a, b) => {
+    if (!!b.pinned !== !!a.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    switch (bmSort) {
+      case 'used': return (b.useCount || 0) - (a.useCount || 0);
+      case 'name': return (a.name || '').localeCompare(b.name || '');
+      case 'added': return (b.createdAt || 0) - (a.createdAt || 0);
+      default: return (b.lastUsedAt || b.updatedAt || 0) - (a.lastUsedAt || a.updatedAt || 0);
+    }
+  });
+  const wrap = $('bm-list');
+  wrap.textContent = '';
+  if (!list.length) {
+    const e = document.createElement('div'); e.className = 'umodal-empty';
+    e.textContent = bmCache.length ? 'No bookmarks match your search.' : 'No bookmarks yet. Build a request, then click ☆ to save it.';
+    wrap.appendChild(e); return;
+  }
+  for (const b of list) wrap.appendChild(bmRow(b));
+}
+function bmRow(b) {
+  const row = document.createElement('div'); row.className = 'bm-row';
+  const star = document.createElement('button');
+  star.className = 'bm-star' + (b.pinned ? ' on' : ''); star.textContent = b.pinned ? '★' : '☆';
+  star.title = b.pinned ? 'Unpin' : 'Pin to top';
+  star.addEventListener('click', async (e) => { e.stopPropagation(); await window.oxj.bookmarks.update(b.id, { pinned: !b.pinned }); renderBookmarks(); });
+
+  const main = document.createElement('div'); main.className = 'bm-main';
+  const l1 = document.createElement('div'); l1.className = 'bm-line1';
+  const name = document.createElement('span'); name.className = 'bm-name'; name.textContent = b.name;
+  const m = (b.request && b.request.method) || 'GET';
+  const chip = document.createElement('span'); chip.className = 'bm-chip'; chip.textContent = m;
+  const col = METHOD_COLOR[m] || 'var(--fg-dim)';
+  chip.style.color = col; chip.style.border = '1px solid ' + col;
+  l1.append(name, chip);
+  const url = document.createElement('div'); url.className = 'bm-url'; url.textContent = (b.request && b.request.url) || '';
+  const meta = document.createElement('div'); meta.className = 'bm-meta';
+  let metaText = b.lastUsedAt ? ('used ' + relTime(b.lastUsedAt) + ' · ' + (b.useCount || 0) + '×') : ('added ' + relTime(b.createdAt));
+  if (bmHasSecret(b)) metaText += ' · secured';
+  meta.textContent = metaText;
+  main.append(l1, url, meta);
+
+  const acts = document.createElement('div'); acts.className = 'bm-actions';
+  const open = document.createElement('button'); open.className = 'link-btn bm-open'; open.textContent = 'Open';
+  open.addEventListener('click', (e) => { e.stopPropagation(); openBookmark(b); });
+  const edit = document.createElement('button'); edit.className = 'link-btn'; edit.textContent = 'Edit';
+  edit.addEventListener('click', (e) => { e.stopPropagation(); editBookmark(b); });
+  const del = document.createElement('button'); del.className = 'link-btn'; del.textContent = 'Delete';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!await confirmDialog({ title: 'Delete bookmark?', body: '“' + b.name + '” will be removed.', okLabel: 'Delete' })) return;
+    await window.oxj.bookmarks.remove(b.id); renderBookmarks();
+  });
+  acts.append(open, edit, del);
+
+  row.append(star, main, acts);
+  row.addEventListener('dblclick', () => openBookmark(b));
+  return row;
+}
+async function openBookmark(b) {
+  await window.oxj.bookmarks.update(b.id, { touch: true });
+  await performRequest(b.request, undefined);
+}
+// Load a bookmark into the Request builder for editing; remembers its id so a
+// re-save (☆) updates it in place rather than duplicating.
+function editBookmark(b) {
+  showUrlModal(b.request);
+  bmEditingId = b.id;
+}
+async function saveCurrentAsBookmark() {
+  const reqState = currentRequestState();
+  if (!reqState.url) { toast('Enter a URL first'); return; }
+  bmCache = await window.oxj.bookmarks.list();
+  const existing = bmEditingId
+    ? bmCache.find((b) => b.id === bmEditingId)
+    : bmCache.find((b) => b.request && b.request.url === reqState.url);
+  const name = await promptDialog({
+    title: existing ? 'Update bookmark' : 'Save bookmark',
+    body: existing ? 'Save your changes to this bookmark.' : '',
+    value: existing ? existing.name : defaultBookmarkName(reqState.url),
+    placeholder: 'Bookmark name',
+    okLabel: existing ? 'Update' : 'Save',
+  });
+  if (!name) return;
+  await window.oxj.bookmarks.save({ id: existing ? existing.id : undefined, name, request: reqState, pinned: existing ? existing.pinned : false });
+  bmEditingId = null;
+  toast('Bookmark saved', true);
+  $('req-bookmark').classList.add('saved');
+}
+let bmEditingId = null;
+
+// ---------- Recents tab ----------
+let rcCache = [];
+async function renderRecentsTab() {
+  rcCache = await window.oxj.recents();
+  drawRecents();
+}
+function drawRecents() {
+  const q = $('rc-search').value.trim().toLowerCase();
+  let list = rcCache.slice();
+  if (q) list = list.filter((r) => baseName(r.path).toLowerCase().includes(q) || String(r.path).toLowerCase().includes(q));
+  const wrap = $('rc-list'); wrap.textContent = '';
+  if (!list.length) {
+    const e = document.createElement('div'); e.className = 'umodal-empty';
+    e.textContent = rcCache.length ? 'No recent files match your search.' : 'No recent files yet.';
+    wrap.appendChild(e); return;
+  }
+  for (const r of list) wrap.appendChild(rcRow(r));
+}
+function rcRow(r) {
+  const row = document.createElement('div'); row.className = 'bm-row';
+  const main = document.createElement('div'); main.className = 'bm-main';
+  const n = document.createElement('div'); n.className = 'bm-name'; n.textContent = baseName(r.path);
+  const u = document.createElement('div'); u.className = 'bm-url'; u.textContent = r.path;
+  const meta = document.createElement('div'); meta.className = 'bm-meta';
+  meta.textContent = humanSize(r.size || 0) + (r.at ? ' · ' + relTime(r.at) : '');
+  main.append(n, u, meta);
+  const acts = document.createElement('div'); acts.className = 'bm-actions';
+  const open = document.createElement('button'); open.className = 'link-btn bm-open'; open.textContent = 'Open';
+  open.addEventListener('click', (e) => { e.stopPropagation(); hideUrlModal(); openRecent(r); });
+  const del = document.createElement('button'); del.className = 'link-btn'; del.textContent = '✕'; del.title = 'Remove from recents';
+  del.addEventListener('click', async (e) => { e.stopPropagation(); await window.oxj.removeRecent(r.path); renderRecentsTab(); });
+  acts.append(open, del);
+  row.append(main, acts);
+  row.addEventListener('dblclick', () => { hideUrlModal(); openRecent(r); });
+  return row;
+}
+
+// Modal tab + bookmarks/recents wiring.
+document.querySelectorAll('.umodal-tab').forEach((b) => b.addEventListener('click', () => setUModalTab(b.dataset.utab)));
+$('req-bookmark').addEventListener('click', saveCurrentAsBookmark);
+$('bm-search').addEventListener('input', drawBookmarks);
+$('bm-sort').addEventListener('change', () => { bmSort = $('bm-sort').value; drawBookmarks(); });
+$('rc-search').addEventListener('input', drawRecents);
+window.oxj.bookmarks.onChanged(() => {
+  if (!$('url-modal').classList.contains('hidden')) {
+    const onBm = document.querySelector('.umodal-tab[data-utab="bookmarks"]').classList.contains('active');
+    if (onBm) renderBookmarks();
+  }
+});
 
 // URL <-> Params
 // Form-decode a query token: '+' means space, then percent-decode. Rebuilding
@@ -3333,12 +3553,26 @@ function showReqTab(name) {
   document.querySelectorAll('.req-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== name));
 }
 
-async function sendRequest() {
-  const canonUrl = buildUrl();
+// Snapshot the builder as a request object (the shape stored in bookmarks and
+// on t.origin): method, url, params, auth, headers, body.
+function currentRequestState() {
+  return {
+    method: $('req-method').value,
+    url: buildUrl(),
+    params: builderParams.filter((p) => p.key || p.val),
+    auth: gatherAuth(),
+    headers: builderHeaders.filter((h) => h.key),
+    body: $('req-body').value,
+  };
+}
+
+// Send a stored/snapshotted request (shared by Send and by opening a bookmark).
+async function performRequest(reqState, target) {
+  const canonUrl = reqState.url;
   if (!canonUrl) { toast('Enter a URL'); return; }
-  const method = $('req-method').value;
-  const auth = gatherAuth();
-  const body = $('req-body').value;
+  const method = reqState.method || 'GET';
+  const auth = reqState.auth || { type: 'none' };
+  const body = reqState.body || '';
   let sendUrl = canonUrl;
   let sendAuth = auth;
   if (auth.type === 'apikey' && auth.addTo === 'query' && auth.header) {
@@ -3347,12 +3581,8 @@ async function sendRequest() {
   } else if (auth.type === 'apikey') {
     sendAuth = { type: 'apikey', header: auth.header, token: auth.value };
   }
-  const sendHeaders = builderHeaders.filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
-  const reqState = { method, url: canonUrl, params: builderParams.filter((p) => p.key || p.val), auth, headers: builderHeaders.filter((h) => h.key), body };
+  const sendHeaders = (reqState.headers || []).filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
   hideUrlModal();
-  // When editing an existing URL doc, reload into its tab; otherwise a new tab.
-  const target = (builderEditTab && tabAlive(builderEditTab)) ? builderEditTab : undefined;
-  builderEditTab = null;
   toast(method + ' ' + canonUrl + ' …', true);
   try {
     const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body });
@@ -3362,6 +3592,15 @@ async function sendRequest() {
   } catch (e) {
     toast('Request failed: ' + cleanErr(e));
   }
+}
+
+async function sendRequest() {
+  const reqState = currentRequestState();
+  if (!reqState.url) { toast('Enter a URL'); return; }
+  // When editing an existing URL doc, reload into its tab; otherwise a new tab.
+  const target = (builderEditTab && tabAlive(builderEditTab)) ? builderEditTab : undefined;
+  builderEditTab = null;
+  await performRequest(reqState, target);
 }
 
 // One-time wiring
@@ -3395,6 +3634,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
       break;
     case 'open-url':
       showUrlModal();
+      break;
+    case 'bookmarks':
+      openUModalTab('bookmarks');
       break;
     case 'activate':
       openLicenseLock(licensed);

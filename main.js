@@ -1,7 +1,7 @@
 // NARIKJSON — Electron main process.
 // Tabbed architecture: every tab owns its own Rust engine `serve` process
 // (and, while loading, an `ingest` process), keyed by tabId.
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -270,6 +270,93 @@ function pruneRecent() {
     if (kept.length !== raw.length) fs.writeFileSync(recentsPath(), JSON.stringify(kept));
   } catch {}
   buildMenu();
+}
+
+// ---------------- bookmarks (saved URL requests) ----------------
+// A bookmark stores a full request (the same shape the renderer's builder uses:
+// method/url/params/auth/headers/body) plus a name and usage metadata. Auth
+// secrets (bearer token, basic password, api-key value) are never written in
+// plaintext — they're encrypted with the OS keychain via safeStorage and stored
+// as a base64 "enc:" blob, decrypted only when a bookmark is opened.
+function bookmarksPath() {
+  return path.join(app.getPath('userData'), 'bookmarks.json');
+}
+function canEncrypt() {
+  try { return safeStorage.isEncryptionAvailable(); } catch { return false; }
+}
+// Fields inside request.auth that hold a secret, by auth type.
+const AUTH_SECRET_FIELDS = { bearer: ['token'], basic: ['pass'], apikey: ['value', 'token'] };
+function encField(v) {
+  if (typeof v !== 'string' || v === '' || !canEncrypt()) return v;
+  try { return 'enc:' + safeStorage.encryptString(v).toString('base64'); } catch { return v; }
+}
+function decField(v) {
+  if (typeof v !== 'string' || !v.startsWith('enc:')) return v;
+  try { return safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')); } catch { return ''; }
+}
+// Walk the secret fields for a request's auth and apply fn (enc/dec) in place.
+function mapAuthSecrets(request, fn) {
+  const a = request && request.auth;
+  if (!a || !a.type) return request;
+  for (const f of AUTH_SECRET_FIELDS[a.type] || []) {
+    if (f in a) a[f] = fn(a[f]);
+  }
+  return request;
+}
+function readBookmarks() {
+  try { return JSON.parse(fs.readFileSync(bookmarksPath(), 'utf8')); } catch { return []; }
+}
+function writeBookmarks(list) {
+  try { fs.writeFileSync(bookmarksPath(), JSON.stringify(list)); } catch {}
+}
+function emitBookmarksChanged() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('bookmarks-changed');
+  }
+}
+// Return bookmarks with secrets decrypted (for the renderer to open/edit).
+function getBookmarks() {
+  return readBookmarks().map((b) => ({ ...b, request: mapAuthSecrets({ ...b.request, auth: { ...(b.request && b.request.auth) } }, decField) }));
+}
+function newBookmarkId() {
+  return 'bm_' + crypto.randomBytes(6).toString('hex');
+}
+// Add or update. If id matches an existing bookmark, replace it; otherwise
+// insert. Secrets are encrypted before persisting.
+function saveBookmark(bm) {
+  const list = readBookmarks();
+  const now = Date.now();
+  const request = mapAuthSecrets({ ...bm.request, auth: { ...(bm.request && bm.request.auth) } }, encField);
+  const idx = bm.id ? list.findIndex((x) => x.id === bm.id) : -1;
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], name: bm.name, request, pinned: !!bm.pinned, updatedAt: now };
+  } else {
+    list.unshift({
+      id: bm.id || newBookmarkId(), name: bm.name, request,
+      pinned: !!bm.pinned, createdAt: now, updatedAt: now, lastUsedAt: 0, useCount: 0,
+    });
+  }
+  writeBookmarks(list);
+  emitBookmarksChanged();
+  return list.find((x) => x.name === bm.name) || null;
+}
+function updateBookmarkMeta(id, patch) {
+  const list = readBookmarks();
+  const b = list.find((x) => x.id === id);
+  if (!b) return;
+  if (patch.name != null) b.name = patch.name;
+  if (patch.pinned != null) b.pinned = !!patch.pinned;
+  if (patch.touch) { b.lastUsedAt = Date.now(); b.useCount = (b.useCount || 0) + 1; }
+  writeBookmarks(list);
+  emitBookmarksChanged();
+}
+function removeBookmark(id) {
+  writeBookmarks(readBookmarks().filter((x) => x.id !== id));
+  emitBookmarksChanged();
+}
+function clearBookmarks() {
+  try { fs.unlinkSync(bookmarksPath()); } catch {}
+  emitBookmarksChanged();
 }
 
 // ---------------- cache management ----------------
@@ -1184,6 +1271,8 @@ function buildMenu() {
         { id: 'tool-deepdive', label: 'JSON DeepDive → New Tab…', enabled: menuState.hasDoc, click: (mi, bw) => sendMenu(bw, 'deepdive') },
         { type: 'separator' },
         { id: 'tool-compare', label: 'Compare With Open Tab…', enabled: menuState.hasTwoDocs, click: (mi, bw) => sendMenu(bw, 'compare-tabs') },
+        { type: 'separator' },
+        { label: 'Bookmarks Manager…', accelerator: 'Shift+CmdOrCtrl+B', click: (mi, bw) => sendMenu(bw, 'bookmarks') },
       ],
     },
     {
@@ -1617,6 +1706,14 @@ app.whenReady().then(() => {
   ipcMain.handle('recents', async () => getRecents());
   ipcMain.handle('clear-recents', async () => { clearRecents(); return true; });
   ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
+
+  // ---- bookmarks (saved URL requests) ----
+  ipcMain.handle('bookmarks-list', async () => getBookmarks());
+  ipcMain.handle('bookmark-save', async (_e, bm) => saveBookmark(bm || {}));
+  ipcMain.handle('bookmark-update', async (_e, { id, patch }) => { if (id) updateBookmarkMeta(id, patch || {}); return true; });
+  ipcMain.handle('bookmark-remove', async (_e, id) => { if (id) removeBookmark(id); return true; });
+  ipcMain.handle('bookmarks-clear', async () => { clearBookmarks(); return true; });
+
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
   ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
   // Save-path picker (the DuckDB engine writes the file itself via COPY TO).

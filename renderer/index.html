@@ -214,61 +214,92 @@
     </div>
   </div>
 
-  <!-- ============ Open URL modal ============ -->
+  <!-- ============ Open URL / Bookmarks / Recents modal ============ -->
   <div id="url-modal" class="modal-backdrop hidden">
     <div class="modal req-modal">
       <div class="req-titlebar">
-        <span id="req-title" class="modal-title">Request</span>
+        <div class="umodal-tabs">
+          <button class="umodal-tab active" data-utab="request">Request</button>
+          <button class="umodal-tab" data-utab="bookmarks">Bookmarks</button>
+          <button class="umodal-tab" data-utab="recents">Recents</button>
+        </div>
         <button id="url-cancel" class="link-btn">✕</button>
       </div>
-      <div class="req-top">
-        <select id="req-method" class="req-method">
-          <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option>
-        </select>
-        <input id="url-input" type="text" placeholder="https://api.example.com/search?q=test" spellcheck="false" />
-        <button id="req-send" class="btn-primary">Send</button>
+
+      <!-- Request pane -->
+      <div class="umodal-pane" data-upane="request">
+        <div class="req-top">
+          <select id="req-method" class="req-method">
+            <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option>
+          </select>
+          <input id="url-input" type="text" placeholder="https://api.example.com/search?q=test" spellcheck="false" />
+          <button id="req-bookmark" class="btn-tool" title="Save this request as a bookmark">☆</button>
+          <button id="req-send" class="btn-primary">Send</button>
+        </div>
+        <div class="req-tabs">
+          <button class="req-tab active" data-tab="params">Params</button>
+          <button class="req-tab" data-tab="auth">Authorization</button>
+          <button class="req-tab" data-tab="headers">Headers</button>
+          <button class="req-tab" data-tab="body">Body</button>
+        </div>
+        <div class="req-panes">
+          <div class="req-pane" data-pane="params">
+            <div id="params-table" class="kv-table"></div>
+            <button id="params-add" class="link-btn">+ Add parameter</button>
+          </div>
+          <div class="req-pane hidden" data-pane="auth">
+            <div class="modal-row">
+              <label>Type</label>
+              <select id="url-auth">
+                <option value="none">No Auth</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="basic">Basic Auth</option>
+                <option value="apikey">API Key</option>
+              </select>
+            </div>
+            <div id="url-auth-basic" class="modal-row hidden">
+              <input id="url-user" type="text" placeholder="username" />
+              <input id="url-pass" type="password" placeholder="password" />
+            </div>
+            <div id="url-auth-bearer" class="modal-row hidden">
+              <input id="url-token" type="password" placeholder="token" />
+            </div>
+            <div id="url-auth-apikey" class="modal-row hidden">
+              <input id="url-apikey-key" type="text" placeholder="Key (e.g. X-API-Key)" />
+              <input id="url-apikey-val" type="password" placeholder="Value" />
+              <select id="url-apikey-in"><option value="header">Header</option><option value="query">Query Param</option></select>
+            </div>
+          </div>
+          <div class="req-pane hidden" data-pane="headers">
+            <div id="headers-table" class="kv-table"></div>
+            <button id="headers-add" class="link-btn">+ Add header</button>
+          </div>
+          <div class="req-pane hidden" data-pane="body">
+            <textarea id="req-body" class="req-body" placeholder="Request body (JSON / text) — used for POST/PUT/PATCH" spellcheck="false"></textarea>
+          </div>
+        </div>
       </div>
-      <div class="req-tabs">
-        <button class="req-tab active" data-tab="params">Params</button>
-        <button class="req-tab" data-tab="auth">Authorization</button>
-        <button class="req-tab" data-tab="headers">Headers</button>
-        <button class="req-tab" data-tab="body">Body</button>
+
+      <!-- Bookmarks pane -->
+      <div class="umodal-pane hidden" data-upane="bookmarks">
+        <div class="umodal-toolbar">
+          <input id="bm-search" type="text" class="umodal-search" placeholder="Search bookmarks by name or URL" spellcheck="false" />
+          <select id="bm-sort" class="umodal-sort">
+            <option value="recent">Recently used</option>
+            <option value="used">Most used</option>
+            <option value="name">Name</option>
+            <option value="added">Date added</option>
+          </select>
+        </div>
+        <div id="bm-list" class="umodal-list"></div>
       </div>
-      <div class="req-panes">
-        <div class="req-pane" data-pane="params">
-          <div id="params-table" class="kv-table"></div>
-          <button id="params-add" class="link-btn">+ Add parameter</button>
+
+      <!-- Recents pane -->
+      <div class="umodal-pane hidden" data-upane="recents">
+        <div class="umodal-toolbar">
+          <input id="rc-search" type="text" class="umodal-search" placeholder="Search recent files" spellcheck="false" />
         </div>
-        <div class="req-pane hidden" data-pane="auth">
-          <div class="modal-row">
-            <label>Type</label>
-            <select id="url-auth">
-              <option value="none">No Auth</option>
-              <option value="bearer">Bearer Token</option>
-              <option value="basic">Basic Auth</option>
-              <option value="apikey">API Key</option>
-            </select>
-          </div>
-          <div id="url-auth-basic" class="modal-row hidden">
-            <input id="url-user" type="text" placeholder="username" />
-            <input id="url-pass" type="password" placeholder="password" />
-          </div>
-          <div id="url-auth-bearer" class="modal-row hidden">
-            <input id="url-token" type="password" placeholder="token" />
-          </div>
-          <div id="url-auth-apikey" class="modal-row hidden">
-            <input id="url-apikey-key" type="text" placeholder="Key (e.g. X-API-Key)" />
-            <input id="url-apikey-val" type="password" placeholder="Value" />
-            <select id="url-apikey-in"><option value="header">Header</option><option value="query">Query Param</option></select>
-          </div>
-        </div>
-        <div class="req-pane hidden" data-pane="headers">
-          <div id="headers-table" class="kv-table"></div>
-          <button id="headers-add" class="link-btn">+ Add header</button>
-        </div>
-        <div class="req-pane hidden" data-pane="body">
-          <textarea id="req-body" class="req-body" placeholder="Request body (JSON / text) — used for POST/PUT/PATCH" spellcheck="false"></textarea>
-        </div>
+        <div id="rc-list" class="umodal-list"></div>
       </div>
     </div>
   </div>
