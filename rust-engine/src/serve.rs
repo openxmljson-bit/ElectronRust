@@ -9,7 +9,7 @@
 //   {"id":5,"op":"search","q":"foo","scope":"all|keys|values","offset":0,"limit":100}
 //   {"id":6,"op":"table","node":1,"offset":0,"limit":100}
 //   {"id":7,"op":"subtree","node":42,"budget":50000}   -> pretty JSON/XML source
-use rusqlite::{params, params_from_iter, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 

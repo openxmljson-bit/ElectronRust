@@ -300,10 +300,6 @@ fn handle(doc: &Doc, req: &Value) -> Result<Value, String> {
         "search" => op_search(doc, req),
         "subtree" => op_subtree(doc, req),
         "stats" => op_stats(doc, req),
-        "table" => op_table(doc, req),
-        "distinct" => op_distinct(doc, req),
-        "profile" => op_profile(doc, req),
-        "export" => op_export(doc, req),
         "schema" | "validate" => Err(String::from(
             "this tool needs database mode (very large files); reopen via Engine Mode → Always Database",
         )),
