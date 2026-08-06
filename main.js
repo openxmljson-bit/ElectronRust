@@ -13,6 +13,22 @@ const http = require('http');
 const zlib = require('zlib');
 const os = require('os');
 const si = require('systeminformation');
+const { DuckClient } = require('./duck-client');
+
+// ---------------- DuckDB engine (delimited/tabular files) ----------------
+// Lazily booted on first delimited open. Events are forwarded to the renderer.
+let duck = null;
+function duckEngine() {
+  if (!duck) {
+    duck = new DuckClient();
+    duck.on('engine-event', (event) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('duck-event', event);
+      }
+    });
+  }
+  return duck;
+}
 
 // The macOS application menu (bold title, About / Hide / Quit) uses the app
 // name. Keep it the clean "NARIKJSON" everywhere (folder path, dock, window);
@@ -1549,6 +1565,14 @@ app.whenReady().then(() => {
   });
 
   // ---- jq filter (system jq binary) ----
+  // Generic bridge to the DuckDB engine. The renderer/adapter calls named
+  // engine methods (detect, openDataset, buildView, getPage, getRowJson,
+  // profileColumn/All, runSql, exportView, diffDatasets, cacheInfo, cancel…).
+  ipcMain.handle('duck-invoke', async (_e, { method, params }) => {
+    try { return ok(await duckEngine().invoke(String(method), params)); }
+    catch (err) { return fail(new Error((err && err.message) || 'DuckDB engine error')); }
+  });
+
   ipcMain.handle('jq-available', async () => new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
@@ -1713,6 +1737,7 @@ app.whenReady().then(() => {
 function killAll() {
   for (const tabId of [...ingests.keys()]) killIngest(tabId, true);
   for (const tabId of [...sessions.keys()]) killSession(tabId);
+  if (duck) { duck.stop(); duck = null; }
 }
 
 app.on('window-all-closed', () => {

@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('oxj', {
   setEngineMode: (mode) => unwrap('set-engine-mode', mode),
   jqAvailable: () => ipcRenderer.invoke('jq-available'),
   jqRun: (tabId, filter, flags) => unwrap('jq-run', { tabId, filter, flags }),
+  duckInvoke: (method, params) => unwrap('duck-invoke', { method, params }),
+  onDuckEvent: (cb) => ipcRenderer.on('duck-event', (_e, ev) => cb(ev)),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),
