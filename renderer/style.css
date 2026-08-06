@@ -655,7 +655,7 @@ body.light .narik-brand {
 .th.drop-target { box-shadow: inset 2px 0 0 var(--accent); }
 /* cell selection */
 .td.cell-sel { background: var(--sel); }
-.table-row .td { cursor: cell; user-select: none; }
+.table-row .td { cursor: default; user-select: none; }
 
 /* table toolbar */
 /* Table action buttons now live inline in the main toolbar. */
