@@ -2341,6 +2341,7 @@ function tableExportEnabled(view) {
 function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
   $('table-tools').classList.toggle('hidden', !on);
+  $('btn-sql').classList.toggle('hidden', !on || !isDuck(t)); // SQL console is DuckDB-only
   if (!on) return;
   ensureColState(t);
   const view = {
@@ -2446,6 +2447,69 @@ $('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); })
 $('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
 $('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
 $('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
+$('btn-sql').addEventListener('click', () => { if (cur && isDuck(cur)) openSqlConsole(cur); });
+
+// ---------- DuckDB SQL console (query the file as the table `data`) ----------
+function renderSqlResult(wrap, res) {
+  wrap.textContent = '';
+  const grid = document.createElement('div');
+  grid.className = 'sql-grid';
+  let html = '<div class="sql-row sql-head">';
+  for (const c of res.columns) html += '<div class="sql-cell" title="' + htmlEsc(c.type || '') + '">' + htmlEsc(c.name) + '</div>';
+  html += '</div>';
+  for (const r of res.rows) {
+    html += '<div class="sql-row">';
+    for (const v of r) html += '<div class="sql-cell">' + htmlEsc(v == null ? '' : String(v)) + '</div>';
+    html += '</div>';
+  }
+  grid.innerHTML = html;
+  wrap.appendChild(grid);
+}
+
+function openSqlConsole(t) {
+  const { back, box } = simpleModal('SQL Console');
+  box.classList.add('sql-modal');
+  const hint = document.createElement('div');
+  hint.className = 'jq-hint';
+  hint.textContent = "Query this file as the table “data” (read-only SELECT). ⌘/Ctrl+Enter to run.";
+  const ta = document.createElement('textarea');
+  ta.className = 'jq-filter sql-input'; ta.spellcheck = false;
+  ta.value = t.sqlLast || 'SELECT * FROM data LIMIT 100';
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const status = document.createElement('span'); status.className = 'sql-status';
+  const openTab = document.createElement('button'); openTab.className = 'btn-secondary'; openTab.textContent = 'Open result as JSON'; openTab.disabled = true;
+  const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
+  actions.append(status, openTab, run);
+  const result = document.createElement('div'); result.className = 'sql-result';
+  box.append(hint, ta, actions, result);
+  let last = null;
+  const doRun = async () => {
+    const sql = ta.value.trim();
+    if (!sql) { ta.focus(); return; }
+    t.sqlLast = sql;
+    run.disabled = true; run.textContent = 'Running…'; status.textContent = '';
+    try {
+      const res = await window.oxj.duckInvoke('runSql', { datasetId: t.duck.datasetId, sql, limit: 2000, jobId: duckJob() });
+      last = res; openTab.disabled = false;
+      renderSqlResult(result, res);
+      status.textContent = fmtInt(res.rowCount) + ' rows · ' + res.elapsedMs + ' ms' + (res.truncatedAt ? ' · capped at ' + fmtInt(res.truncatedAt) : '');
+    } catch (e) {
+      result.textContent = '';
+      const err = document.createElement('div'); err.className = 'sql-error'; err.textContent = cleanErr(e);
+      result.appendChild(err); status.textContent = '';
+    }
+    run.disabled = false; run.textContent = 'Run';
+  };
+  run.onclick = doRun;
+  openTab.onclick = () => {
+    if (!last) return;
+    const out = last.rows.map((r) => { const o = {}; last.columns.forEach((c, i) => { o[c.name] = r[i]; }); return o; });
+    back.remove();
+    openTextAsTab('sql_result', 'json', JSON.stringify(out, null, 2));
+  };
+  ta.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doRun(); } });
+  setTimeout(() => ta.focus(), 30);
+}
 
 // ---------- coverage / profile reports (light overlay, like the diff report) ----------
 function reportOverlay(titleText, subtitleHtml) {

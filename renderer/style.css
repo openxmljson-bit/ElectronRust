@@ -350,6 +350,16 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 .membership .stat-kv .v.expiring { color: #e0a02c; }
 .membership-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .membership-head .edition-badge { font-size: 10px; padding: 2px 10px; }
+/* SQL console */
+.sql-modal { width: min(900px, 96vw); }
+.sql-input { min-height: 96px; }
+.sql-status { color: var(--fg-dim); font-size: 12px; margin-right: auto; }
+.sql-result { margin-top: 12px; max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.sql-grid { display: table; border-collapse: collapse; font-family: var(--mono); font-size: 12px; min-width: 100%; }
+.sql-row { display: table-row; }
+.sql-row.sql-head { position: sticky; top: 0; background: var(--bg3); font-weight: 700; }
+.sql-cell { display: table-cell; padding: 4px 10px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.sql-error { padding: 10px 12px; color: #e0817a; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
 /* jq filter dialog */
 .jq-modal { width: 560px; }
 .jq-lbl { color: var(--fg-dim); font-size: 12px; }
