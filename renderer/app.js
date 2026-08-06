@@ -772,7 +772,9 @@ const duckJob = () => 'job-' + (duckJobSeq++);
 
 // Open a delimited/tabular file through DuckDB and set the tab up as a table.
 async function openDuck(t, path) {
-  const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: duckJob() });
+  const openJobId = duckJob();
+  t.duckOpenJobId = openJobId; // so progress events can find this tab
+  const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: openJobId });
   if (!tabAlive(t)) return;
   const datasetId = man.id; // manifest keys the dataset by `id`
   const view = { ...EMPTY_VIEW };
@@ -829,6 +831,7 @@ async function openPath(p, tab, force, opts) {
   else { renderTabs(); renderScreen(); }
   // Delimited/tabular files go to the DuckDB engine; everything else to Rust.
   const wantDuck = fmt === 'csv' || DUCK_EXTS.includes(ext);
+  if (wantDuck) { t.progress.duck = true; if (t === cur) renderScreen(); }
   try {
     if (wantDuck) await openDuck(t, p);
     else await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
@@ -865,7 +868,11 @@ $('btn-clear-recents').addEventListener('click', async () => {
 $('btn-cancel').addEventListener('click', async () => {
   const t = cur;
   if (t.phase !== 'loading') return;
-  try { await window.oxj.cancelIngest(t.id); } catch {}
+  if (t.progress && t.progress.duck && t.duckOpenJobId) {
+    try { await window.oxj.duckInvoke('cancel', { jobId: t.duckOpenJobId }); } catch {}
+  } else {
+    try { await window.oxj.cancelIngest(t.id); } catch {}
+  }
   t.phase = 'empty';
   t.title = 'New Tab';
   t.file = null;
@@ -956,6 +963,20 @@ function updateProgressDom(t) {
     $('prog-phase').classList.add('hidden');
     return;
   }
+  if (pr.duck) {
+    $('prog-title').textContent = 'Opening ' + baseName(t.file || '');
+    $('prog-file').textContent = t.file || '';
+    const pct = pr.percent != null ? Math.min(100, pr.percent) : null;
+    $('bar-inner').classList.toggle('indeterminate', pct == null);
+    if (pct != null) $('bar-inner').style.width = pct.toFixed(2) + '%';
+    $('prog-pct').textContent = pct != null ? pct.toFixed(1) + '%' : '';
+    $('prog-bytes').textContent = pr.bytesDone ? fmtBytes(pr.bytesDone) + (pr.bytesTotal ? ' / ' + fmtBytes(pr.bytesTotal) : '') : '';
+    $('prog-speed').textContent = '';
+    $('prog-eta').textContent = pr.etaMs ? 'ETA ' + fmtDur(pr.etaMs / 1000) : '';
+    $('prog-nodes').textContent = pr.rowsDone ? fmtInt(pr.rowsDone) + ' rows read' : (pr.phase || 'Loading into the query engine…');
+    $('prog-phase').classList.add('hidden');
+    return;
+  }
   $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
   $('prog-phase').textContent = pr.mem
     ? 'Indexing in memory — no database needed, this is quick…'
@@ -972,6 +993,25 @@ function updateProgressDom(t) {
   $('prog-nodes').textContent = pr.nodes ? fmtInt(pr.nodes) + ' nodes parsed' : (pr.startedMsg || 'Starting engine…');
   $('prog-phase').classList.toggle('hidden', !pr.indexing);
 }
+
+// DuckDB ingest progress → drive the loading screen for the matching tab.
+window.oxj.onDuckEvent((ev) => {
+  if (!ev) return;
+  if (ev.type === 'job' && ev.progress) {
+    const jp = ev.progress;
+    const t = tabs.find((x) => x.duckOpenJobId === jp.jobId && x.phase === 'loading');
+    if (!t) return;
+    const pr = t.progress;
+    pr.duck = true;
+    pr.percent = jp.percent;
+    pr.phase = jp.phase || jp.label || '';
+    pr.bytesDone = jp.bytesDone;
+    pr.bytesTotal = jp.bytesTotal;
+    pr.rowsDone = jp.rowsDone;
+    pr.etaMs = jp.etaMs;
+    if (t === cur) updateProgressDom(t);
+  }
+});
 
 window.oxj.onProgress((msg) => {
   const t = tabById(msg.tabId);
