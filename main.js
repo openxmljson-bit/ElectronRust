@@ -555,29 +555,17 @@ function killIngest(tabId, deleteDb) {
 // bigger ones stream into SQLite.
 const MEM_MAX_BYTES = 64 * 1024 * 1024 * 1024; // absolute safety ceiling (raised for testing)
 const MEM_FREE_FRACTION = 2.5;                 // up to 2.5× available RAM (mmap pages on demand; testing)
-const DELIM_DB_BYTES = 3 * 1024 * 1024 * 1024; // delimited files above this always go to the DB engine
 
-function isDelimited(filePath, format) {
-  const ext = path.extname(filePath).toLowerCase();
-  return format === 'csv' || format === 'tsv' || ['.csv', '.tsv', '.tab', '.psv'].includes(ext);
-}
-
-async function decideMode(filePath, format) {
+// The Rust engine now only handles hierarchical formats (JSON/NDJSON/XML/YAML);
+// all delimited/tabular files are routed to the DuckDB engine by the renderer.
+async function decideMode(filePath) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
-  const isDelim = isDelimited(filePath, format);
-  let size = 0;
-  try { size = fs.statSync(filePath).size; } catch {}
-  // Delimited data explodes into one node per cell, so above 3 GB always use the
-  // on-disk DB engine — even if the user forced Memory mode — to protect RAM.
-  if (isDelim && size > DELIM_DB_BYTES) return 'db';
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
   try {
+    const size = fs.statSync(filePath).size;
     const avail = await availableMemBytes();
     if (size > MEM_MAX_BYTES) return 'db';
-    // The in-memory index (many tiny cell nodes at ~24 bytes each) must fit in
-    // RAM. Estimate ~5× the file and require it to sit in ~60% of free memory.
-    if (isDelim) return (size * 5 <= avail * 0.6) ? 'memory' : 'db';
     if (size <= avail * MEM_FREE_FRACTION) return 'memory';
   } catch {}
   return 'db';
@@ -683,7 +671,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
 
 
   // ---- memory mode: no ingest, no DB — mmap + parse in the engine ----
-  if ((await decideMode(enginePath, fileFormat)) === 'memory') {
+  if ((await decideMode(enginePath)) === 'memory') {
     try {
       let size = 0;
       try { size = fs.statSync(enginePath).size; } catch {}
