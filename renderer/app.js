@@ -259,10 +259,10 @@ function renderScreen() {
     const memMode = t.meta && t.meta.mode === 'memory';
     $('btn-tools').classList.toggle('hidden',
       plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
-    $('search-scope').classList.toggle('hidden', plain || duck);
-    $('search-box').classList.toggle('hidden', plain || duck);
-    $('btn-find').classList.toggle('hidden', plain || duck);
-    $('match-prev').classList.toggle('hidden', plain || duck);
+    $('search-scope').classList.toggle('hidden', plain || duck);   // JSON scopes only
+    $('search-box').classList.toggle('hidden', plain);             // duck: search every column
+    $('btn-find').classList.toggle('hidden', plain);
+    $('match-prev').classList.toggle('hidden', plain || duck);     // asFilter search: no stepping
     $('match-next').classList.toggle('hidden', plain || duck);
     $('text-wrap').classList.toggle('hidden', !plain);
     if (plain) {
@@ -286,6 +286,8 @@ function renderScreen() {
       $('view-toggle').classList.add('hidden');
       $('tree-wrap').classList.add('hidden');
       t.view = 'table';
+      $('search-box').placeholder = 'Search all columns';
+      $('search-box').value = t.duck.searchQuery || '';
       setView('table');
       buildTableHead(t);
       $('status-doc').textContent =
@@ -1594,19 +1596,27 @@ function currentQueryMatchesNav() {
   return matchNav.q === q && matchNav.exact === exact && matchNav.scope === $('search-scope').value;
 }
 
+// DuckDB tables: search filters the view to rows matching in ANY column.
+function duckSearch(t, q) {
+  t.duck.searchQuery = q || '';
+  applyTableView(t); // rebuilds the view (search folded into duckViewSpec)
+}
 $('search-box').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') {
+    if (isDuck(cur)) { duckSearch(cur, ev.target.value.trim()); return; }
     if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
     else startSearch();
   }
-  if (ev.key === 'Escape') { ev.target.value = ''; closeSearch(); }
+  if (ev.key === 'Escape') { ev.target.value = ''; if (isDuck(cur)) duckSearch(cur, ''); else closeSearch(); }
 });
 $('btn-find').addEventListener('click', () => {
+  if (isDuck(cur)) { duckSearch(cur, $('search-box').value.trim()); return; }
   if (currentQueryMatchesNav() && matchNav.ids.length) gotoMatch(matchNav.cur + 1);
   else startSearch();
 });
 // Fires when the X inside the field is clicked (or the field is emptied).
 $('search-box').addEventListener('search', (ev) => {
+  if (isDuck(cur)) { if (!ev.target.value) duckSearch(cur, ''); return; }
   if (!ev.target.value) closeSearch();
 });
 $('match-prev').addEventListener('click', () => matchNav && gotoMatch(matchNav.cur - 1));
@@ -2076,7 +2086,9 @@ function duckViewSpec(t) {
     return { id: 'f' + i, column: t.tableHeaders[f.col], op: DUCK_FILTER_OP[f.op] || 'contains', value, value2, caseSensitive: false, enabled: true };
   });
   const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
-  return { filters, combine: 'and', search: null, sort, select: null };
+  const q = t.duck && t.duck.searchQuery;
+  const search = q ? { query: q, mode: 'contains', columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
+  return { filters, combine: 'and', search, sort, select: null };
 }
 
 async function applyTableViewDuck(t) {
@@ -2355,8 +2367,10 @@ function updateTableToolbar(t) {
   $('btn-export-json').disabled = !enabled;
   $('btn-clear-filters').disabled = !view.filterActive;
   const info = $('table-viewinfo');
-  if (view.filterActive && t.tableViewTotal != null) info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
-  else info.textContent = '';
+  const narrowed = t.tableViewTotal != null && t.tableTotal != null && t.tableViewTotal !== t.tableTotal;
+  if ((view.filterActive || (isDuck(t) && t.duck.searchQuery) || narrowed) && t.tableViewTotal != null) {
+    info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
+  } else info.textContent = '';
 }
 
 // ---------- sort / filter dialogs ----------
