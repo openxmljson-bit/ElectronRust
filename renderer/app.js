@@ -295,10 +295,12 @@ function renderScreen() {
       buildTableHead(t);
       $('status-doc').textContent =
         t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes) + ' · DuckDB';
-      $('status-load').textContent = t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '';
+      $('status-load').textContent = t.duck.strategy === 'cache-hit'
+        ? 'from cache'
+        : (t.loadMs != null ? fmtInt(t.loadMs) + ' ms' : '');
       updateTopBtn();
       $('status-type').textContent = '';
-      $('status-path').textContent = t.file || '';
+      $('status-path').textContent = baseName(t.file || '');
       if (sourceOpen) scheduleSourceUpdate();
       syncMenuState();
       return;
@@ -786,7 +788,7 @@ async function openDuck(t, path) {
   const vi = await window.oxj.duckInvoke('buildView', { datasetId, view, jobId: duckJob() });
   if (!tabAlive(t)) return;
   t.engine = 'duck';
-  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
+  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man, strategy: man.strategy };
   t.docFormat = man.format === 'tsv' ? 'tsv' : 'csv'; // table logic keys off csv/tsv
   t.tableFormatLabel = DUCK_FORMAT_LABEL[man.format] || (man.format || 'CSV').toUpperCase();
   t.tableHeaders = (man.columns || []).map((c) => c.name);
@@ -799,7 +801,7 @@ async function openDuck(t, path) {
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
   t.tableSel = null; t.tableSort = null; t.tableFilters = [];
   t.view = 'table';
-  t.loadMs = vi.buildMs != null ? vi.buildMs : (man.ingestMs || null);
+  t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
   t.phase = 'ready';
   try { window.oxj.noteRecent(path, 'csv'); } catch {}
   renderTabs();
