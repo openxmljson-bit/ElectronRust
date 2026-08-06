@@ -39,6 +39,9 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      - name: Build DuckDB engine bundle
+        run: npm run build:duck
+
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
