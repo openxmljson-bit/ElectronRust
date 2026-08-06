@@ -774,11 +774,12 @@ const duckJob = () => 'job-' + (duckJobSeq++);
 async function openDuck(t, path) {
   const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: duckJob() });
   if (!tabAlive(t)) return;
+  const datasetId = man.id; // manifest keys the dataset by `id`
   const view = { ...EMPTY_VIEW };
-  const vi = await window.oxj.duckInvoke('buildView', { datasetId: man.datasetId, view, jobId: duckJob() });
+  const vi = await window.oxj.duckInvoke('buildView', { datasetId, view, jobId: duckJob() });
   if (!tabAlive(t)) return;
   t.engine = 'duck';
-  t.duck = { datasetId: man.datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
+  t.duck = { datasetId, view, columns: man.columns || [], rowCount: vi.rowCount, manifest: man };
   t.docFormat = man.format === 'tsv' ? 'tsv' : 'csv'; // table logic keys off csv/tsv
   t.tableFormatLabel = DUCK_FORMAT_LABEL[man.format] || (man.format || 'CSV').toUpperCase();
   t.tableHeaders = (man.columns || []).map((c) => c.name);
