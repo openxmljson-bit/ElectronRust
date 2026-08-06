@@ -2482,7 +2482,23 @@ function openSqlConsole(t) {
   const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
   actions.append(status, openTab, cancel, run);
   const result = document.createElement('div'); result.className = 'sql-result';
-  box.append(hint, ta, actions, result);
+  // Clickable example queries (like GigaTables).
+  const firstCol = (t.duck.columns[0] && t.duck.columns[0].name) || 'column_name';
+  const examples = [
+    'SELECT * FROM data LIMIT 100',
+    'SELECT count(*) FROM data',
+    'SELECT * FROM data ORDER BY 1 DESC LIMIT 50',
+    'SELECT "' + firstCol + '", count(*) AS c FROM data GROUP BY 1 ORDER BY c DESC LIMIT 50',
+  ];
+  const exWrap = document.createElement('div'); exWrap.className = 'sql-examples';
+  const exLbl = document.createElement('span'); exLbl.className = 'sql-ex-label'; exLbl.textContent = 'Examples';
+  exWrap.appendChild(exLbl);
+  examples.forEach((ex) => {
+    const b = document.createElement('button'); b.className = 'sql-ex'; b.textContent = ex; b.title = ex;
+    b.onclick = () => { ta.value = ex; ta.focus(); };
+    exWrap.appendChild(b);
+  });
+  box.append(hint, ta, exWrap, actions, result);
   let last = null;
   const doRun = async () => {
     const sql = ta.value.trim();
