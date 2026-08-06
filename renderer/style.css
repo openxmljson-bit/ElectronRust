@@ -132,6 +132,14 @@ body {
 }
 .tab-close:hover { background: var(--bg3); color: var(--fg); }
 .tab.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.tab-add {
+  flex: 0 0 auto; align-self: center; margin: 0 4px 3px 6px;
+  width: 28px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px dashed var(--border); color: var(--fg-dim);
+  border-radius: 7px; font-size: 16px; line-height: 1; cursor: pointer;
+}
+.tab-add:hover { color: var(--fg); border-color: var(--fg-dim); background: var(--bg2); }
 
 /* ---------- Modal ---------- */
 .modal-backdrop {

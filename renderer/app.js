@@ -232,6 +232,16 @@ function renderTabs() {
     });
     host.appendChild(el);
   }
+  // "+" — open another file in a new tab.
+  const add = document.createElement('button');
+  add.className = 'tab-add';
+  add.textContent = '+';
+  add.title = 'Open a file in a new tab';
+  add.addEventListener('click', async () => {
+    const p = await window.oxj.pickFile();
+    if (p) openFileWithPrompt(p); // targetTabForOpen() makes a new tab when the current one is busy
+  });
+  host.appendChild(add);
 }
 
 // ---------- screen switching ----------
