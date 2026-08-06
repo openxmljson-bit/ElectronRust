@@ -2249,7 +2249,7 @@ function tableExportEnabled(view) {
 
 function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
-  $('table-toolbar').classList.toggle('hidden', !on);
+  $('table-tools').classList.toggle('hidden', !on);
   if (!on) return;
   ensureColState(t);
   const view = {
