@@ -2361,7 +2361,6 @@ function tableExportEnabled(view) {
 function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
   $('table-tools').classList.toggle('hidden', !on);
-  $('btn-sql').classList.toggle('hidden', !on || !isDuck(t)); // SQL console is DuckDB-only
   if (!on) return;
   ensureColState(t);
   const view = {
@@ -2371,9 +2370,7 @@ function updateTableToolbar(t) {
     visibleCount: visCols(t).length,
   };
   const enabled = isDuck(t) ? (view.rowCount > 0 && view.visibleCount > 0) : tableExportEnabled(view);
-  $('btn-export-csv').disabled = !enabled;
-  $('btn-export-json').disabled = !enabled;
-  $('btn-clear-filters').disabled = !view.filterActive;
+  $('btn-tbl-export').disabled = !enabled;
   const info = $('table-viewinfo');
   const narrowed = t.tableViewTotal != null && t.tableTotal != null && t.tableViewTotal !== t.tableTotal;
   if ((view.filterActive || (isDuck(t) && t.duck.searchQuery) || narrowed) && t.tableViewTotal != null) {
@@ -2465,11 +2462,32 @@ function openFilterDialog(t, presetCol) {
   box.appendChild(actions);
 }
 
-$('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
-$('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
-$('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
-$('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
-$('btn-sql').addEventListener('click', () => { if (cur && isDuck(cur)) openSqlConsole(cur); });
+// Table "Actions ▾" dropdown: filter, sort, clear filters, profile, SQL.
+$('btn-tbl-actions').addEventListener('click', (ev) => {
+  const t = cur; if (!t) return;
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  const filterActive = !!(t.tableFilters && t.tableFilters.length);
+  const items = [
+    { label: 'Filter…', action: () => openFilterDialog(t) },
+    { label: 'Sort…', action: () => openSortDialog(t) },
+    { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
+    { sep: true },
+    { label: 'Profile', action: () => runProfile(t) },
+  ];
+  if (isDuck(t)) items.push({ label: 'SQL Console…', action: () => openSqlConsole(t) });
+  showContextMenu(r.left, r.bottom + 4, items);
+});
+// Table "Export ▾" dropdown: CSV / JSON.
+$('btn-tbl-export').addEventListener('click', (ev) => {
+  const t = cur; if (!t) return;
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, [
+    { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
+    { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
+  ]);
+});
 
 // ---------- DuckDB SQL console (query the file as the table `data`) ----------
 function renderSqlResult(wrap, res) {
@@ -2782,9 +2800,6 @@ $('btn-cols-none').addEventListener('click', () => {
   t.colHidden = new Set(t.colOrder.slice(1));
   afterColChange(t);
 });
-$('btn-export-csv').addEventListener('click', () => { if (cur) runTableExport(cur, 'csv'); });
-$('btn-export-json').addEventListener('click', () => { if (cur) runTableExport(cur, 'json'); });
-
 // DuckDB export: CSV via the engine (COPY TO), JSON assembled from pages.
 async function runTableExportDuck(t, fmt) {
   const visIdx = visCols(t);
