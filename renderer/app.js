@@ -760,8 +760,48 @@ async function refreshCacheInfo() {
   if (info.tempCount) addRow('Temp files', fmtInt(info.tempCount) + ' · ' + fmtBytes(info.tempBytes));
 }
 
+// Cache Manager has two tabs: JSON (SQLite) and CSV (DuckDB Parquet).
+let cacheTab = 'db';
+function setCacheTab(which) {
+  cacheTab = which;
+  document.querySelectorAll('#cache-seg .engine-opt').forEach((b) => b.classList.toggle('active', b.dataset.cache === which));
+  $('cache-list').classList.toggle('hidden', which !== 'db');
+  $('duck-cache-list').classList.toggle('hidden', which !== 'duck');
+  if (which === 'duck') refreshDuckCache(); // lazily boots the DuckDB engine
+}
+document.querySelectorAll('#cache-seg .engine-opt').forEach((b) => b.addEventListener('click', () => setCacheTab(b.dataset.cache)));
+
+async function refreshDuckCache() {
+  const list = $('duck-cache-list');
+  const addRow = (k, v) => {
+    const row = document.createElement('div'); row.className = 'stat-kv';
+    const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.textContent = v;
+    row.append(kk, vv); list.appendChild(row);
+  };
+  list.textContent = ''; addRow('Loading…', '');
+  try {
+    const info = await window.oxj.duckInvoke('cacheInfo');
+    list.textContent = '';
+    addRow('Cached files', fmtInt((info.entries || []).length));
+    addRow('Parquet cache', fmtBytes(info.totalBytes || 0));
+    addRow('Size limit', info.limitBytes ? fmtBytes(info.limitBytes) : 'Unlimited');
+  } catch (e) {
+    list.textContent = ''; addRow('DuckDB cache', 'unavailable');
+  }
+}
+
 $('btn-clear-cache').addEventListener('click', async () => {
-  if (!window.confirm('Clear the document cache? Files re-ingest the next time you open them.')) return;
+  if (cacheTab === 'duck') {
+    if (!window.confirm('Clear the CSV (DuckDB) Parquet cache? Files re-ingest the next time you open them.')) return;
+    try {
+      const r = await window.oxj.duckInvoke('clearCache');
+      toast('CSV cache cleared' + (r && r.bytes ? ' — freed ' + fmtBytes(r.bytes) : ''), true);
+    } catch (e) { toast('Clear failed: ' + cleanErr(e)); }
+    refreshDuckCache();
+    return;
+  }
+  if (!window.confirm('Clear the JSON document cache? Files re-ingest the next time you open them.')) return;
   try {
     const freed = await window.oxj.clearCache();
     toast('Cache cleared — freed ' + fmtBytes(freed), true);

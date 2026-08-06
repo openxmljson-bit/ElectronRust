@@ -70,7 +70,12 @@
         </div>
         <div id="cache-wrap" class="stats hidden">
           <div class="stats-head">Cache Manager</div>
+          <div id="cache-seg" class="engine-seg">
+            <button class="engine-opt active" data-cache="db">JSON</button>
+            <button class="engine-opt" data-cache="duck">CSV</button>
+          </div>
           <div id="cache-list"></div>
+          <div id="duck-cache-list" class="hidden"></div>
           <div class="cache-actions">
             <button id="btn-clear-cache" class="link-btn">Clear Cache</button>
           </div>
