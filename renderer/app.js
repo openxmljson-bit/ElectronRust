@@ -853,6 +853,10 @@ function askOpenAs(name) {
 // User-initiated open of a real file: prompt Table/Text for ambiguous delimited
 // files, otherwise open normally. Used by Open File and drag-and-drop.
 async function openFileWithPrompt(p) {
+  const name = String(p).split(/[\\/]/).pop();
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  // PSV / .tab are unambiguously delimited → open straight into the table.
+  if (ext === 'psv' || ext === 'tab') { openAsCsv(p); return; }
   if (isMaybeDelim(p)) {
     const choice = await askOpenAs(baseName(p)); // Table / Text / Cancel
     if (choice === 'table') openAsCsv(p);
@@ -976,7 +980,8 @@ window.oxj.onDocReady(async (m) => {
   t.tableSort = null;
   t.tableFilters = [];
   t.tableViewTotal = null;
-  t.view = 'tree';
+  // CSV/TSV (and PSV / delimited TXT opened as CSV) default to the Table view.
+  t.view = (t.docFormat === 'csv' || t.docFormat === 'tsv') ? 'table' : 'tree';
   try {
     await buildViewer(t);
   } catch (e) {
