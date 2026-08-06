@@ -251,7 +251,11 @@ fn run_ingest(file: &str, dbp: &str, format: &str) -> Result<(), String> {
     // only ingests hierarchical formats.
     let (total_nodes, root_children) = match fmt.as_str() {
         "json" | "ndjson" => json::ingest(&mut r, &mut dbw, &mut prog)?,
-        "xml" => xmlp::ingest(&mut r, &mut dbw, &mut prog)?,
+        "xml" => {
+            // quick-xml needs a BufRead; open a fresh buffered handle to the file.
+            let xf = std::fs::File::open(file).map_err(|e| format!("cannot open file: {}", e))?;
+            xmlp::ingest(std::io::BufReader::new(xf), &mut dbw, &mut prog)?
+        }
         other => return Err(format!("unsupported format for the Rust engine: {}", other)),
     };
     if root_children == 0 {
