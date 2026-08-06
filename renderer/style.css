@@ -168,6 +168,16 @@ body {
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 
+/* Roomy, styled replacement for native confirm dialogs */
+.confirm-modal {
+  width: 460px; max-width: calc(100vw - 64px);
+  padding: 30px 34px; gap: 18px; text-align: center; align-items: center;
+}
+.confirm-modal .confirm-title { font-size: 19px; font-weight: 700; line-height: 1.3; }
+.confirm-modal .confirm-body { font-size: 14px; color: var(--fg-dim); line-height: 1.55; max-width: 380px; }
+.confirm-modal .modal-actions { justify-content: center; gap: 14px; margin-top: 4px; width: 100%; }
+.confirm-modal .modal-actions button { min-width: 120px; padding: 11px 20px; font-size: 14px; border-radius: 9px; }
+
 /* ---------- Welcome ---------- */
 #screen-welcome { align-items: center; justify-content: flex-start; padding-top: 18px; }
 .welcome-card {
