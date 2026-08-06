@@ -2478,8 +2478,9 @@ function openSqlConsole(t) {
   const actions = document.createElement('div'); actions.className = 'modal-actions';
   const status = document.createElement('span'); status.className = 'sql-status';
   const openTab = document.createElement('button'); openTab.className = 'btn-secondary'; openTab.textContent = 'Open result as JSON'; openTab.disabled = true;
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Close'; cancel.onclick = () => back.remove();
   const run = document.createElement('button'); run.className = 'btn-primary'; run.textContent = 'Run';
-  actions.append(status, openTab, run);
+  actions.append(status, openTab, cancel, run);
   const result = document.createElement('div'); result.className = 'sql-result';
   box.append(hint, ta, actions, result);
   let last = null;
