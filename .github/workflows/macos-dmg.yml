@@ -112,16 +112,74 @@ jobs:
           if [ "$HAS_NOTARY" != "true" ] || [ "$HAS_CERT" != "true" ]; then
             ARGS="$ARGS -c.mac.notarize=false"
           fi
-          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "$HAS_RELEASES_TOKEN" = "true" ]; then
-            ARGS="$ARGS --publish always"
-          else
-            ARGS="$ARGS --publish never"
-          fi
-          npx electron-builder $ARGS
+          # Never publish from the per-arch jobs — the release job merges the two
+          # latest-mac.yml manifests and uploads everything once.
+          npx electron-builder $ARGS --publish never
           ls -la dist/
 
-      - name: Upload artifact
+      - name: Upload dist (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: NARIKJSON-dmg-${{ matrix.arch }}
-          path: dist/*.dmg
+          name: mac-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest-mac.yml
+          if-no-files-found: error
+
+  # Merge the per-arch update manifests and publish all assets once, so
+  # electron-updater serves both architectures from a single latest-mac.yml.
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install js-yaml (for the merge script)
+        run: npm i js-yaml --no-save --no-audit --no-fund
+
+      - name: Download arm64 dist
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-arm64
+          path: staging/arm64
+
+      - name: Download x64 dist
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-x64
+          path: staging/x64
+
+      - name: Stage assets + merge update metadata
+        run: |
+          set -euo pipefail
+          mkdir -p staging/out
+          # Per-arch artifact names never collide (…-<arch>.dmg/.zip).
+          cp staging/arm64/*.dmg staging/arm64/*.zip staging/arm64/*.blockmap staging/out/ 2>/dev/null || true
+          cp staging/x64/*.dmg   staging/x64/*.zip   staging/x64/*.blockmap   staging/out/ 2>/dev/null || true
+          node scripts/merge-mac-latest-yml.mjs \
+            staging/out/latest-mac.yml \
+            staging/arm64/latest-mac.yml \
+            staging/x64/latest-mac.yml
+          echo "--- merged latest-mac.yml ---"; cat staging/out/latest-mac.yml
+          ls -la staging/out/
+
+      - name: Publish to releases repo
+        if: ${{ env.HAS_RELEASES_TOKEN == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          REPO: openxmljson-bit/ElectronRust-Releases
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes "NARIKJSON $TAG"
+          gh release upload "$TAG" --repo "$REPO" --clobber staging/out/*
