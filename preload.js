@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('oxj', {
   duckInvoke: (method, params) => unwrap('duck-invoke', { method, params }),
   onDuckEvent: (cb) => ipcRenderer.on('duck-event', (_e, ev) => cb(ev)),
   noteRecent: (p, format) => ipcRenderer.invoke('note-recent', { path: p, format }),
+  pickSavePath: (defaultName, filters) => ipcRenderer.invoke('pick-save-path', { defaultName, filters }),
   recents: () => ipcRenderer.invoke('recents'),
   clearRecents: () => ipcRenderer.invoke('clear-recents'),
   removeRecent: (p) => ipcRenderer.invoke('remove-recent', p),

@@ -1625,6 +1625,15 @@ app.whenReady().then(() => {
   ipcMain.handle('remove-recent', async (_e, p) => { if (typeof p === 'string') removeRecent(p); return true; });
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
   ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
+  // Save-path picker (the DuckDB engine writes the file itself via COPY TO).
+  ipcMain.handle('pick-save-path', async (e, { defaultName, filters }) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const res = await dialog.showSaveDialog(win, {
+      defaultPath: defaultName || undefined,
+      filters: filters && filters.length ? filters : [{ name: 'All files', extensions: ['*'] }],
+    });
+    return res.canceled || !res.filePath ? null : res.filePath;
+  });
 
   ipcMain.handle('license-status', async () => licenseStatus());
   ipcMain.handle('license-activate', async (_e, { email, key }) => {

@@ -2046,7 +2046,40 @@ function tableRows(t) {
 
 // Re-apply the current sort/filter view: drop cached windows, reset scroll,
 // refetch. Guarded to database mode (the memory engine can't sort/filter).
+// Translate the tab's sort/filter state (Rust op shape) into a DuckDB ViewSpec.
+const DUCK_FILTER_OP = {
+  contains: 'contains', equals: 'eq', 'starts-with': 'startswith',
+  'not-equals': 'ne', gt: 'gt', lt: 'lt', between: 'between',
+};
+function duckViewSpec(t) {
+  const filters = (t.tableFilters || []).map((f, i) => {
+    let value = String(f.value == null ? '' : f.value), value2 = '';
+    if (f.op === 'between') { const p = value.split(','); value = (p[0] || '').trim(); value2 = (p[1] || '').trim(); }
+    return { id: 'f' + i, column: t.tableHeaders[f.col], op: DUCK_FILTER_OP[f.op] || 'contains', value, value2, caseSensitive: false, enabled: true };
+  });
+  const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
+  return { filters, combine: 'and', search: null, sort, select: null };
+}
+
+async function applyTableViewDuck(t) {
+  t.duck.view = duckViewSpec(t);
+  t.tablePages = new Map();
+  t.tableInflight = new Set();
+  t.tableSel = null;
+  tableScroll.scrollTop = 0;
+  try {
+    const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
+    if (!tabAlive(t)) return;
+    t.duck.rowCount = vi.rowCount;
+    t.tableViewTotal = vi.rowCount;
+    buildTableHead(t);
+    renderTable();
+    updateTableToolbar(t);
+  } catch (e) { toast('View failed: ' + cleanErr(e)); }
+}
+
 function applyTableView(t) {
+  if (isDuck(t)) return applyTableViewDuck(t);
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.tableViewTotal = null;
@@ -2222,7 +2255,7 @@ function showHeaderMenu(e, t, c) {
   if (hasFilter) items.push({ label: 'Clear this filter', action: () => { t.tableFilters = t.tableFilters.filter((f) => f.col !== c); applyTableView(t); } });
   items.push(
     { sep: true },
-    { label: 'Column coverage "' + t.tableHeaders[c] + '"…', action: () => { if (isDuck(t)) return toast(DUCK_SOON); openCoverageDialog(t, c); } },
+    { label: 'Column coverage "' + t.tableHeaders[c] + '"…', action: () => openCoverageDialog(t, c) },
     { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
@@ -2298,7 +2331,7 @@ function updateTableToolbar(t) {
     rowCount: tableRows(t),
     visibleCount: visCols(t).length,
   };
-  const enabled = tableExportEnabled(view);
+  const enabled = isDuck(t) ? (view.rowCount > 0 && view.visibleCount > 0) : tableExportEnabled(view);
   $('btn-export-csv').disabled = !enabled;
   $('btn-export-json').disabled = !enabled;
   $('btn-clear-filters').disabled = !view.filterActive;
@@ -2391,11 +2424,10 @@ function openFilterDialog(t, presetCol) {
   box.appendChild(actions);
 }
 
-const DUCK_SOON = 'Filter, sort, profile and export for DuckDB tables are coming next.';
-$('btn-sort').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); openSortDialog(cur); });
-$('btn-filter').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); openFilterDialog(cur); });
+$('btn-sort').addEventListener('click', () => { if (cur) openSortDialog(cur); });
+$('btn-filter').addEventListener('click', () => { if (cur) openFilterDialog(cur); });
 $('btn-clear-filters').addEventListener('click', () => { if (cur) { cur.tableFilters = []; applyTableView(cur); } });
-$('btn-profile').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runProfile(cur); });
+$('btn-profile').addEventListener('click', () => { if (cur) runProfile(cur); });
 
 // ---------- coverage / profile reports (light overlay, like the diff report) ----------
 function reportOverlay(titleText, subtitleHtml) {
@@ -2447,6 +2479,7 @@ function openCoverageDialog(t, col) {
 }
 
 async function runCoverage(t, col, opts) {
+  if (isDuck(t)) return runCoverageDuck(t, col, opts);
   try {
     toast('Computing coverage…', true);
     const res = await window.oxj.query(t.id, {
@@ -2495,7 +2528,69 @@ function showCoverageReport(t, col, res) {
   page.appendChild(wrap);
 }
 
+// ---------- DuckDB profile / coverage (profileAll / profileColumn) ----------
+async function runProfileDuck(t) {
+  try {
+    toast('Profiling columns…', true);
+    const cols = await window.oxj.duckInvoke('profileAll', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
+    const total = t.duck.rowCount || 0;
+    const { page } = reportOverlay('Column Profile', '<span>' + htmlEsc(baseName(t.file || t.title)) + '</span><span>' + fmtInt(total) + ' rows · ' + cols.length + ' columns</span>');
+    const bar = document.createElement('div'); bar.className = 'diff-bar';
+    const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+    bar.append(close); page.appendChild(bar);
+    const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+    let html = '<div class="cov-table"><div class="cov-tr cov-th">'
+      + '<div class="cov-td c-val">Column</div><div class="cov-td c-val">Type</div>'
+      + '<div class="cov-td c-num">Non-null</div><div class="cov-td c-num">Nulls</div>'
+      + '<div class="cov-td c-num">Distinct ~</div><div class="cov-td c-val">Min</div>'
+      + '<div class="cov-td c-val">Max</div><div class="cov-td c-val">Top value</div></div>';
+    for (const c of cols) {
+      const tv = (c.topValues && c.topValues[0]) ? (c.topValues[0].value == null ? '(null)' : c.topValues[0].value) : '';
+      html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(c.column) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.type || '') + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.nonNull) + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.nulls) + '</div>'
+        + '<div class="cov-td c-num">' + fmtInt(c.distinctApprox) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.min == null ? '' : c.min) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(c.max == null ? '' : c.max) + '</div>'
+        + '<div class="cov-td c-val">' + htmlEsc(tv) + '</div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    page.appendChild(wrap);
+  } catch (err) { toast('Profile failed: ' + cleanErr(err)); }
+}
+
+async function runCoverageDuck(t, col, opts) {
+  try {
+    toast('Computing coverage…', true);
+    const colName = t.tableHeaders[col];
+    const prof = await window.oxj.duckInvoke('profileColumn', { datasetId: t.duck.datasetId, view: t.duck.view, column: colName, topN: opts.top || 1000, jobId: duckJob() });
+    const total = prof.rows || t.duck.rowCount || 0;
+    const uniq = total ? (100 * Number(prof.distinctApprox) / total).toFixed(1) : '0';
+    let sub = '<span>' + htmlEsc(colName) + '</span><span>~' + fmtInt(prof.distinctApprox) + ' distinct of ' + fmtInt(total) + ' rows (' + uniq + '% unique)</span>';
+    if (prof.min != null || prof.max != null) sub += '<span>min ' + htmlEsc(prof.min || '') + ' · max ' + htmlEsc(prof.max || '') + (prof.avg != null ? ' · avg ' + htmlEsc(prof.avg) : '') + '</span>';
+    const { page } = reportOverlay('Column Coverage', sub);
+    const bar = document.createElement('div'); bar.className = 'diff-bar';
+    const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+    bar.append(close); page.appendChild(bar);
+    const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+    const items = prof.topValues || [];
+    const max = items.reduce((m, it) => Math.max(m, it.count), 1);
+    let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-val">Value</div><div class="cov-td c-num">Count</div><div class="cov-td c-num">Share</div><div class="cov-td c-bar"></div></div>';
+    for (const it of items) {
+      const pct = total ? (100 * it.count / total).toFixed(1) : '0';
+      const w = (100 * it.count / max).toFixed(1);
+      html += '<div class="cov-tr"><div class="cov-td c-val">' + htmlEsc(it.value == null ? '(null)' : it.value) + '</div>' +
+        '<div class="cov-td c-num">' + fmtInt(it.count) + '</div><div class="cov-td c-num">' + pct + '%</div>' +
+        '<div class="cov-td c-bar"><div class="cov-bar" style="width:' + w + '%"></div></div></div>';
+    }
+    wrap.innerHTML = html + '</div>';
+    page.appendChild(wrap);
+  } catch (err) { toast('Coverage failed: ' + cleanErr(err)); }
+}
+
 async function runProfile(t) {
+  if (isDuck(t)) return runProfileDuck(t);
   try {
     toast('Profiling columns…', true);
     const res = await window.oxj.query(t.id, { op: 'profile', node: 1 });
@@ -2550,11 +2645,40 @@ $('btn-cols-none').addEventListener('click', () => {
   t.colHidden = new Set(t.colOrder.slice(1));
   afterColChange(t);
 });
-$('btn-export-csv').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runTableExport(cur, 'csv'); });
-$('btn-export-json').addEventListener('click', () => { if (!cur) return; if (isDuck(cur)) return toast(DUCK_SOON); runTableExport(cur, 'json'); });
+$('btn-export-csv').addEventListener('click', () => { if (cur) runTableExport(cur, 'csv'); });
+$('btn-export-json').addEventListener('click', () => { if (cur) runTableExport(cur, 'json'); });
+
+// DuckDB export: CSV via the engine (COPY TO), JSON assembled from pages.
+async function runTableExportDuck(t, fmt) {
+  const visIdx = visCols(t);
+  const names = visIdx.map((c) => t.tableHeaders[c]);
+  try {
+    if (fmt === 'csv') {
+      const target = await window.oxj.pickSavePath(stampName('export_' + baseName(t.file || 'table'), 'csv'), [{ name: 'CSV', extensions: ['csv'] }]);
+      if (!target) return;
+      toast('Exporting…', true);
+      const view = { ...t.duck.view, select: names };
+      const res = await window.oxj.duckInvoke('exportView', { datasetId: t.duck.datasetId, view, targetPath: target, format: 'csv', limit: null, includeHeader: true });
+      toast('Exported ' + fmtInt(res.rowsWritten) + ' rows → ' + baseName(res.targetPath), true);
+    } else {
+      toast('Exporting JSON…', true);
+      const CAP = 200000;
+      const total = Math.min(CAP, t.duck.rowCount || 0);
+      const out = [];
+      for (let off = 0; off < total; off += 1000) {
+        const res = await window.oxj.duckInvoke('getPage', { datasetId: t.duck.datasetId, view: t.duck.view, offset: off, limit: 1000, maxCellChars: 1000000 });
+        for (const r of (res.rows || [])) { const o = {}; visIdx.forEach((c, k) => { o[names[k]] = r[c]; }); out.push(o); }
+        if (!tabAlive(t)) return;
+      }
+      const saved = await window.oxj.saveText(stampName('export_' + baseName(t.file || 'table'), 'json'), JSON.stringify(out, null, 2));
+      if (saved) toast('Exported ' + fmtInt(out.length) + (total < (t.duck.rowCount || 0) ? ' (capped at ' + fmtInt(CAP) + ')' : '') + ' rows → ' + baseName(saved), true);
+    }
+  } catch (err) { toast('Export failed: ' + cleanErr(err)); }
+}
 
 // Export the visible columns + filtered/sorted rows via the engine, into a new tab.
 async function runTableExport(t, fmt) {
+  if (isDuck(t)) return runTableExportDuck(t, fmt);
   try {
     toast('Exporting…', true);
     const cols = visCols(t).map((c) => ({ ord: c, name: t.tableHeaders[c] }));
