@@ -2475,7 +2475,10 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];
-  if (isDuck(t)) items.push({ label: 'SQL Console…', action: () => openSqlConsole(t) });
+  if (isDuck(t)) {
+    items.push({ label: 'SQL Console…', action: () => openSqlConsole(t) });
+    items.push({ label: 'Compare with…', disabled: !otherDuckTabs(t).length, action: () => openDiffPicker(t) });
+  }
   showContextMenu(r.left, r.bottom + 4, items);
 });
 // Table "Export ▾" dropdown: CSV / JSON.
@@ -2488,6 +2491,76 @@ $('btn-tbl-export').addEventListener('click', (ev) => {
     { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
   ]);
 });
+
+// ---------- DuckDB dataset diff (compare two delimited tables) ----------
+function otherDuckTabs(t) {
+  return tabs.filter((x) => x !== t && isDuck(x) && x.phase === 'ready' && x.duck);
+}
+
+function openDiffPicker(t) {
+  const others = otherDuckTabs(t);
+  if (!others.length) { toast('Open another delimited file in a tab to compare.'); return; }
+  const { back, box } = simpleModal('Compare table');
+  const r1 = document.createElement('div'); r1.className = 'modal-row';
+  const l1 = document.createElement('label'); l1.textContent = 'Against';
+  const sel = document.createElement('select');
+  others.forEach((o, i) => { const op = document.createElement('option'); op.value = String(tabs.indexOf(o)); op.textContent = baseName(o.file || o.title); if (i === 0) op.selected = true; sel.appendChild(op); });
+  r1.append(l1, sel);
+  const r2 = document.createElement('div'); r2.className = 'modal-row';
+  const l2 = document.createElement('label'); l2.textContent = 'Match by';
+  const keySel = document.createElement('select');
+  const pos = document.createElement('option'); pos.value = ''; pos.textContent = '(row position)'; keySel.appendChild(pos);
+  (t.duck.columns || []).forEach((c) => { const op = document.createElement('option'); op.value = c.name; op.textContent = c.name; keySel.appendChild(op); });
+  r2.append(l2, keySel);
+  box.append(r1, r2);
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Compare';
+  ok.onclick = () => { const other = tabs[parseInt(sel.value, 10)]; const key = keySel.value; back.remove(); runDatasetDiff(t, other, key); };
+  actions.append(cancel, ok); box.append(actions);
+}
+
+async function runDatasetDiff(t, other, keyCol) {
+  if (!tabAlive(other) || !isDuck(other)) { toast('The other table is no longer open.'); return; }
+  try {
+    toast('Comparing…', true);
+    const res = await window.oxj.duckInvoke('diffDatasets', {
+      leftId: t.duck.datasetId, rightId: other.duck.datasetId,
+      keyColumns: keyCol ? [keyCol] : [], compareColumns: null, maxExamples: 200, jobId: duckJob(),
+    });
+    showDatasetDiffReport(t, other, res);
+  } catch (err) { toast('Compare failed: ' + cleanErr(err)); }
+}
+
+function showDatasetDiffReport(t, other, res) {
+  const sub = '<span>' + htmlEsc(baseName(t.file || t.title)) + ' ↔ ' + htmlEsc(baseName(other.file || other.title)) + '</span>'
+    + '<span>' + fmtInt(res.leftRows) + ' vs ' + fmtInt(res.rightRows) + ' rows · ' + res.elapsedMs + ' ms</span>';
+  const { page } = reportOverlay('Dataset Diff', sub);
+  const bar = document.createElement('div'); bar.className = 'diff-bar';
+  const close = document.createElement('button'); close.className = 'btn-tool'; close.textContent = 'Close'; close.onclick = () => page.parentElement.remove();
+  bar.append(close); page.appendChild(bar);
+  const cards = document.createElement('div'); cards.className = 'diff-cards';
+  const card = (n, l, cls) => '<div class="diff-card ' + cls + '"><div class="diff-card-n">' + fmtInt(n) + '</div><div class="diff-card-l">' + l + '</div></div>';
+  cards.innerHTML = card(res.onlyLeft, 'Only left', 'c-rem') + card(res.onlyRight, 'Only right', 'c-add') + card(res.changed, 'Changed', 'c-chg') + card(res.identical, 'Identical', '');
+  page.appendChild(cards);
+  if ((res.columnsOnlyLeft || []).length || (res.columnsOnlyRight || []).length) {
+    const note = document.createElement('div'); note.className = 'diff-files'; note.style.padding = '0 22px 8px';
+    note.innerHTML = (res.columnsOnlyLeft.length ? '<span>Columns only left: ' + res.columnsOnlyLeft.map(htmlEsc).join(', ') + '</span>' : '')
+      + (res.columnsOnlyRight.length ? '<span>Columns only right: ' + res.columnsOnlyRight.map(htmlEsc).join(', ') + '</span>' : '');
+    page.appendChild(note);
+  }
+  const wrap = document.createElement('div'); wrap.className = 'diff-tablewrap';
+  let html = '<div class="cov-table"><div class="cov-tr cov-th"><div class="cov-td c-num" style="flex:0 0 96px">Change</div><div class="cov-td c-val">Key</div><div class="cov-td c-val">Changed columns</div></div>';
+  for (const ex of (res.examples || [])) {
+    const label = ex.kind === 'only-left' ? 'Only left' : ex.kind === 'only-right' ? 'Only right' : 'Changed';
+    const cls = ex.kind === 'only-left' ? 'r-rem' : ex.kind === 'only-right' ? 'r-add' : 'r-chg';
+    html += '<div class="cov-tr ' + cls + '"><div class="cov-td c-num" style="flex:0 0 96px">' + label + '</div>'
+      + '<div class="cov-td c-val">' + htmlEsc(ex.key || '') + '</div>'
+      + '<div class="cov-td c-val">' + htmlEsc((ex.changedColumns || []).join(', ')) + '</div></div>';
+  }
+  wrap.innerHTML = html + '</div>';
+  page.appendChild(wrap);
+}
 
 // ---------- DuckDB SQL console (query the file as the table `data`) ----------
 function renderSqlResult(wrap, res) {
