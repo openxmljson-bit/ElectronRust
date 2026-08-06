@@ -622,6 +622,9 @@ body.light .narik-brand {
 }
 .col-resizer:hover { background: var(--accent); opacity: .6; }
 .th.idx, .td.idx { width: 70px; color: var(--fg-dim); text-align: right; }
+.th:not(.idx) { cursor: pointer; }
+.th.sorted { color: var(--accent); }
+.sort-arrow { color: var(--accent); font-size: 10px; }
 .table-spacer { position: relative; width: max-content; min-width: 100%; }
 .table-row { position: absolute; display: flex; height: var(--row-h); align-items: stretch; width: max-content; min-width: 100%; }
 .table-row.zebra { background: rgba(255,255,255,.02); }

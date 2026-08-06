@@ -1943,9 +1943,18 @@ function buildTableHead(t) {
     const th = document.createElement('div');
     th.className = 'th';
     th.textContent = t.tableHeaders[c];
-    th.title = t.tableHeaders[c];
+    th.title = t.tableHeaders[c] + ' — click to sort';
     th.style.width = colWidth(t, c) + 'px';
     th.dataset.col = String(c);
+    if (t.tableSort && t.tableSort.col === c) {
+      th.classList.add('sorted');
+      const ar = document.createElement('span');
+      ar.className = 'sort-arrow';
+      ar.textContent = t.tableSort.dir === 'asc' ? ' ▲' : ' ▼';
+      th.appendChild(ar);
+    }
+    // Click the header to cycle sort: asc → desc → none.
+    th.addEventListener('click', (ev) => { if (!ev.target.classList.contains('col-resizer')) cycleSort(t, c); });
     if (t.colPinned.has(c)) {
       th.classList.add('pinned');
       th.style.left = pinnedLeft + 'px';
@@ -1967,6 +1976,15 @@ function buildTableHead(t) {
     th.addEventListener('contextmenu', (e) => { e.preventDefault(); showHeaderMenu(e, t, c); });
     head.appendChild(th);
   });
+}
+
+// Click a header to cycle its sort: unsorted → ascending → descending → none.
+function cycleSort(t, c) {
+  const s = t.tableSort;
+  if (!s || s.col !== c) t.tableSort = { col: c, dir: 'asc' };
+  else if (s.dir === 'asc') t.tableSort = { col: c, dir: 'desc' };
+  else t.tableSort = null;
+  applyTableView(t);
 }
 
 // Move column `from` to just before column `to` in the display order.
