@@ -513,10 +513,13 @@ body.light .engine-opt.active { color: #fff; }
 }
 body.light .narik-brand {
   background: linear-gradient(110deg,
-    rgba(31, 35, 41, .16) 0%, rgba(31, 35, 41, .16) 40%,
-    rgba(26, 115, 232, .9) 50%,
-    rgba(31, 35, 41, .16) 60%, rgba(31, 35, 41, .16) 100%);
+    rgba(31, 35, 41, .34) 0%, rgba(31, 35, 41, .34) 40%,
+    rgba(26, 115, 232, 1) 50%,
+    rgba(31, 35, 41, .34) 60%, rgba(31, 35, 41, .34) 100%);
   background-size: 250% 100%;
+  /* re-assert the text clip so the letters (not the box) carry the gradient */
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
 }
 .narik-brand .brace { opacity: .5; }  /* dim the braces, like the {N}ARIKJSON logo */
 @keyframes narikShimmer {
