@@ -1,7 +1,7 @@
 // NARIKJSON — Electron main process.
 // Tabbed architecture: every tab owns its own Rust engine `serve` process
 // (and, while loading, an `ingest` process), keyed by tabId.
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell, safeStorage, net } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -1016,25 +1016,30 @@ function licenseStatus() {
 }
 
 // Resolves { status, data } — never rejects on a non-2xx; only on transport error.
+// Uses Electron's net module (Chromium network stack) rather than Node's https so
+// TLS validates against the OS trust store and honours system proxy settings. On
+// corporate networks with a TLS-inspecting proxy, Node's bundled CA list rejects
+// the proxy's root ("unable to get local issuer certificate"); the OS store trusts it.
 function httpsPostJson(url, body) {
   return new Promise((resolve, reject) => {
-    let u;
-    try { u = new URL(url); } catch { return reject(new Error('bad license URL')); }
-    const mod = u.protocol === 'https:' ? https : http;
-    const req = mod.request(u, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'User-Agent': 'NARIKJSON' },
-    }, (res) => {
+    let req;
+    try { req = net.request({ method: 'POST', url, useSessionCookies: false }); }
+    catch { return reject(new Error('bad license URL')); }
+    req.setHeader('Content-Type', 'application/json');
+    req.setHeader('User-Agent', 'NARIKJSON');
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+    const timer = setTimeout(() => { try { req.abort(); } catch {} finish(reject, new Error('license server timed out')); }, 15000);
+    req.on('response', (res) => {
       let data = '';
       res.on('data', (d) => { data += d; });
       res.on('end', () => {
         let json = {};
         try { json = JSON.parse(data || '{}'); } catch { json = {}; }
-        resolve({ status: res.statusCode || 0, data: json });
+        finish(resolve, { status: res.statusCode || 0, data: json });
       });
     });
-    req.on('error', reject);
-    req.setTimeout(15000, () => req.destroy(new Error('license server timed out')));
+    req.on('error', (e) => finish(reject, e));
     req.write(body);
     req.end();
   });
