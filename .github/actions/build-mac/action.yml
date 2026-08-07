@@ -1,0 +1,141 @@
+name: Build macOS DMG (one arch)
+description: >
+  Build the Rust engine, bundle the DuckDB engine, optionally sign, and package
+  the NARIKJSON DMG for a single macOS architecture. Secrets are passed as inputs
+  because composite actions cannot read the secrets context directly.
+
+inputs:
+  arch:
+    description: "arm64 or x64"
+    required: true
+  rust-target:
+    description: "Rust target triple (e.g. aarch64-apple-darwin)"
+    required: true
+  cert-p12-base64:
+    required: false
+    default: ""
+  cert-password:
+    required: false
+    default: ""
+  keychain-password:
+    required: false
+    default: ""
+  sign-identity:
+    required: false
+    default: ""
+  notary-apple-id:
+    required: false
+    default: ""
+  notary-password:
+    required: false
+    default: ""
+  team-id:
+    required: false
+    default: ""
+  releases-token:
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.rust-target }}
+
+    - name: Build engine (${{ inputs.arch }})
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd rust-engine
+        cargo build --release --target ${{ inputs.rust-target }}
+        mkdir -p target/release
+        cp target/${{ inputs.rust-target }}/release/openjsonxml-engine target/release/openjsonxml-engine
+
+    - name: Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - name: npm ci
+      shell: bash
+      run: npm ci
+
+    - name: Build DuckDB engine bundle
+      shell: bash
+      run: npm run build:duck
+
+    - name: Set version from tag
+      if: startsWith(github.ref, 'refs/tags/v')
+      shell: bash
+      run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+
+    # ---- signing (only when the cert secret is configured) ----
+    - name: Import signing certificate
+      if: inputs.cert-p12-base64 != ''
+      shell: bash
+      env:
+        P12_BASE64: ${{ inputs.cert-p12-base64 }}
+        P12_PASSWORD: ${{ inputs.cert-password }}
+        KEYCHAIN_PASSWORD: ${{ inputs.keychain-password }}
+      run: |
+        set -euo pipefail
+        KEYCHAIN=$RUNNER_TEMP/build.keychain-db
+        echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security import $RUNNER_TEMP/cert.p12 -k "$KEYCHAIN" \
+          -P "$P12_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple: \
+          -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+    - name: Sign engine binary
+      if: inputs.cert-p12-base64 != ''
+      shell: bash
+      env:
+        SIGN_IDENTITY: ${{ inputs.sign-identity }}
+      run: |
+        codesign --force --options runtime --timestamp \
+          --sign "$SIGN_IDENTITY" \
+          rust-engine/target/release/openjsonxml-engine
+        codesign -dv rust-engine/target/release/openjsonxml-engine
+
+    # ---- package ----
+    # electron-builder signs/notarizes the app (including the unpacked DuckDB
+    # addon). Publishing is done once by the separate publish job, so this always
+    # uses --publish never.
+    - name: Build DMG (${{ inputs.arch }})
+      shell: bash
+      env:
+        APPLE_ID: ${{ inputs.notary-apple-id }}
+        APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.notary-password }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
+        GH_TOKEN: ${{ inputs.releases-token }}
+        HAS_CERT: ${{ inputs.cert-p12-base64 != '' }}
+        HAS_NOTARY: ${{ inputs.notary-password != '' }}
+      run: |
+        set -euo pipefail
+        ARGS="--mac --${{ inputs.arch }}"
+        if [ "$HAS_CERT" != "true" ]; then
+          export CSC_IDENTITY_AUTO_DISCOVERY=false   # unsigned dev build
+        fi
+        if [ "$HAS_NOTARY" != "true" ] || [ "$HAS_CERT" != "true" ]; then
+          ARGS="$ARGS -c.mac.notarize=false"
+        fi
+        npx electron-builder $ARGS --publish never
+        ls -la dist/
+
+    - name: Upload dist (${{ inputs.arch }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: mac-${{ inputs.arch }}
+        path: |
+          dist/*.dmg
+          dist/*.zip
+          dist/*.blockmap
+          dist/latest-mac.yml
+        if-no-files-found: error
