@@ -3522,6 +3522,7 @@ async function renderRecentsTab() {
   rcCache = await window.oxj.recents();
   drawRecents();
 }
+const rcCollapsed = new Set(); // collapsed file-type groups in the modal Recents tab
 function drawRecents() {
   const q = $('rc-search').value.trim().toLowerCase();
   let list = rcCache.slice();
@@ -3532,7 +3533,21 @@ function drawRecents() {
     e.textContent = rcCache.length ? 'No recent files match your search.' : 'No recent files yet.';
     wrap.appendChild(e); return;
   }
-  for (const r of list) wrap.appendChild(rcRow(r));
+  // Group by file type (JSON / CSV / XML / …), same buckets as the side dock.
+  for (const [group, items] of groupRecentsByType(list)) {
+    const collapsed = rcCollapsed.has(group);
+    const head = document.createElement('div');
+    head.className = 'rc-group-head';
+    head.innerHTML = '<span class="rc-group-caret">' + (collapsed ? '▸' : '▾') + '</span>'
+      + '<span class="rc-group-name">' + htmlEsc(group) + '</span>'
+      + '<span class="rc-group-count">' + items.length + '</span>';
+    head.addEventListener('click', () => {
+      if (rcCollapsed.has(group)) rcCollapsed.delete(group); else rcCollapsed.add(group);
+      drawRecents();
+    });
+    wrap.appendChild(head);
+    if (!collapsed) for (const r of items) wrap.appendChild(rcRow(r));
+  }
 }
 function rcRow(r) {
   const row = document.createElement('div'); row.className = 'bm-row';

@@ -743,6 +743,16 @@ body.light .narik-brand {
 .umodal-sort { background: var(--bg3); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
 .umodal-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .umodal-empty { color: var(--fg-dim); font-size: 13px; text-align: center; padding: 40px 10px; }
+.rc-group-head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  padding: 8px 8px; margin-top: 4px; position: sticky; top: 0; z-index: 1;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700;
+  color: var(--fg); background: var(--bg3); border-top: 1px solid var(--border);
+}
+.rc-group-head:hover { color: var(--accent); }
+.rc-group-caret { width: 12px; text-align: center; font-size: 11px; color: var(--fg-dim); }
+.rc-group-name { flex: 1; }
+.rc-group-count { background: var(--bg2); color: var(--fg-dim); border-radius: 10px; padding: 1px 8px; font-size: 10px; font-weight: 700; }
 .bm-row { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
 .bm-row:hover { background: var(--bg3); }
 .bm-star { flex: 0 0 auto; background: none; border: 0; cursor: pointer; font-size: 16px; color: var(--fg-dim); padding: 2px; }
