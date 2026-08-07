@@ -2843,11 +2843,14 @@ function openSqlConsole(t) {
   const result = document.createElement('div'); result.className = 'sql-result';
   // Clickable example queries (like GigaTables).
   const firstCol = (t.duck.columns[0] && t.duck.columns[0].name) || 'column_name';
+  const secondCol = (t.duck.columns[1] && t.duck.columns[1].name) || firstCol;
   const examples = [
     'SELECT * FROM data LIMIT 100',
     'SELECT count(*) FROM data',
     'SELECT * FROM data ORDER BY 1 DESC LIMIT 50',
     'SELECT "' + firstCol + '", count(*) AS c FROM data GROUP BY 1 ORDER BY c DESC LIMIT 50',
+    'SELECT "' + firstCol + '", count(*) AS rows, avg(TRY_CAST("' + secondCol + '" AS DOUBLE)) AS avg_' + secondCol.replace(/[^A-Za-z0-9_]/g, '_') + ' FROM data GROUP BY 1 ORDER BY rows DESC LIMIT 50',
+    'SELECT "' + firstCol + '", count(*) AS c FROM data GROUP BY 1 HAVING count(*) > 1 ORDER BY c DESC',
   ];
   const exWrap = document.createElement('div'); exWrap.className = 'sql-examples';
   const exLbl = document.createElement('span'); exLbl.className = 'sql-ex-label'; exLbl.textContent = 'Examples';
