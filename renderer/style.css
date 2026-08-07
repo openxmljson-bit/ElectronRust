@@ -140,6 +140,8 @@ body {
   border-radius: 7px; font-size: 16px; line-height: 1; cursor: pointer;
 }
 .tab-add:hover { color: var(--fg); border-color: var(--fg-dim); background: var(--bg2); }
+body.light .tab-add { border-color: #a9b0bd; color: #6b7280; }        /* the faint --border is invisible on the light tab strip */
+body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
 
 /* ---------- Modal ---------- */
 .modal-backdrop {
