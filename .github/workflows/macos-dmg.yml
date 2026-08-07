@@ -40,6 +40,10 @@ jobs:
   build-x64:
     name: Build macOS x64 (Intel)
     runs-on: macos-13
+    # Best-effort: Intel (macos-13) hosted runners are scarce and can sit in the
+    # queue for a long time. Never let a stuck/failed Intel build fail the run or
+    # block the arm64 release — publish ships arm64 regardless (see publish.if).
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +65,10 @@ jobs:
   # electron-updater serves both architectures from a single latest-mac.yml.
   publish:
     needs: [build-arm64, build-x64]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publish as long as arm64 succeeded — Intel is best-effort and may have
+    # failed or been cancelled. always() lets this run even when build-x64 didn't
+    # succeed; the x64 artifact download below is tolerant of a missing Intel build.
+    if: ${{ always() && needs.build-arm64.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -81,8 +88,9 @@ jobs:
           name: mac-arm64
           path: staging/arm64
 
-      - name: Download x64 dist
+      - name: Download x64 dist (best-effort — Intel may not have built)
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: mac-x64
           path: staging/x64
