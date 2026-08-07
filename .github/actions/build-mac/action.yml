@@ -147,6 +147,35 @@ runs:
         npx electron-builder $ARGS --publish never
         ls -la dist/
 
+    # Prove — without an Intel Mac — that the packaged app actually carries the
+    # right-arch native binaries. Inspect the DuckDB addon and the Rust engine
+    # inside the built .app and assert their Mach-O arch matches this job's arch.
+    # If the cross-build is wrong (missing or arm64 binding in an x64 app), fail
+    # here instead of shipping a DMG that crashes on launch.
+    - name: Verify bundled binaries are ${{ inputs.arch }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        EXPECT=$([ "${{ inputs.arch }}" = "x64" ] && echo x86_64 || echo arm64)
+        DARCH=$([ "${{ inputs.arch }}" = "x64" ] && echo x64 || echo arm64)
+        APP=$(find dist -maxdepth 4 -name '*.app' -type d | head -1)
+        if [ -z "$APP" ]; then echo "::error::no .app found under dist/"; exit 1; fi
+        echo "App bundle: $APP"
+
+        check() { # $1 = label, $2 = path
+          if [ ! -f "$2" ]; then echo "::error::$1 not found: $2"; exit 1; fi
+          local a; a=$(lipo -archs "$2" 2>/dev/null || true)
+          [ -n "$a" ] || a=$(file -b "$2")
+          echo "$1: $2 -> [$a]"
+          echo "$a" | grep -qw "$EXPECT" || { echo "::error::$1 is not $EXPECT (got: $a)"; exit 1; }
+        }
+
+        NODE=$(find "$APP" -path "*node-bindings-darwin-$DARCH*" -name '*.node' | head -1)
+        if [ -z "$NODE" ]; then echo "::error::DuckDB darwin-$DARCH binding missing from the app"; exit 1; fi
+        check "DuckDB addon" "$NODE"
+        check "Rust engine"  "$APP/Contents/Resources/engine/openjsonxml-engine"
+        echo "OK — bundled DuckDB + engine are both $EXPECT"
+
     - name: Upload dist (${{ inputs.arch }})
       uses: actions/upload-artifact@v4
       with:
