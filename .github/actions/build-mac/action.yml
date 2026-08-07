@@ -67,6 +67,24 @@ runs:
       shell: bash
       run: npm run build:duck
 
+    # Cross-build only: on an Apple Silicon runner, `npm ci` installs the arm64
+    # DuckDB binding. For the x64 package we must also drop in the darwin-x64
+    # prebuilt binding so the packaged Intel app loads the correct native engine
+    # at runtime (@duckdb/node-bindings resolves per process.arch). --cpu/--os
+    # override npm's host-platform gate on the optional dependency.
+    - name: Add x64 DuckDB native binding (cross-build)
+      if: inputs.arch == 'x64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        DUCK_VER="$(node -p "require('@duckdb/node-bindings/package.json').version")"
+        echo "Installing @duckdb/node-bindings-darwin-x64@${DUCK_VER}"
+        npm install --no-save --force --cpu=x64 --os=darwin \
+          "@duckdb/node-bindings-darwin-x64@${DUCK_VER}"
+        test -d node_modules/@duckdb/node-bindings-darwin-x64 \
+          && echo "x64 binding present" \
+          || { echo "x64 binding missing"; exit 1; }
+
     - name: Set version from tag
       if: startsWith(github.ref, 'refs/tags/v')
       shell: bash
