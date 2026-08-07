@@ -601,17 +601,17 @@ body.light .narik-brand {
   right: 22px;
   bottom: 44px;
   z-index: 8;
-  background: var(--bg2);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: #f2c14e;          /* solid amber — visible on any background/theme */
+  color: #1f2329;               /* dark text for contrast on the yellow */
+  border: 1px solid #d9a72f;
   border-radius: 18px;
   padding: 7px 16px;
   font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   box-shadow: 0 6px 22px rgba(0,0,0,.35);
-  opacity: .92;
 }
-.btn-top:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
+.btn-top:hover { background: #ffd25e; border-color: #c9962a; color: #1f2329; }
 
 /* Tree */
 .tree-wrap { flex: 1; min-width: 0; display: flex; position: relative; }
