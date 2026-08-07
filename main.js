@@ -8,9 +8,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const readline = require('readline');
-const https = require('https');
-const http = require('http');
-const zlib = require('zlib');
 const os = require('os');
 const si = require('systeminformation');
 const { DuckClient } = require('./duck-client');
@@ -858,53 +855,54 @@ function sniffExt(text) {
   return '.json';
 }
 
+// First value of an Electron net response header (values arrive as arrays).
+function hdr1(headers, name) {
+  const v = headers && headers[name];
+  return Array.isArray(v) ? (v[0] || '') : String(v || '');
+}
+// Choose a file extension from content-type, else sniff the first bytes.
+function extForResponse(ct, tmp, fallback) {
+  if (ct.includes('json')) return '.json';
+  if (ct.includes('xml')) return '.xml';
+  if (ct.includes('csv')) return '.csv';
+  try {
+    const fd = fs.openSync(tmp, 'r');
+    const buf = Buffer.alloc(2048);
+    const n = fs.readSync(fd, buf, 0, 2048, 0);
+    fs.closeSync(fd);
+    return sniffExt(buf.slice(0, n).toString('utf8'));
+  } catch { return fallback; }
+}
+
+// Both network helpers use Electron's net (Chromium) rather than Node http/https
+// so TLS validates against the OS trust store and the system proxy is honoured —
+// corporate TLS-inspecting proxies otherwise fail with "unable to get local
+// issuer certificate". net follows redirects and decompresses gzip/deflate/br.
 function downloadUrl(url, headers) {
   return new Promise((resolve, reject) => {
     const tmp = path.join(downloadsDir(), 'url_' + Date.now());
     const out = fs.createWriteStream(tmp);
-    let redirects = 0;
-    const get = (u) => {
-      const mod = u.startsWith('https:') ? https : http;
-      const req = mod.get(u, { headers }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-          redirects++;
-          res.resume();
-          get(new URL(res.headers.location, u).toString());
-          return;
-        }
-        if (res.statusCode !== 200) {
-          res.resume();
-          reject(new Error('HTTP ' + res.statusCode + ' from server'));
-          return;
-        }
-        res.pipe(out);
-        out.on('finish', () => {
-          out.close(() => {
-            // Decide extension: content-type first, then content sniff.
-            const ct = String(res.headers['content-type'] || '');
-            let ext = null;
-            if (ct.includes('json')) ext = '.json';
-            else if (ct.includes('xml')) ext = '.xml';
-            else if (ct.includes('csv')) ext = '.csv';
-            if (!ext) {
-              try {
-                const fd = fs.openSync(tmp, 'r');
-                const buf = Buffer.alloc(2048);
-                const n = fs.readSync(fd, buf, 0, 2048, 0);
-                fs.closeSync(fd);
-                ext = sniffExt(buf.slice(0, n).toString('utf8'));
-              } catch { ext = '.json'; }
-            }
-            const final = tmp + ext;
-            fs.renameSync(tmp, final);
-            resolve(final);
-          });
-        });
-      });
-      req.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {}; reject(e); });
-      req.setTimeout(60000, () => { req.destroy(new Error('request timed out')); });
-    };
-    try { get(url); } catch (e) { reject(e); }
+    let req;
+    try { req = net.request({ method: 'GET', url, redirect: 'follow' }); }
+    catch (e) { return reject(e); }
+    for (const [k, v] of Object.entries(headers || {})) { try { req.setHeader(k, v); } catch {} }
+    let settled = false;
+    const fail = (e) => { if (settled) return; settled = true; clearTimeout(timer); try { out.destroy(); } catch {} try { fs.unlinkSync(tmp); } catch {} reject(e); };
+    const timer = setTimeout(() => { try { req.abort(); } catch {} fail(new Error('request timed out')); }, 60000);
+    req.on('response', (res) => {
+      if (res.statusCode !== 200) { res.on('data', () => {}); res.on('end', () => {}); fail(new Error('HTTP ' + res.statusCode + ' from server')); return; }
+      res.on('data', (d) => out.write(d));
+      res.on('error', fail);
+      res.on('end', () => out.end(() => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        const ext = extForResponse(hdr1(res.headers, 'content-type'), tmp, '.json');
+        const final = tmp + ext;
+        try { fs.renameSync(tmp, final); } catch {}
+        resolve(final);
+      }));
+    });
+    req.on('error', fail);
+    req.end();
   });
 }
 
@@ -912,54 +910,33 @@ function downloadUrl(url, headers) {
 // reject on non-2xx — the builder shows the status and the response body.
 function httpRequest({ method, url, headers, body }) {
   return new Promise((resolve, reject) => {
-    headers = headers || {};
-    if (!Object.keys(headers).some((k) => k.toLowerCase() === 'accept-encoding')) headers['Accept-Encoding'] = 'gzip, deflate, br';
+    const meth = String(method || 'GET').toUpperCase();
     const started = Date.now();
     const tmp = path.join(downloadsDir(), 'url_' + Date.now());
     const out = fs.createWriteStream(tmp);
-    let redirects = 0;
-    const run = (u, meth) => {
-      const mod = u.startsWith('https:') ? https : http;
-      const req = mod.request(u, { method: meth, headers }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-          redirects++;
-          res.resume();
-          run(new URL(res.headers.location, u).toString(), res.statusCode === 303 ? 'GET' : meth);
-          return;
-        }
-        // Decompress gzip/deflate/br responses (Node doesn't do it automatically).
-        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
-        let stream = res;
-        if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
-        else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
-        else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
-        stream.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
-        stream.pipe(out);
-        out.on('finish', () => out.close(() => {
-          const ct = String(res.headers['content-type'] || '');
-          let ext = ct.includes('json') ? '.json' : ct.includes('xml') ? '.xml' : ct.includes('csv') ? '.csv' : null;
-          if (!ext) {
-            try {
-              const fd = fs.openSync(tmp, 'r');
-              const buf = Buffer.alloc(2048);
-              const n = fs.readSync(fd, buf, 0, 2048, 0);
-              fs.closeSync(fd);
-              ext = sniffExt(buf.slice(0, n).toString('utf8'));
-            } catch { ext = '.txt'; }
-          }
-          const final = tmp + ext;
-          try { fs.renameSync(tmp, final); } catch {}
-          let size = 0;
-          try { size = fs.statSync(final).size; } catch {}
-          resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
-        }));
-      });
-      req.on('error', (e) => { try { fs.unlinkSync(tmp); } catch {} reject(e); });
-      req.setTimeout(60000, () => { req.destroy(new Error('request timed out')); });
-      if (body != null && body !== '' && meth !== 'GET' && meth !== 'HEAD') req.write(body);
-      req.end();
-    };
-    try { run(url, String(method || 'GET').toUpperCase()); } catch (e) { reject(e); }
+    let req;
+    try { req = net.request({ method: meth, url, redirect: 'follow' }); }
+    catch (e) { return reject(e); }
+    for (const [k, v] of Object.entries(headers || {})) { try { req.setHeader(k, v); } catch {} }
+    let settled = false;
+    const fail = (e) => { if (settled) return; settled = true; clearTimeout(timer); try { out.destroy(); } catch {} try { fs.unlinkSync(tmp); } catch {} reject(e); };
+    const timer = setTimeout(() => { try { req.abort(); } catch {} fail(new Error('request timed out')); }, 60000);
+    req.on('response', (res) => {
+      res.on('data', (d) => out.write(d));
+      res.on('error', fail);
+      res.on('end', () => out.end(() => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        const ext = extForResponse(hdr1(res.headers, 'content-type'), tmp, '.txt');
+        const final = tmp + ext;
+        try { fs.renameSync(tmp, final); } catch {}
+        let size = 0;
+        try { size = fs.statSync(final).size; } catch {}
+        resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
+      }));
+    });
+    req.on('error', fail);
+    if (body != null && body !== '' && meth !== 'GET' && meth !== 'HEAD') req.write(body);
+    req.end();
   });
 }
 
