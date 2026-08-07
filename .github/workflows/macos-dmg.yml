@@ -39,10 +39,13 @@ jobs:
 
   build-x64:
     name: Build macOS x64 (Intel)
-    runs-on: macos-13
-    # Best-effort: Intel (macos-13) hosted runners are scarce and can sit in the
-    # queue for a long time. Never let a stuck/failed Intel build fail the run or
-    # block the arm64 release — publish ships arm64 regardless (see publish.if).
+    # GitHub retired the Intel macos-13 hosted image, so the x64 DMG is
+    # cross-built on an Apple Silicon runner: Rust targets x86_64-apple-darwin,
+    # electron-builder packages --x64, and the composite action force-installs the
+    # x64 DuckDB binding so the Intel app carries the right native engine.
+    runs-on: macos-14
+    # Best-effort: this is an untested cross-build (no Intel Mac to verify on), so
+    # never let an x64 failure fail the run or block the arm64 release.
     continue-on-error: true
     steps:
       - name: Checkout
