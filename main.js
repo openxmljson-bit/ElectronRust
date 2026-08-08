@@ -1339,6 +1339,14 @@ function buildMenu() {
           ],
         },
         { type: 'separator' },
+        {
+          label: 'Fast load (may reorder rows)',
+          type: 'checkbox',
+          checked: !!getSettings().fastLoad,
+          toolTip: 'Speeds up first-time loading of large tabular files, but rows may not appear in exact file order. Filtering, search and SQL are unaffected.',
+          click: (mi) => { saveSetting('fastLoad', mi.checked); },
+        },
+        { type: 'separator' },
         { label: 'Open Cache Folder', click: () => shell.openPath(dbCacheDir()) },
       ],
     },
@@ -1634,8 +1642,15 @@ app.whenReady().then(() => {
   // engine methods (detect, openDataset, buildView, getPage, getRowJson,
   // profileColumn/All, runSql, exportView, diffDatasets, cacheInfo, cancel…).
   ipcMain.handle('duck-invoke', async (_e, { method, params }) => {
-    try { return ok(await duckEngine().invoke(String(method), params)); }
-    catch (err) { return fail(new Error((err && err.message) || 'DuckDB engine error')); }
+    try {
+      // "Fast load" trades exact file row-order for a big ingest speedup
+      // (preserve_insertion_order=false). It only affects a first-time ingest.
+      let p = params;
+      if (String(method) === 'openDataset' && getSettings().fastLoad) {
+        p = { ...(params || {}), options: { ...((params && params.options) || {}), unorderedFast: true } };
+      }
+      return ok(await duckEngine().invoke(String(method), p));
+    } catch (err) { return fail(new Error((err && err.message) || 'DuckDB engine error')); }
   });
 
   ipcMain.handle('jq-available', async () => new Promise((resolve) => {

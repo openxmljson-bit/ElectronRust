@@ -841,7 +841,9 @@ export class Ingestor {
     let fromExpr = plan.reader;
     let projection = buildProjection(schema, effective.flatten === true);
 
-    const compression = 'zstd';
+    // snappy compresses far faster than zstd (bigger cache files, but the cache
+    // is disposable) — a meaningful ingest speedup, especially on slower CPUs.
+    const compression = 'snappy';
     const prelude: string[] = [];
     if (effective.unorderedFast) {
       prelude.push('SET preserve_insertion_order=false');
