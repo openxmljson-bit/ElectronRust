@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('oxj', {
   },
   fileStat: (p) => ipcRenderer.invoke('file-stat', p),
   revealItem: (p) => ipcRenderer.invoke('reveal-item', p),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   onRecentsChanged: (cb) => ipcRenderer.on('recents-changed', () => cb()),
   pathForFile: (file) => webUtils.getPathForFile(file),
   onProgress: (cb) => ipcRenderer.on('ingest-progress', (_e, m) => cb(m)),
