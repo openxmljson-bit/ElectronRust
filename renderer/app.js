@@ -280,6 +280,11 @@ function renderScreen() {
       $('view-toggle').classList.add('hidden');
       $('tree-wrap').classList.add('hidden');
       $('table-wrap').classList.add('hidden');
+      // Table-only tools never apply to plain-text docs (md/html/txt/js…).
+      $('btn-cols').classList.add('hidden');
+      $('table-tools').classList.add('hidden');
+      $('cols-panel').classList.remove('open');
+      $('btn-cols').classList.remove('active-tool');
       closeSource();
       closeSearch();
       $('btn-top').classList.add('hidden');
