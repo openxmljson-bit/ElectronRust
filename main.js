@@ -320,7 +320,7 @@ function newBookmarkId() {
 }
 // Add or update. If id matches an existing bookmark, replace it; otherwise
 // insert. Secrets are encrypted before persisting.
-function saveBookmark(bm) {
+function saveBookmark(bm, silent) {
   const list = readBookmarks();
   const now = Date.now();
   const request = mapAuthSecrets({ ...bm.request, auth: { ...(bm.request && bm.request.auth) } }, encField);
@@ -334,7 +334,7 @@ function saveBookmark(bm) {
     });
   }
   writeBookmarks(list);
-  emitBookmarksChanged();
+  if (!silent) emitBookmarksChanged();
   return list.find((x) => x.name === bm.name) || null;
 }
 function updateBookmarkMeta(id, patch) {
@@ -354,6 +354,126 @@ function removeBookmark(id) {
 function clearBookmarks() {
   try { fs.unlinkSync(bookmarksPath()); } catch {}
   emitBookmarksChanged();
+}
+
+// ---------------- Postman collections (import / export) ----------------
+// Collection-level variables (e.g. {{baseUrl}}). Environment vars live outside
+// the collection file, so unknown {{tokens}} are left literal for the user.
+function pmVars(col) {
+  const map = {};
+  for (const v of (col && col.variable) || []) {
+    if (v && typeof v.key === 'string') map[v.key] = v.value == null ? '' : String(v.value);
+  }
+  return map;
+}
+function pmSubst(s, vars) {
+  if (typeof s !== 'string') return s;
+  return s.replace(/\{\{\s*([\w.\- ]+)\s*\}\}/g, (m, name) => (name in vars ? vars[name] : m));
+}
+function pmKv(arr, vars) {
+  const o = {};
+  for (const e of arr || []) if (e && e.key) o[e.key] = pmSubst(e.value == null ? '' : String(e.value), vars);
+  return o;
+}
+function pmAuth(auth, vars) {
+  if (!auth || !auth.type) return { type: 'none' };
+  if (auth.type === 'bearer') { const o = pmKv(auth.bearer, vars); return { type: 'bearer', token: o.token || '' }; }
+  if (auth.type === 'basic') { const o = pmKv(auth.basic, vars); return { type: 'basic', user: o.username || '', pass: o.password || '' }; }
+  if (auth.type === 'apikey') {
+    const o = pmKv(auth.apikey, vars);
+    const addTo = String(o.in || 'header').toLowerCase() === 'query' ? 'query' : 'header';
+    return { type: 'apikey', header: o.key || '', value: o.value || '', token: o.value || '', addTo };
+  }
+  return { type: 'none' };
+}
+function pmUrl(url, vars) {
+  if (!url) return '';
+  if (typeof url === 'string') return pmSubst(url, vars);
+  if (url.raw) return pmSubst(url.raw, vars);
+  const host = Array.isArray(url.host) ? url.host.join('.') : (url.host || '');
+  const pathPart = Array.isArray(url.path) ? url.path.join('/') : (url.path || '');
+  const proto = url.protocol ? url.protocol + '://' : '';
+  return pmSubst(proto + host + (pathPart ? '/' + pathPart : ''), vars);
+}
+function pmParams(url, vars) {
+  const q = url && typeof url === 'object' && Array.isArray(url.query) ? url.query : [];
+  return q.filter((p) => p && (p.key || p.value)).map((p) => ({
+    on: !p.disabled, key: pmSubst(p.key || '', vars), val: pmSubst(p.value == null ? '' : String(p.value), vars),
+  }));
+}
+function pmHeaders(header, vars) {
+  const h = Array.isArray(header) ? header : [];
+  return h.filter((x) => x && x.key).map((x) => ({
+    on: !x.disabled, key: pmSubst(x.key, vars), val: pmSubst(x.value == null ? '' : String(x.value), vars),
+  }));
+}
+function pmBody(body, vars) {
+  if (!body || !body.mode) return '';
+  if (body.mode === 'raw') return pmSubst(body.raw || '', vars);
+  if (body.mode === 'urlencoded') {
+    return (body.urlencoded || []).filter((e) => e && !e.disabled && e.key)
+      .map((e) => encodeURIComponent(pmSubst(e.key, vars)) + '=' + encodeURIComponent(pmSubst(e.value == null ? '' : String(e.value), vars)))
+      .join('&');
+  }
+  return ''; // formdata / file bodies aren't representable as a text body
+}
+// Recurse the item tree; folders become "Folder / Subfolder / Name" prefixes.
+function pmFlatten(items, vars, prefix, out) {
+  for (const it of items || []) {
+    if (!it) continue;
+    if (Array.isArray(it.item)) {
+      pmFlatten(it.item, vars, prefix ? prefix + ' / ' + (it.name || '') : (it.name || ''), out);
+    } else if (it.request) {
+      const r = it.request;
+      out.push({
+        name: (prefix ? prefix + ' / ' : '') + (it.name || pmUrl(r.url, vars) || 'Request'),
+        request: {
+          method: String(r.method || 'GET').toUpperCase(),
+          url: pmUrl(r.url, vars),
+          params: pmParams(r.url, vars),
+          auth: pmAuth(r.auth, vars),
+          headers: pmHeaders(r.header, vars),
+          body: pmBody(r.body, vars),
+        },
+      });
+    }
+  }
+}
+function importPostman(json) {
+  let col;
+  try { col = JSON.parse(json); } catch { throw new Error('Not a valid JSON file.'); }
+  if (!col || !Array.isArray(col.item)) throw new Error('This does not look like a Postman collection (no "item" list).');
+  const vars = pmVars(col);
+  const flat = [];
+  pmFlatten(col.item, vars, '', flat);
+  for (const bm of flat) saveBookmark({ name: bm.name, request: bm.request, pinned: false }, true);
+  if (flat.length) emitBookmarksChanged();
+  return flat.length;
+}
+// NARIK bookmarks (decrypted) → Postman v2.1 collection object.
+function exportPostman(name) {
+  const item = getBookmarks().map((b) => {
+    const r = b.request || {};
+    const header = (r.headers || []).map((h) => ({ key: h.key, value: h.val, disabled: h.on === false }));
+    const query = (r.params || []).map((p) => ({ key: p.key, value: p.val, disabled: p.on === false }));
+    const url = { raw: r.url || '' };
+    if (query.length) url.query = query;
+    const out = { name: b.name || 'Request', request: { method: r.method || 'GET', header, url } };
+    if (r.body) out.request.body = { mode: 'raw', raw: r.body, options: { raw: { language: 'json' } } };
+    const a = r.auth || {};
+    if (a.type === 'bearer' && a.token) out.request.auth = { type: 'bearer', bearer: [{ key: 'token', value: a.token, type: 'string' }] };
+    else if (a.type === 'basic') out.request.auth = { type: 'basic', basic: [{ key: 'username', value: a.user || '' }, { key: 'password', value: a.pass || '' }] };
+    else if (a.type === 'apikey') out.request.auth = { type: 'apikey', apikey: [{ key: 'key', value: a.header || '' }, { key: 'value', value: a.value || a.token || '' }, { key: 'in', value: a.addTo || 'header' }] };
+    return out;
+  });
+  return {
+    info: {
+      _postman_id: crypto.randomBytes(12).toString('hex'),
+      name: name || 'NARIKJSON Bookmarks',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+    },
+    item,
+  };
 }
 
 // ---------------- cache management ----------------
@@ -1716,6 +1836,27 @@ app.whenReady().then(() => {
   ipcMain.handle('bookmark-update', async (_e, { id, patch }) => { if (id) updateBookmarkMeta(id, patch || {}); return true; });
   ipcMain.handle('bookmark-remove', async (_e, id) => { if (id) removeBookmark(id); return true; });
   ipcMain.handle('bookmarks-clear', async () => { clearBookmarks(); return true; });
+  ipcMain.handle('bookmarks-import-postman', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const res = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: 'Postman collection', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }],
+    });
+    if (res.canceled || !res.filePaths.length) return { cancelled: true, imported: 0 };
+    const text = fs.readFileSync(res.filePaths[0], 'utf8');
+    return { imported: importPostman(text) };
+  });
+  ipcMain.handle('bookmarks-export-postman', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const res = await dialog.showSaveDialog(win, {
+      defaultPath: 'NARIKJSON-bookmarks.postman_collection.json',
+      filters: [{ name: 'Postman collection', extensions: ['json'] }],
+    });
+    if (res.canceled || !res.filePath) return { cancelled: true };
+    const col = exportPostman();
+    fs.writeFileSync(res.filePath, JSON.stringify(col, null, 2));
+    return { path: res.filePath, count: (col.item || []).length };
+  });
 
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
   ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });

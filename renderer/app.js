@@ -3587,6 +3587,19 @@ document.querySelectorAll('.umodal-tab').forEach((b) => b.addEventListener('clic
 $('req-bookmark').addEventListener('click', saveCurrentAsBookmark);
 $('bm-search').addEventListener('input', drawBookmarks);
 $('bm-sort').addEventListener('change', () => { bmSort = $('bm-sort').value; drawBookmarks(); });
+$('bm-import').addEventListener('click', async () => {
+  try {
+    const r = await window.oxj.bookmarks.importPostman();
+    if (r && r.imported) { toast('Imported ' + r.imported + ' request' + (r.imported === 1 ? '' : 's') + ' from Postman', true); renderBookmarks(); }
+    else if (r && !r.cancelled) toast('No requests found in that collection');
+  } catch (e) { toast('Import failed: ' + cleanErr(e)); }
+});
+$('bm-export').addEventListener('click', async () => {
+  try {
+    const r = await window.oxj.bookmarks.exportPostman();
+    if (r && r.path) toast('Exported ' + (r.count || 0) + ' bookmark' + (r.count === 1 ? '' : 's') + ' as a Postman collection', true);
+  } catch (e) { toast('Export failed: ' + cleanErr(e)); }
+});
 $('rc-search').addEventListener('input', drawRecents);
 window.oxj.bookmarks.onChanged(() => {
   if (!$('url-modal').classList.contains('hidden')) {

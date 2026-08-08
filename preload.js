@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('oxj', {
     remove: (id) => ipcRenderer.invoke('bookmark-remove', id),
     clear: () => ipcRenderer.invoke('bookmarks-clear'),
     onChanged: (cb) => ipcRenderer.on('bookmarks-changed', () => cb()),
+    importPostman: () => ipcRenderer.invoke('bookmarks-import-postman'),
+    exportPostman: () => ipcRenderer.invoke('bookmarks-export-postman'),
   },
   license: {
     status: () => ipcRenderer.invoke('license-status'),
