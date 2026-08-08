@@ -280,6 +280,11 @@ function renderScreen() {
       $('view-toggle').classList.add('hidden');
       $('tree-wrap').classList.add('hidden');
       $('table-wrap').classList.add('hidden');
+      // Table-only tools never apply to plain-text docs (md/html/txt/js…).
+      $('btn-cols').classList.add('hidden');
+      $('table-tools').classList.add('hidden');
+      $('cols-panel').classList.remove('open');
+      $('btn-cols').classList.remove('active-tool');
       closeSource();
       closeSearch();
       $('btn-top').classList.add('hidden');
@@ -497,13 +502,13 @@ function fmtDur(sec) {
   if (m) return `${m}m ${s}s`;
   return `${s}s`;
 }
-function toast(msg, info) {
+function toast(msg, info, ms) {
   const t = $('toast');
   t.textContent = msg;
   t.classList.toggle('info', !!info);
   t.classList.remove('hidden');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.add('hidden'), info ? 3500 : 6000);
+  toast._t = setTimeout(() => t.classList.add('hidden'), ms || (info ? 3500 : 6000));
 }
 // Styled, roomy replacement for window.confirm(). Returns a Promise<boolean>.
 function confirmDialog(opts) {
@@ -1262,15 +1267,17 @@ const DATA_FALLBACK_LANGS = {
   xml: 'xml', csv: 'plaintext', tsv: 'plaintext', tab: 'plaintext',
 };
 
-window.oxj.onIngestError((m) => {
+window.oxj.onIngestError(async (m) => {
   const t = tabById(m.tabId);
   if (!t) return;
   const file = t.file;
   if (file) {
     const ext = String(file).split('.').pop().toLowerCase();
     const lang = DATA_FALLBACK_LANGS[ext] || plainLangFor(file) || 'plaintext';
-    toast('Could not parse ' + baseName(file) + ' (' + m.message + ') — opened as read-only text');
-    openPlainPath(file, t, lang);
+    // Load the text FIRST, then show the notice — otherwise the plain loader's
+    // own toasts ("Reading file…" / "Large file…") override it and it just blinks.
+    await openPlainPath(file, t, lang);
+    toast('Could not parse ' + baseName(file) + ' (' + m.message + ') — opened as read-only text', false, 9000);
     return;
   }
   t.phase = 'empty';
