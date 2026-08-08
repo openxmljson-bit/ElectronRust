@@ -502,13 +502,13 @@ function fmtDur(sec) {
   if (m) return `${m}m ${s}s`;
   return `${s}s`;
 }
-function toast(msg, info) {
+function toast(msg, info, ms) {
   const t = $('toast');
   t.textContent = msg;
   t.classList.toggle('info', !!info);
   t.classList.remove('hidden');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.add('hidden'), info ? 3500 : 6000);
+  toast._t = setTimeout(() => t.classList.add('hidden'), ms || (info ? 3500 : 6000));
 }
 // Styled, roomy replacement for window.confirm(). Returns a Promise<boolean>.
 function confirmDialog(opts) {
@@ -1062,11 +1062,13 @@ async function openPath(p, tab, force, opts) {
     // just error out, tell the user and open the file as read-only text so they
     // can still see and search its contents.
     if (!wantDuck && !fmt) {
-      const label = ext === 'xml' ? 'XML' : (ext === 'yaml' || ext === 'yml') ? 'YAML' : 'JSON';
       const langMap = { json: 'json', ndjson: 'json', jsonl: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml' };
       const fbLang = langMap[ext] || plainLangFor(p) || 'plaintext';
-      toast('Not valid ' + label + ' — opened as read-only text');
-      return openPlainPath(p, t, fbLang);
+      // Load the text first, THEN show the notice — otherwise the plain loader's
+      // own toasts ("Reading file…" / "Large file…") override it and it just blinks.
+      await openPlainPath(p, t, fbLang);
+      toast('Could not parse ' + baseName(p) + ' (' + cleanErr(e) + ') — opened as read-only text', false, 9000);
+      return t;
     }
     t.phase = 'empty';
     t.title = 'New Tab';
