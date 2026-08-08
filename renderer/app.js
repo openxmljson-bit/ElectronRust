@@ -1058,18 +1058,6 @@ async function openPath(p, tab, force, opts) {
     else await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
-    // A structured parse (JSON/XML/YAML via the Rust engine) failed. Rather than
-    // just error out, tell the user and open the file as read-only text so they
-    // can still see and search its contents.
-    if (!wantDuck && !fmt) {
-      const langMap = { json: 'json', ndjson: 'json', jsonl: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml' };
-      const fbLang = langMap[ext] || plainLangFor(p) || 'plaintext';
-      // Load the text first, THEN show the notice — otherwise the plain loader's
-      // own toasts ("Reading file…" / "Large file…") override it and it just blinks.
-      await openPlainPath(p, t, fbLang);
-      toast('Could not parse ' + baseName(p) + ' (' + cleanErr(e) + ') — opened as read-only text', false, 9000);
-      return t;
-    }
     t.phase = 'empty';
     t.title = 'New Tab';
     if (t === cur) { renderTabs(); renderScreen(); }
@@ -1279,15 +1267,17 @@ const DATA_FALLBACK_LANGS = {
   xml: 'xml', csv: 'plaintext', tsv: 'plaintext', tab: 'plaintext',
 };
 
-window.oxj.onIngestError((m) => {
+window.oxj.onIngestError(async (m) => {
   const t = tabById(m.tabId);
   if (!t) return;
   const file = t.file;
   if (file) {
     const ext = String(file).split('.').pop().toLowerCase();
     const lang = DATA_FALLBACK_LANGS[ext] || plainLangFor(file) || 'plaintext';
-    toast('Could not parse ' + baseName(file) + ' (' + m.message + ') — opened as read-only text');
-    openPlainPath(file, t, lang);
+    // Load the text FIRST, then show the notice — otherwise the plain loader's
+    // own toasts ("Reading file…" / "Large file…") override it and it just blinks.
+    await openPlainPath(file, t, lang);
+    toast('Could not parse ' + baseName(file) + ' (' + m.message + ') — opened as read-only text', false, 9000);
     return;
   }
   t.phase = 'empty';
