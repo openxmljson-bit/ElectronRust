@@ -1198,10 +1198,17 @@ function updateProgressDom(t) {
     $('prog-phase').classList.add('hidden');
     return;
   }
-  $('prog-title').textContent = pr.mem ? 'Loading into memory' : 'Loading into database';
-  $('prog-phase').textContent = pr.mem
-    ? 'Indexing in memory — no database needed, this is quick…'
-    : 'Building index… this can take a while on large files';
+  // pr.mem is undefined until the engine's first 'start' event reports the mode.
+  // Show a neutral title until then, so it doesn't flash "database" → "memory".
+  const modeKnown = pr.mem !== undefined;
+  $('prog-title').textContent = !modeKnown
+    ? 'Opening ' + baseName(t.file || '')
+    : (pr.mem ? 'Loading into memory' : 'Loading into database');
+  $('prog-phase').textContent = !modeKnown
+    ? ''
+    : (pr.mem
+        ? 'Indexing in memory — no database needed, this is quick…'
+        : 'Building index… this can take a while on large files');
   $('prog-file').textContent = t.file || '';
   const total = pr.total || 1;
   const pct = Math.min(100, ((pr.bytes || 0) / total) * 100);
