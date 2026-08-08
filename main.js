@@ -2048,6 +2048,14 @@ app.whenReady().then(() => {
     try { if (typeof p === 'string' && p) { shell.showItemInFolder(p); return true; } } catch {}
     return false;
   });
+  // Open a URL in the OS default browser — http/https only, never in-app.
+  ipcMain.handle('open-external', async (_e, url) => {
+    try {
+      const u = new URL(String(url));
+      if (u.protocol === 'http:' || u.protocol === 'https:') { await shell.openExternal(u.href); return true; }
+    } catch {}
+    return false;
+  });
 
   // Dock icon in dev (`npm start`); packaged builds use build/icon.icns.
   if (process.platform === 'darwin' && app.dock) {

@@ -2164,6 +2164,7 @@ function ensureColState(t) {
   if (!t.colOrder || t.colOrder.length !== n) t.colOrder = t.tableHeaders.map((_, i) => i);
   if (!t.colHidden) t.colHidden = new Set();
   if (!t.colPinned) t.colPinned = new Set();
+  if (!t.colLinks) t.colLinks = new Set(); // columns explicitly rendered as links
 }
 
 // Original column indices in display order: pinned first (frozen), then the
@@ -2395,6 +2396,16 @@ function selRect(t) {
   };
 }
 
+// "Render URLs as Hyperlinks" — a table format option, toggled from Actions and
+// remembered across sessions. Only http(s) URLs are linkified; they open in the
+// OS browser (never in-app).
+let renderLinks = localStorage.getItem('oxj-render-links') === '1';
+function isHttpUrl(v) {
+  const s = String(v).trim();
+  if (s.length > 2048 || !/^https?:\/\//i.test(s)) return false;
+  try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
+}
+
 function renderTable() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
@@ -2436,8 +2447,20 @@ function renderTable() {
       if (t.colPinned.has(c)) { td.classList.add('pinned'); td.style.left = pinnedLeft[vi] + 'px'; }
       if (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1) td.classList.add('cell-sel');
       const cell = cells[c];
-      td.textContent = cell && cell.value != null ? cell.value : '';
-      if (cell && cell.value) td.title = cell.value;
+      const val = cell && cell.value != null ? cell.value : '';
+      const linkThis = renderLinks || (t.colLinks && t.colLinks.has(c));
+      if (linkThis && val && isHttpUrl(val)) {
+        const a = document.createElement('a');
+        a.className = 'cell-link';
+        a.textContent = val;
+        a.href = val;
+        a.addEventListener('mousedown', (e) => e.stopPropagation()); // don't start a cell drag
+        a.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); window.oxj.openExternal(val); });
+        td.appendChild(a);
+      } else {
+        td.textContent = val;
+      }
+      if (val) td.title = val;
       td.addEventListener('mousedown', (e) => startCellSelect(e, t, i, vi));
       td.addEventListener('mouseenter', (e) => extendCellSelect(e, t, i, vi));
       row.appendChild(td);
@@ -2554,6 +2577,8 @@ function showHeaderMenu(e, t, c) {
     { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
+    { sep: true },
+    { label: (t.colLinks && t.colLinks.has(c) ? '✓ ' : '') + 'Render as links', action: () => { ensureColState(t); if (t.colLinks.has(c)) t.colLinks.delete(c); else t.colLinks.add(c); renderTable(); } },
     { sep: true },
     { label: 'Show All Columns', action: () => { t.colHidden.clear(); afterColChange(t); } },
   );
@@ -2738,6 +2763,11 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
     items.push({ label: 'SQL Console…', action: () => openSqlConsole(t) });
     items.push({ label: 'Compare with…', disabled: !otherDuckTabs(t).length, action: () => openDiffPicker(t) });
   }
+  items.push({ sep: true });
+  items.push({
+    label: (renderLinks ? '✓ ' : '') + 'Render URLs as Hyperlinks',
+    action: () => { renderLinks = !renderLinks; localStorage.setItem('oxj-render-links', renderLinks ? '1' : '0'); renderTable(); },
+  });
   showContextMenu(r.left, r.bottom + 4, items);
 });
 // Table "Export ▾" dropdown: CSV / JSON.

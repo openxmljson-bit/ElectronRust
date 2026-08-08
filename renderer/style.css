@@ -699,6 +699,8 @@ body.light .narik-brand {
 /* cell selection */
 .td.cell-sel { background: var(--sel); }
 .table-row .td { cursor: default; user-select: none; }
+.td .cell-link { color: var(--accent); text-decoration: none; cursor: pointer; }
+.td .cell-link:hover { text-decoration: underline; }
 
 /* table toolbar */
 /* Table action buttons now live inline in the main toolbar. */
