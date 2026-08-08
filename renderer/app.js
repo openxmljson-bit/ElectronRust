@@ -1058,6 +1058,16 @@ async function openPath(p, tab, force, opts) {
     else await window.oxj.loadFile(t.id, p, !!force, fmt || undefined);
   } catch (e) {
     if (!tabAlive(t)) return;
+    // A structured parse (JSON/XML/YAML via the Rust engine) failed. Rather than
+    // just error out, tell the user and open the file as read-only text so they
+    // can still see and search its contents.
+    if (!wantDuck && !fmt) {
+      const label = ext === 'xml' ? 'XML' : (ext === 'yaml' || ext === 'yml') ? 'YAML' : 'JSON';
+      const langMap = { json: 'json', ndjson: 'json', jsonl: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml' };
+      const fbLang = langMap[ext] || plainLangFor(p) || 'plaintext';
+      toast('Not valid ' + label + ' — opened as read-only text');
+      return openPlainPath(p, t, fbLang);
+    }
     t.phase = 'empty';
     t.title = 'New Tab';
     if (t === cur) { renderTabs(); renderScreen(); }
