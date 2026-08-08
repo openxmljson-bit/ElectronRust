@@ -1649,7 +1649,14 @@ app.whenReady().then(() => {
       if (String(method) === 'openDataset' && getSettings().fastLoad) {
         p = { ...(params || {}), options: { ...((params && params.options) || {}), unorderedFast: true } };
       }
-      return ok(await duckEngine().invoke(String(method), p));
+      const result = await duckEngine().invoke(String(method), p);
+      // Count tabular opens in the File Activity stats too (delimited/Parquet
+      // files go through DuckDB, not loadFile, so they'd otherwise be missed).
+      if (String(method) === 'openDataset' && params && params.path) {
+        const ext = String(params.path).split('.').pop().toLowerCase();
+        bumpStat(ext || 'csv');
+      }
+      return ok(result);
     } catch (err) { return fail(new Error((err && err.message) || 'DuckDB engine error')); }
   });
 
