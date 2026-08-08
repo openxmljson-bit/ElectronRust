@@ -80,6 +80,12 @@ function wireUpdater() {
   updaterWired = true;
   autoUpdater.autoDownload = false;           // ask the user before downloading
   autoUpdater.autoInstallOnAppQuit = true;
+  // Force a FULL download rather than a differential (block-level) update. The
+  // differential path doesn't reliably replace native binaries under
+  // app.asar.unpacked (the DuckDB .node/DLL), which left auto-updated Windows
+  // installs with a stale binding and a crashing engine. A fresh install always
+  // worked; a full download makes every update behave like one.
+  autoUpdater.disableDifferentialDownload = true;
   autoUpdater.on('error', (err) => {
     updateBusy = false;
     const win = BrowserWindow.getFocusedWindow();
