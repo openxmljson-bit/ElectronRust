@@ -439,16 +439,180 @@ function pmFlatten(items, vars, prefix, out) {
     }
   }
 }
-function importPostman(json) {
-  let col;
-  try { col = JSON.parse(json); } catch { throw new Error('Not a valid JSON file.'); }
-  if (!col || !Array.isArray(col.item)) throw new Error('This does not look like a Postman collection (no "item" list).');
+function postmanToFlat(col) {
   const vars = pmVars(col);
   const flat = [];
   pmFlatten(col.item, vars, '', flat);
-  for (const bm of flat) saveBookmark({ name: bm.name, request: bm.request, pinned: false }, true);
+  return flat;
+}
+
+// ---- Insomnia (v4 export) ----
+function insAuth(a) {
+  if (!a || !a.type || a.type === 'none' || a.disabled) return { type: 'none' };
+  if (a.type === 'bearer') return { type: 'bearer', token: a.token || '' };
+  if (a.type === 'basic') return { type: 'basic', user: a.username || '', pass: a.password || '' };
+  if (a.type === 'apikey') return { type: 'apikey', header: a.key || '', value: a.value || '', token: a.value || '', addTo: String(a.addTo || 'header').toLowerCase().includes('quer') ? 'query' : 'header' };
+  return { type: 'none' };
+}
+function insBody(b) {
+  if (!b) return '';
+  if (b.mimeType === 'application/x-www-form-urlencoded') {
+    return (b.params || []).filter((e) => e && !e.disabled && e.name).map((e) => encodeURIComponent(e.name) + '=' + encodeURIComponent(e.value == null ? '' : String(e.value))).join('&');
+  }
+  return typeof b.text === 'string' ? b.text : '';
+}
+function insomniaToFlat(doc) {
+  const resources = Array.isArray(doc.resources) ? doc.resources : [];
+  const groups = {};
+  for (const r of resources) if (r && r._type === 'request_group') groups[r._id] = { name: r.name || '', parentId: r.parentId };
+  const folderPath = (parentId) => {
+    const parts = []; let pid = parentId, guard = 0;
+    while (pid && groups[pid] && guard++ < 50) { parts.unshift(groups[pid].name); pid = groups[pid].parentId; }
+    return parts.filter(Boolean).join(' / ');
+  };
+  const out = [];
+  for (const r of resources) {
+    if (!r || r._type !== 'request') continue;
+    const prefix = folderPath(r.parentId);
+    out.push({
+      name: (prefix ? prefix + ' / ' : '') + (r.name || r.url || 'Request'),
+      request: {
+        method: String(r.method || 'GET').toUpperCase(),
+        url: r.url || '',
+        params: (r.parameters || []).filter((p) => p && (p.name || p.value)).map((p) => ({ on: !p.disabled, key: p.name || '', val: p.value == null ? '' : String(p.value) })),
+        auth: insAuth(r.authentication),
+        headers: (r.headers || []).filter((h) => h && h.name).map((h) => ({ on: !h.disabled, key: h.name, val: h.value == null ? '' : String(h.value) })),
+        body: insBody(r.body),
+      },
+    });
+  }
+  return out;
+}
+function exportInsomnia() {
+  const wid = 'wrk_narik';
+  const resources = [{ _id: wid, _type: 'workspace', name: 'NARIKJSON Bookmarks', parentId: null }];
+  getBookmarks().forEach((b, i) => {
+    const r = b.request || {}; const a = r.auth || {};
+    let authentication = {};
+    if (a.type === 'bearer' && a.token) authentication = { type: 'bearer', token: a.token };
+    else if (a.type === 'basic') authentication = { type: 'basic', username: a.user || '', password: a.pass || '' };
+    else if (a.type === 'apikey') authentication = { type: 'apikey', key: a.header || '', value: a.value || a.token || '', addTo: a.addTo === 'query' ? 'queryParams' : 'header' };
+    resources.push({
+      _id: 'req_' + i, _type: 'request', parentId: wid, name: b.name || 'Request',
+      method: r.method || 'GET', url: r.url || '',
+      headers: (r.headers || []).map((h) => ({ name: h.key, value: h.val, disabled: h.on === false })),
+      parameters: (r.params || []).map((p) => ({ name: p.key, value: p.val, disabled: p.on === false })),
+      authentication,
+      body: r.body ? { mimeType: 'application/json', text: r.body } : {},
+    });
+  });
+  return { _type: 'export', __export_format: 4, __export_date: new Date().toISOString(), __export_source: 'narikjson', resources };
+}
+
+// ---- OpenAPI 3.x / Swagger 2.0 ----
+function tryJson(s) { try { return JSON.parse(s); } catch { return s; } }
+function openapiToFlat(doc) {
+  const isV2 = !!doc.swagger && !doc.openapi;
+  let base = '';
+  if (isV2) {
+    const scheme = (doc.schemes && doc.schemes[0]) || 'https';
+    base = doc.host ? scheme + '://' + doc.host + (doc.basePath || '') : (doc.basePath || '');
+  } else {
+    base = (doc.servers && doc.servers[0] && doc.servers[0].url) || '';
+  }
+  const methods = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'];
+  const paths = doc.paths || {};
+  const out = [];
+  for (const p of Object.keys(paths)) {
+    const item = paths[p] || {};
+    for (const m of methods) {
+      const op = item[m];
+      if (!op || typeof op !== 'object') continue;
+      const allParams = [...(item.parameters || []), ...(op.parameters || [])];
+      const params = [], headers = [];
+      for (const pa of allParams) {
+        if (!pa || !pa.name) continue;
+        const ex = pa.example != null ? String(pa.example) : (pa.schema && pa.schema.default != null ? String(pa.schema.default) : (pa.default != null ? String(pa.default) : ''));
+        if (pa.in === 'query') params.push({ on: pa.required !== false, key: pa.name, val: ex });
+        else if (pa.in === 'header') headers.push({ on: true, key: pa.name, val: ex });
+      }
+      let body = '';
+      if (!isV2 && op.requestBody && op.requestBody.content) {
+        const j = op.requestBody.content['application/json'];
+        if (j && j.example != null) body = JSON.stringify(j.example, null, 2);
+        else if (j && j.schema && j.schema.example != null) body = JSON.stringify(j.schema.example, null, 2);
+      } else if (isV2) {
+        const bp = allParams.find((x) => x && x.in === 'body');
+        if (bp && bp.schema && bp.schema.example != null) body = JSON.stringify(bp.schema.example, null, 2);
+      }
+      out.push({ name: op.operationId || op.summary || (m.toUpperCase() + ' ' + p), request: { method: m.toUpperCase(), url: base + p, params, auth: { type: 'none' }, headers, body } });
+    }
+  }
+  return out;
+}
+function exportOpenapi() {
+  const servers = new Set();
+  const paths = {};
+  for (const b of getBookmarks()) {
+    const r = b.request || {};
+    let origin = '', pathname = r.url || '/';
+    try { const u = new URL(r.url); origin = u.origin; pathname = u.pathname || '/'; } catch {}
+    if (origin) servers.add(origin);
+    const method = String(r.method || 'GET').toLowerCase();
+    // OpenAPI can't repeat a method on a path; disambiguate collisions with a suffix.
+    let pkey = pathname, n = 1;
+    while (paths[pkey] && paths[pkey][method]) pkey = pathname + ' (' + (++n) + ')';
+    if (!paths[pkey]) paths[pkey] = {};
+    const parameters = (r.params || []).map((p) => ({ name: p.key, in: 'query', required: p.on !== false, schema: { type: 'string', default: p.val } }));
+    const op = { summary: b.name || '', operationId: String(b.name || method).replace(/[^A-Za-z0-9_]/g, '_'), parameters, responses: { 200: { description: 'OK' } } };
+    if (r.body) op.requestBody = { content: { 'application/json': { example: tryJson(r.body) } } };
+    paths[pkey][method] = op;
+  }
+  return { openapi: '3.0.3', info: { title: 'NARIKJSON Bookmarks', version: '1.0.0' }, servers: [...servers].map((u) => ({ url: u })), paths };
+}
+
+// ---- NARIK native ----
+function narikToFlat(doc) {
+  const arr = Array.isArray(doc) ? doc : (Array.isArray(doc.bookmarks) ? doc.bookmarks : null);
+  if (!arr) throw new Error('This does not look like a NARIK bookmarks file.');
+  return arr.filter((b) => b && b.request).map((b) => ({ name: b.name || 'Request', request: b.request, pinned: !!b.pinned }));
+}
+function exportNarik() {
+  return { app: 'NARIKJSON', kind: 'bookmarks', version: 1, exportedAt: new Date().toISOString(), bookmarks: getBookmarks() };
+}
+
+// ---- shared save + dispatchers ----
+function saveFlat(flat) {
+  for (const bm of flat) saveBookmark({ name: bm.name, request: bm.request, pinned: !!bm.pinned }, true);
   if (flat.length) emitBookmarksChanged();
   return flat.length;
+}
+function importByFormat(format, text) {
+  let doc;
+  try { doc = JSON.parse(text); } catch { throw new Error('Not a valid JSON file.'); }
+  let flat;
+  if (format === 'postman') {
+    if (!doc || !Array.isArray(doc.item)) throw new Error('Not a Postman collection (no "item" list).');
+    flat = postmanToFlat(doc);
+  } else if (format === 'insomnia') {
+    if (!doc || doc._type !== 'export' || !Array.isArray(doc.resources)) throw new Error('Not an Insomnia export file.');
+    flat = insomniaToFlat(doc);
+  } else if (format === 'openapi') {
+    if (!doc || (!doc.openapi && !doc.swagger) || !doc.paths) throw new Error('Not an OpenAPI / Swagger spec.');
+    flat = openapiToFlat(doc);
+  } else if (format === 'narik') {
+    flat = narikToFlat(doc);
+  } else {
+    throw new Error('Unknown import format.');
+  }
+  return saveFlat(flat);
+}
+function exportByFormat(format) {
+  if (format === 'postman') return { text: JSON.stringify(exportPostman(), null, 2), defaultName: 'NARIKJSON.postman_collection.json' };
+  if (format === 'insomnia') return { text: JSON.stringify(exportInsomnia(), null, 2), defaultName: 'NARIKJSON.insomnia_export.json' };
+  if (format === 'openapi') return { text: JSON.stringify(exportOpenapi(), null, 2), defaultName: 'NARIKJSON.openapi.json' };
+  if (format === 'narik') return { text: JSON.stringify(exportNarik(), null, 2), defaultName: 'NARIKJSON-bookmarks.json' };
+  throw new Error('Unknown export format.');
 }
 // NARIK bookmarks (decrypted) → Postman v2.1 collection object.
 function exportPostman(name) {
@@ -1836,26 +2000,26 @@ app.whenReady().then(() => {
   ipcMain.handle('bookmark-update', async (_e, { id, patch }) => { if (id) updateBookmarkMeta(id, patch || {}); return true; });
   ipcMain.handle('bookmark-remove', async (_e, id) => { if (id) removeBookmark(id); return true; });
   ipcMain.handle('bookmarks-clear', async () => { clearBookmarks(); return true; });
-  ipcMain.handle('bookmarks-import-postman', async (e) => {
+  ipcMain.handle('bookmarks-import', async (e, { format }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
-      filters: [{ name: 'Postman collection', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }],
+      filters: [{ name: 'JSON', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }],
     });
     if (res.canceled || !res.filePaths.length) return { cancelled: true, imported: 0 };
     const text = fs.readFileSync(res.filePaths[0], 'utf8');
-    return { imported: importPostman(text) };
+    return { imported: importByFormat(String(format || 'postman'), text) };
   });
-  ipcMain.handle('bookmarks-export-postman', async (e) => {
+  ipcMain.handle('bookmarks-export', async (e, { format }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
+    const { text, defaultName } = exportByFormat(String(format || 'postman'));
     const res = await dialog.showSaveDialog(win, {
-      defaultPath: 'NARIKJSON-bookmarks.postman_collection.json',
-      filters: [{ name: 'Postman collection', extensions: ['json'] }],
+      defaultPath: defaultName,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (res.canceled || !res.filePath) return { cancelled: true };
-    const col = exportPostman();
-    fs.writeFileSync(res.filePath, JSON.stringify(col, null, 2));
-    return { path: res.filePath, count: (col.item || []).length };
+    fs.writeFileSync(res.filePath, text);
+    return { path: res.filePath };
   });
 
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.

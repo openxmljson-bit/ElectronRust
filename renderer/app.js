@@ -3587,18 +3587,34 @@ document.querySelectorAll('.umodal-tab').forEach((b) => b.addEventListener('clic
 $('req-bookmark').addEventListener('click', saveCurrentAsBookmark);
 $('bm-search').addEventListener('input', drawBookmarks);
 $('bm-sort').addEventListener('change', () => { bmSort = $('bm-sort').value; drawBookmarks(); });
-$('bm-import').addEventListener('click', async () => {
+const BM_FORMATS = [
+  { fmt: 'postman', label: 'Postman collection' },
+  { fmt: 'insomnia', label: 'Insomnia export' },
+  { fmt: 'openapi', label: 'OpenAPI / Swagger' },
+  { fmt: 'narik', label: 'NARIK bookmarks' },
+];
+async function importFormat(fmt, label) {
   try {
-    const r = await window.oxj.bookmarks.importPostman();
-    if (r && r.imported) { toast('Imported ' + r.imported + ' request' + (r.imported === 1 ? '' : 's') + ' from Postman', true); renderBookmarks(); }
-    else if (r && !r.cancelled) toast('No requests found in that collection');
+    const r = await window.oxj.bookmarks.import(fmt);
+    if (r && r.imported) { toast('Imported ' + r.imported + ' request' + (r.imported === 1 ? '' : 's') + ' from ' + label, true); renderBookmarks(); }
+    else if (r && !r.cancelled) toast('No requests found in that file');
   } catch (e) { toast('Import failed: ' + cleanErr(e)); }
-});
-$('bm-export').addEventListener('click', async () => {
+}
+async function exportFormat(fmt, label) {
   try {
-    const r = await window.oxj.bookmarks.exportPostman();
-    if (r && r.path) toast('Exported ' + (r.count || 0) + ' bookmark' + (r.count === 1 ? '' : 's') + ' as a Postman collection', true);
+    const r = await window.oxj.bookmarks.export(fmt);
+    if (r && r.path) toast('Exported bookmarks as ' + label, true);
   } catch (e) { toast('Export failed: ' + cleanErr(e)); }
+}
+$('bm-import').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, BM_FORMATS.map((f) => ({ label: f.label, action: () => importFormat(f.fmt, f.label) })));
+});
+$('bm-export').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, BM_FORMATS.map((f) => ({ label: f.label, action: () => exportFormat(f.fmt, f.label) })));
 });
 $('rc-search').addEventListener('input', drawRecents);
 window.oxj.bookmarks.onChanged(() => {
