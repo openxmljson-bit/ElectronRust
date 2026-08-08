@@ -2164,6 +2164,7 @@ function ensureColState(t) {
   if (!t.colOrder || t.colOrder.length !== n) t.colOrder = t.tableHeaders.map((_, i) => i);
   if (!t.colHidden) t.colHidden = new Set();
   if (!t.colPinned) t.colPinned = new Set();
+  if (!t.colLinks) t.colLinks = new Set(); // columns explicitly rendered as links
 }
 
 // Original column indices in display order: pinned first (frozen), then the
@@ -2447,7 +2448,8 @@ function renderTable() {
       if (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1) td.classList.add('cell-sel');
       const cell = cells[c];
       const val = cell && cell.value != null ? cell.value : '';
-      if (renderLinks && val && isHttpUrl(val)) {
+      const linkThis = renderLinks || (t.colLinks && t.colLinks.has(c));
+      if (linkThis && val && isHttpUrl(val)) {
         const a = document.createElement('a');
         a.className = 'cell-link';
         a.textContent = val;
@@ -2575,6 +2577,8 @@ function showHeaderMenu(e, t, c) {
     { sep: true },
     { label: t.colPinned.has(c) ? 'Unpin Column' : 'Pin to Left', action: () => { if (t.colPinned.has(c)) t.colPinned.delete(c); else t.colPinned.add(c); buildTableHead(t); renderTable(); } },
     { label: 'Hide Column', action: () => { t.colHidden.add(c); afterColChange(t); } },
+    { sep: true },
+    { label: (t.colLinks && t.colLinks.has(c) ? '✓ ' : '') + 'Render as links', action: () => { ensureColState(t); if (t.colLinks.has(c)) t.colLinks.delete(c); else t.colLinks.add(c); renderTable(); } },
     { sep: true },
     { label: 'Show All Columns', action: () => { t.colHidden.clear(); afterColChange(t); } },
   );
