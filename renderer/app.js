@@ -2526,6 +2526,19 @@ function selRect(t) {
 // remembered across sessions. Only http(s) URLs are linkified; they open in the
 // OS browser (never in-app).
 let renderLinks = localStorage.getItem('oxj-render-links') === '1';
+
+// Global table theme (colour skin + striping), applied via a body class and
+// remembered across sessions.
+const TABLE_THEMES = ['default', 'striped', 'clean', 'ocean', 'forest', 'grape', 'amber'];
+let tableTheme = localStorage.getItem('oxj-table-theme') || 'default';
+function applyTableTheme(name) {
+  if (!TABLE_THEMES.includes(name)) name = 'default';
+  tableTheme = name;
+  try { localStorage.setItem('oxj-table-theme', name); } catch {}
+  document.body.classList.remove(...TABLE_THEMES.map((n) => 'tbl-' + n));
+  if (name !== 'default') document.body.classList.add('tbl-' + name);
+}
+applyTableTheme(tableTheme);
 function isHttpUrl(v) {
   const s = String(v).trim();
   if (s.length > 2048 || !/^https?:\/\//i.test(s)) return false;
@@ -2893,6 +2906,18 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   items.push({
     label: (renderLinks ? '✓ ' : '') + 'Render URLs as Hyperlinks',
     action: () => { renderLinks = !renderLinks; localStorage.setItem('oxj-render-links', renderLinks ? '1' : '0'); renderTable(); },
+  });
+  items.push({
+    label: 'Table Theme',
+    submenu: [
+      { name: 'default', label: 'Default' },
+      { name: 'striped', label: 'Striped' },
+      { name: 'clean', label: 'Clean (no stripes)' },
+      { name: 'ocean', label: 'Ocean · blue' },
+      { name: 'forest', label: 'Forest · green' },
+      { name: 'grape', label: 'Grape · purple' },
+      { name: 'amber', label: 'Amber' },
+    ].map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })),
   });
   showContextMenu(r.left, r.bottom + 4, items);
 });
