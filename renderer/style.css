@@ -227,7 +227,7 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
   font-family: var(--mono);
 }
 /* Supported Files card: chips grid + animated blue hover border */
-.formats-card { width: 420px; }
+.formats-card { width: auto; }
 .format-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .format-chips .chip {
   cursor: default;
@@ -359,7 +359,7 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
    a flexible centre, centred as a group. Stacks to one column when narrow. */
 .welcome-row {
   display: grid;
-  grid-template-columns: 340px minmax(300px, 560px) 340px;
+  grid-template-columns: 360px minmax(300px, 560px) 360px;
   justify-content: center;
   align-items: start;
   gap: 24px;
@@ -426,7 +426,7 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 .jq-banner code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-family: var(--mono); }
 .jq-banner.jq-error { border-color: #e0554a; color: #e0817a; background: rgba(224,85,74,.08); }
 /* Engine Mode card */
-.engine-card { width: 420px; }
+.engine-card { width: auto; }
 .engine-seg {
   display: flex; gap: 4px; padding: 3px;
   background: var(--bg3); border: 1px solid var(--border); border-radius: 9px;
