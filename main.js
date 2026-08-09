@@ -1251,7 +1251,10 @@ function normalizeKey(k) {
 // Human plan label from the term. `refMs` should be the moment the key was first
 // seen (≈ purchase), so the span reflects the plan length rather than time left.
 function planLabel(tier, expiresAt, refMs) {
-  if (tier === 'Unbxd' || !expiresAt) return 'Lifetime';
+  // "Lifetime" only when the key genuinely never expires. A tier (even Unbxd)
+  // minted with a finite term is NOT lifetime — otherwise Plan would read
+  // "Lifetime" while "Valid" counts down to an expiry, which is contradictory.
+  if (!expiresAt) return 'Lifetime';
   const exp = Date.parse(expiresAt);
   if (!Number.isFinite(exp)) return 'Lifetime';
   const days = Math.round((exp - (refMs || Date.now())) / 86400000);
@@ -1278,7 +1281,10 @@ function licenseStatus() {
   }
   return {
     licensed: true, email: l.email, tier: l.tier || null, expires_at: l.expires_at || null,
-    plan: l.plan || planLabel(l.tier, l.expires_at, l.cachedAt),
+    // Recompute from the actual term each time rather than trusting a cached
+    // label — so a key stored before the planLabel fix (e.g. an Unbxd key with
+    // a finite expiry cached as "Lifetime") self-corrects without re-activation.
+    plan: planLabel(l.tier, l.expires_at, l.cachedAt),
   };
 }
 
@@ -1389,6 +1395,57 @@ function authHeaders(auth) {
 }
 
 // ---------------- windows & menu ----------------
+// ---------------- OS file associations (double-click / "Open With") ----------------
+// Extensions we register as openable (mirror package.json build.fileAssociations).
+const OPENABLE_EXT = new Set(['json', 'ndjson', 'jsonl', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'psv', 'tab', 'parquet']);
+let appIsReady = false;
+const pendingOpen = [];
+
+function looksOpenable(p) {
+  if (!p || typeof p !== 'string') return false;
+  return OPENABLE_EXT.has(path.extname(p).slice(1).toLowerCase());
+}
+
+// Data-file paths carried in a process argv (Windows/Linux deliver files this way).
+function argvOpenables(argv) {
+  return (argv || []).slice(1).filter((a) => a && !a.startsWith('-') && looksOpenable(a));
+}
+
+// Route one path to the UI: hand it to a live window, else queue it until a
+// window exists and its renderer has loaded (macOS can fire open-file pre-ready).
+function routeOpenPath(p) {
+  if (!p) return;
+  const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (appIsReady && w && !w.isDestroyed() && !w.webContents.isLoading()) {
+    if (w.isMinimized()) w.restore();
+    w.focus();
+    sendMenu(w, 'open-path', p);
+  } else {
+    pendingOpen.push(p);
+  }
+}
+
+function flushPendingOpens() {
+  if (!pendingOpen.length) return;
+  const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (!w || w.isDestroyed()) return;
+  for (const p of pendingOpen.splice(0)) sendMenu(w, 'open-path', p);
+}
+
+// macOS delivers associated files through open-file, which can fire before ready.
+app.on('open-file', (e, p) => { e.preventDefault(); routeOpenPath(p); });
+
+// Single-instance: double-clicking a file while the app is already running
+// (Windows) forwards the new argv here instead of spawning a second process.
+const gotSingleLock = app.requestSingleInstanceLock();
+if (!gotSingleLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    for (const p of argvOpenables(argv)) routeOpenPath(p);
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     minWidth: 880,
@@ -1410,6 +1467,9 @@ function createWindow() {
   win.maximize();
   win.show();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // Once the renderer is up, drain any files queued from an OS "open with"
+  // (macOS open-file firing before ready, or a cold-start file argument).
+  win.webContents.once('did-finish-load', () => flushPendingOpens());
   win.on('closed', () => {
     // Reap engine processes belonging to this window.
     for (const [tabId, s] of [...sessions]) {
@@ -1683,6 +1743,11 @@ const ok = (data) => ({ ok: true, data });
 const fail = (e) => ({ ok: false, error: String((e && e.message) || e) });
 
 app.whenReady().then(() => {
+  if (!gotSingleLock) return; // a second instance already forwarded its files
+  appIsReady = true;
+  // Cold start via double-click (Windows/Linux) puts the file path in argv.
+  for (const p of argvOpenables(process.argv)) pendingOpen.push(p);
+
   ipcMain.handle('pick-file', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const res = await dialog.showOpenDialog(win, {
