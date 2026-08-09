@@ -5896,7 +5896,7 @@ async function refreshMembership() {
   }
   addRow('Status', 'Active');
   addRow('Plan', s.plan || 'NARIK Edition');
-  addRow('Account', s.email || '');
+  addRow('Email', s.email || '');
   addRow('Valid', valid, validCls);
   wrap.classList.remove('hidden');
 }
