@@ -754,78 +754,40 @@ body.light .narik-brand {
 .td .cell-link { color: var(--accent); text-decoration: none; cursor: pointer; }
 .td .cell-link:hover { text-decoration: underline; }
 
-/* ================= Table themes (global, body class) ================= */
-/* Striping variants */
-body.tbl-striped .table-row.zebra { background: rgba(255,255,255,.055); }
-body.light.tbl-striped .table-row.zebra { background: rgba(0,0,0,.05); }
-body.tbl-clean .table-row.zebra { background: transparent; }
-body.tbl-clean .table-row.zebra .td.idx { background: var(--bg); }
-body.tbl-clean .table-row.zebra .td.pinned { background: var(--bg); }
+/* ================= Table themes (global, body class) =================
+   Each theme sets tint variables; the generic rules below apply them across
+   the whole grid — including the sticky row-number gutter (first column),
+   pinned columns, and the header — so nothing is left un-themed.
+   --t  = row/zebra tint,  --th = header + gutter tint,  --ta = sort accent. */
+body.tbl-graphite { --t: rgba(255,255,255,.02); --thi: rgba(255,255,255,.05); --th: rgba(255,255,255,0); --ta: var(--accent); }
+body.light.tbl-graphite { --t: rgba(0,0,0,.02); --thi: rgba(0,0,0,.05); }
+body.tbl-striped { --t: rgba(255,255,255,.06); --thi: rgba(255,255,255,.09); --th: rgba(255,255,255,0); --ta: var(--accent); }
+body.light.tbl-striped { --t: rgba(0,0,0,.05); --thi: rgba(0,0,0,.08); }
+body.tbl-clean { --t: rgba(255,255,255,0); --thi: rgba(255,255,255,.05); --th: rgba(255,255,255,0); --ta: var(--accent); }
+body.light.tbl-clean { --thi: rgba(0,0,0,.05); }
 
-/* Colour skins: a translucent tint layered over the base surface so both
-   light and dark modes work. Header + zebra rows + hover + sort accent. */
-body.tbl-ocean .table-head { background: linear-gradient(0deg, rgba(77,163,255,.16), rgba(77,163,255,.16)), var(--bg3); }
-body.tbl-ocean .table-row.zebra { background: rgba(77,163,255,.09); }
-body.tbl-ocean .table-row:hover { background: rgba(77,163,255,.17); }
-body.tbl-ocean .table-row.zebra .td.idx,
-body.tbl-ocean .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(77,163,255,.09), rgba(77,163,255,.09)), var(--bg2); }
-body.tbl-ocean .th.sorted, body.tbl-ocean .sort-arrow { color: #4da3ff; }
+body.tbl-ocean  { --t: rgba(77,163,255,.09);  --thi: rgba(77,163,255,.17);  --th: rgba(77,163,255,.16);  --ta: #4da3ff; }
+body.tbl-forest { --t: rgba(46,168,110,.10);  --thi: rgba(46,168,110,.18);  --th: rgba(46,168,110,.16);  --ta: #2ea86e; }
+body.tbl-grape  { --t: rgba(127,119,221,.11); --thi: rgba(127,119,221,.20); --th: rgba(127,119,221,.18); --ta: #8f86e8; }
+body.tbl-amber  { --t: rgba(224,160,44,.12);  --thi: rgba(224,160,44,.20);  --th: rgba(224,160,44,.18);  --ta: #e0a02c; }
+body.tbl-rose   { --t: rgba(224,82,130,.10);  --thi: rgba(224,82,130,.19);  --th: rgba(224,82,130,.17);  --ta: #e05282; }
+body.tbl-teal   { --t: rgba(45,190,190,.10);  --thi: rgba(45,190,190,.19);  --th: rgba(45,190,190,.17);  --ta: #2dbebe; }
+body.tbl-coral  { --t: rgba(224,110,80,.11);  --thi: rgba(224,110,80,.20);  --th: rgba(224,110,80,.17);  --ta: #e06e50; }
+body.tbl-slate  { --t: rgba(130,144,168,.12); --thi: rgba(130,144,168,.20); --th: rgba(130,144,168,.20); --ta: #9aa6bd; }
+body.tbl-indigo { --t: rgba(92,108,230,.11);  --thi: rgba(92,108,230,.20);  --th: rgba(92,108,230,.18);  --ta: #6c7ce6; }
 
-body.tbl-forest .table-head { background: linear-gradient(0deg, rgba(46,168,110,.16), rgba(46,168,110,.16)), var(--bg3); }
-body.tbl-forest .table-row.zebra { background: rgba(46,168,110,.10); }
-body.tbl-forest .table-row:hover { background: rgba(46,168,110,.18); }
-body.tbl-forest .table-row.zebra .td.idx,
-body.tbl-forest .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(46,168,110,.10), rgba(46,168,110,.10)), var(--bg2); }
-body.tbl-forest .th.sorted, body.tbl-forest .sort-arrow { color: #2ea86e; }
-
-body.tbl-grape .table-head { background: linear-gradient(0deg, rgba(127,119,221,.18), rgba(127,119,221,.18)), var(--bg3); }
-body.tbl-grape .table-row.zebra { background: rgba(127,119,221,.11); }
-body.tbl-grape .table-row:hover { background: rgba(127,119,221,.20); }
-body.tbl-grape .table-row.zebra .td.idx,
-body.tbl-grape .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(127,119,221,.11), rgba(127,119,221,.11)), var(--bg2); }
-body.tbl-grape .th.sorted, body.tbl-grape .sort-arrow { color: #8f86e8; }
-
-body.tbl-amber .table-head { background: linear-gradient(0deg, rgba(224,160,44,.18), rgba(224,160,44,.18)), var(--bg3); }
-body.tbl-amber .table-row.zebra { background: rgba(224,160,44,.12); }
-body.tbl-amber .table-row:hover { background: rgba(224,160,44,.20); }
-body.tbl-amber .table-row.zebra .td.idx,
-body.tbl-amber .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,160,44,.12), rgba(224,160,44,.12)), var(--bg2); }
-body.tbl-amber .th.sorted, body.tbl-amber .sort-arrow { color: #e0a02c; }
-
-body.tbl-rose .table-head { background: linear-gradient(0deg, rgba(224,82,130,.17), rgba(224,82,130,.17)), var(--bg3); }
-body.tbl-rose .table-row.zebra { background: rgba(224,82,130,.10); }
-body.tbl-rose .table-row:hover { background: rgba(224,82,130,.19); }
-body.tbl-rose .table-row.zebra .td.idx,
-body.tbl-rose .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,82,130,.10), rgba(224,82,130,.10)), var(--bg2); }
-body.tbl-rose .th.sorted, body.tbl-rose .sort-arrow { color: #e05282; }
-
-body.tbl-teal .table-head { background: linear-gradient(0deg, rgba(45,190,190,.17), rgba(45,190,190,.17)), var(--bg3); }
-body.tbl-teal .table-row.zebra { background: rgba(45,190,190,.10); }
-body.tbl-teal .table-row:hover { background: rgba(45,190,190,.19); }
-body.tbl-teal .table-row.zebra .td.idx,
-body.tbl-teal .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(45,190,190,.10), rgba(45,190,190,.10)), var(--bg2); }
-body.tbl-teal .th.sorted, body.tbl-teal .sort-arrow { color: #2dbebe; }
-
-body.tbl-coral .table-head { background: linear-gradient(0deg, rgba(224,110,80,.17), rgba(224,110,80,.17)), var(--bg3); }
-body.tbl-coral .table-row.zebra { background: rgba(224,110,80,.11); }
-body.tbl-coral .table-row:hover { background: rgba(224,110,80,.20); }
-body.tbl-coral .table-row.zebra .td.idx,
-body.tbl-coral .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,110,80,.11), rgba(224,110,80,.11)), var(--bg2); }
-body.tbl-coral .th.sorted, body.tbl-coral .sort-arrow { color: #e06e50; }
-
-body.tbl-slate .table-head { background: linear-gradient(0deg, rgba(130,144,168,.20), rgba(130,144,168,.20)), var(--bg3); }
-body.tbl-slate .table-row.zebra { background: rgba(130,144,168,.12); }
-body.tbl-slate .table-row:hover { background: rgba(130,144,168,.20); }
-body.tbl-slate .table-row.zebra .td.idx,
-body.tbl-slate .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(130,144,168,.12), rgba(130,144,168,.12)), var(--bg2); }
-body.tbl-slate .th.sorted, body.tbl-slate .sort-arrow { color: #9aa6bd; }
-
-body.tbl-indigo .table-head { background: linear-gradient(0deg, rgba(92,108,230,.18), rgba(92,108,230,.18)), var(--bg3); }
-body.tbl-indigo .table-row.zebra { background: rgba(92,108,230,.11); }
-body.tbl-indigo .table-row:hover { background: rgba(92,108,230,.20); }
-body.tbl-indigo .table-row.zebra .td.idx,
-body.tbl-indigo .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(92,108,230,.11), rgba(92,108,230,.11)), var(--bg2); }
-body.tbl-indigo .th.sorted, body.tbl-indigo .sort-arrow { color: #6c7ce6; }
+/* Apply the active theme's tints everywhere (a tbl-* class is always present). */
+body[class*="tbl-"] .table-head,
+body[class*="tbl-"] .th.idx,
+body[class*="tbl-"] .th.pinned { background: linear-gradient(0deg, var(--th), var(--th)), var(--bg3); }
+body[class*="tbl-"] .table-row.zebra { background: var(--t); }
+body[class*="tbl-"] .table-row:hover { background: var(--thi); }
+body[class*="tbl-"] .table-row .td.idx,
+body[class*="tbl-"] .td.pinned { background: linear-gradient(0deg, var(--t), var(--t)), var(--bg); }
+body[class*="tbl-"] .table-row.zebra .td.idx,
+body[class*="tbl-"] .table-row.zebra .td.pinned { background: linear-gradient(0deg, var(--t), var(--t)), var(--bg2); }
+body[class*="tbl-"] .th.sorted,
+body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 
 /* table toolbar */
 /* Table action buttons now live inline in the main toolbar. */
