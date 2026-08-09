@@ -5962,5 +5962,6 @@ $('welcome-manage').addEventListener('click', () => openLicenseLock(true)); // r
 // ---------- init ----------
 initMonaco();
 window.oxj.getTheme().then((eff) => applyTheme(eff)).catch(() => {});
+window.oxj.appVersion().then((v) => { const el = $('app-version'); if (el && v) el.textContent = 'v' + v; }).catch(() => {});
 newTab(true);
 initLicense();
