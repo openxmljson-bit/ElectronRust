@@ -843,45 +843,161 @@ async function refreshStats() {
   wrap.classList.remove('hidden');
   const total = entries.reduce((sum, [, v]) => sum + v, 0) || 1;
 
+  statEntries = entries;
+  statTotal = total;
+  drawStatsChart();
+}
+
+// The File Activity card cycles through chart styles: a different one is chosen
+// on each app launch, and clicking the chart switches to the next.
+const STAT_CHARTS = ['donut', 'bars', 'waffle', 'polar', 'treemap'];
+let statEntries = [];
+let statTotal = 1;
+let statChartType = 'donut';
+(function pickStatChartForThisLaunch() {
+  try {
+    const i = (parseInt(localStorage.getItem('oxj-stat-chart-idx') || '0', 10) || 0) % STAT_CHARTS.length;
+    statChartType = STAT_CHARTS[i];
+    localStorage.setItem('oxj-stat-chart-idx', String((i + 1) % STAT_CHARTS.length));
+  } catch { statChartType = STAT_CHARTS[0]; }
+})();
+
+function drawStatsChart() {
+  const list = $('stats-list');
+  list.textContent = '';
+  const entries = statEntries, total = statTotal;
+  if (!entries.length) return;
   const chart = document.createElement('div');
   chart.className = 'stats-chart';
+  chart.title = 'Click to switch chart';
+  chart.addEventListener('click', () => {
+    statChartType = STAT_CHARTS[(STAT_CHARTS.indexOf(statChartType) + 1) % STAT_CHARTS.length];
+    drawStatsChart();
+  });
+  const viz = document.createElement('div');
+  viz.className = 'stats-viz stats-viz-' + statChartType;
+  const t = statChartType;
+  if (t === 'bars') statBars(viz, entries, total);
+  else if (t === 'waffle') statWaffle(viz, entries, total);
+  else if (t === 'polar') statPolar(viz, entries, total);
+  else if (t === 'treemap') statTreemap(viz, entries, total);
+  else statDonut(viz, entries, total);
+  chart.appendChild(viz);
+  // Charts that don't label themselves get a legend below.
+  if (t === 'donut' || t === 'polar' || t === 'waffle') chart.appendChild(statLegend(entries));
+  list.appendChild(chart);
+}
 
-  // Donut via conic-gradient — compact, fixed height.
-  const donut = document.createElement('div');
-  donut.className = 'donut';
-  let acc = 0;
-  const stops = entries.map(([, v], i) => {
-    const from = (acc / total) * 360;
-    acc += v;
-    const to = (acc / total) * 360;
-    return STAT_PALETTE[i % STAT_PALETTE.length] + ' ' + from.toFixed(2) + 'deg ' + to.toFixed(2) + 'deg';
-  }).join(', ');
-  donut.style.background = 'conic-gradient(' + stops + ')';
-  const center = document.createElement('div');
-  center.className = 'donut-center';
-  center.innerHTML = '<b>' + fmtInt(total) + '</b><span>files</span>';
-  donut.appendChild(center);
-
+function statLegend(entries) {
   const legend = document.createElement('div');
   legend.className = 'stat-legend';
   entries.forEach(([fmt, count], i) => {
     const item = document.createElement('div');
     item.className = 'legend-item';
-    const dot = document.createElement('span');
-    dot.className = 'legend-dot';
-    dot.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
-    const name = document.createElement('span');
-    name.className = 'legend-name';
-    name.textContent = fmt;
-    const num = document.createElement('span');
-    num.className = 'legend-count';
-    num.textContent = fmtInt(count);
+    const dot = document.createElement('span'); dot.className = 'legend-dot'; dot.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
+    const name = document.createElement('span'); name.className = 'legend-name'; name.textContent = fmt;
+    const num = document.createElement('span'); num.className = 'legend-count'; num.textContent = fmtInt(count);
     item.append(dot, name, num);
     legend.appendChild(item);
   });
+  return legend;
+}
 
-  chart.append(donut, legend);
-  list.appendChild(chart);
+function statDonut(viz, entries, total) {
+  const donut = document.createElement('div');
+  donut.className = 'donut';
+  let acc = 0;
+  const stops = entries.map(([, v], i) => {
+    const from = (acc / total) * 360; acc += v; const to = (acc / total) * 360;
+    return STAT_PALETTE[i % STAT_PALETTE.length] + ' ' + from.toFixed(2) + 'deg ' + to.toFixed(2) + 'deg';
+  }).join(', ');
+  donut.style.background = 'conic-gradient(' + stops + ')';
+  const center = document.createElement('div'); center.className = 'donut-center';
+  center.innerHTML = '<b>' + fmtInt(total) + '</b><span>files</span>';
+  donut.appendChild(center);
+  viz.appendChild(donut);
+}
+
+// Horizontal ranking bars: label · bar · count · percentage.
+function statBars(viz, entries, total) {
+  const max = entries[0][1] || 1;
+  const box = document.createElement('div'); box.className = 'stat-bars';
+  entries.slice(0, 10).forEach(([fmt, v], i) => {
+    const row = document.createElement('div'); row.className = 'stat-bar-row';
+    const lbl = document.createElement('span'); lbl.className = 'stat-bar-lbl'; lbl.textContent = fmt; lbl.title = fmt;
+    const track = document.createElement('div'); track.className = 'stat-bar-track';
+    const fill = document.createElement('div'); fill.className = 'stat-bar-fill';
+    fill.style.width = Math.max(3, (v / max) * 100).toFixed(1) + '%';
+    fill.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
+    track.appendChild(fill);
+    const num = document.createElement('span'); num.className = 'stat-bar-num'; num.textContent = fmtInt(v);
+    const pct = document.createElement('span'); pct.className = 'stat-bar-pct'; pct.textContent = (v / total * 100).toFixed(1) + '%';
+    row.append(lbl, track, num, pct);
+    box.appendChild(row);
+  });
+  viz.appendChild(box);
+}
+
+// 10×10 waffle: cells allocated proportionally, rounded to 100.
+function statWaffle(viz, entries, total) {
+  const grid = document.createElement('div'); grid.className = 'stat-waffle';
+  const cells = [];
+  entries.forEach(([, v], i) => {
+    const n = Math.round((v / total) * 100);
+    for (let k = 0; k < n && cells.length < 100; k++) cells.push(STAT_PALETTE[i % STAT_PALETTE.length]);
+  });
+  while (cells.length < 100) cells.push('var(--bg3)');
+  cells.slice(0, 100).forEach((c) => { const d = document.createElement('div'); d.className = 'stat-waffle-cell'; d.style.background = c; grid.appendChild(d); });
+  viz.appendChild(grid);
+}
+
+// Polar area (equal angles, radius ∝ √value so area ∝ value).
+function statPolar(viz, entries) {
+  const n = Math.min(entries.length, 8);
+  const max = entries.reduce((m, [, v]) => Math.max(m, v), 1);
+  const cx = 75, cy = 75, R = 68;
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 150 150'); svg.setAttribute('width', '150'); svg.setAttribute('height', '150');
+  for (let i = 0; i < n; i++) {
+    const v = entries[i][1];
+    const a0 = (i / n) * 2 * Math.PI - Math.PI / 2;
+    const a1 = ((i + 1) / n) * 2 * Math.PI - Math.PI / 2;
+    const r = R * Math.sqrt(v / max);
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', `M ${cx} ${cy} L ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z`);
+    p.setAttribute('fill', STAT_PALETTE[i % STAT_PALETTE.length]);
+    p.setAttribute('fill-opacity', '0.85');
+    svg.appendChild(p);
+  }
+  viz.appendChild(svg);
+}
+
+// Treemap: proportional tiles via alternating spiral slices.
+function statTreemap(viz, entries) {
+  const box = document.createElement('div'); box.className = 'stat-treemap';
+  const items = entries.slice(0, 7);
+  const addTile = (e, x, y, w, h) => {
+    const [fmt, v] = e;
+    const i = items.indexOf(e);
+    const t = document.createElement('div'); t.className = 'stat-tile';
+    t.style.left = x + '%'; t.style.top = y + '%'; t.style.width = w + '%'; t.style.height = h + '%';
+    t.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
+    t.innerHTML = '<span class="tl">' + htmlEsc(fmt) + '</span><span class="tn">' + fmtInt(v) + '</span>';
+    box.appendChild(t);
+  };
+  const place = (list, x, y, w, h, horiz) => {
+    if (!list.length) return;
+    if (list.length === 1) { addTile(list[0], x, y, w, h); return; }
+    const sum = list.reduce((a, e) => a + e[1], 0) || 1;
+    const frac = list[0][1] / sum;
+    if (horiz) { const rw = w * frac; addTile(list[0], x, y, rw, h); place(list.slice(1), x + rw, y, w - rw, h, false); }
+    else { const rh = h * frac; addTile(list[0], x, y, w, rh); place(list.slice(1), x, y + rh, w, h - rh, true); }
+  };
+  place(items, 0, 0, 100, 100, true);
+  viz.appendChild(box);
 }
 
 // ---------- cache info box ----------

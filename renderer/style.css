@@ -438,7 +438,9 @@ body.light .engine-opt.active { color: #fff; }
 .head-scope { color: var(--fg-dim); font-weight: 400; font-size: 12px; }
 .stats-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
 /* Donut chart */
-.stats-chart { display: flex; align-items: center; gap: 16px; }
+.stats-chart { display: flex; align-items: center; gap: 14px; cursor: pointer; flex-wrap: wrap; }
+.stats-viz { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+.stats-viz-bars, .stats-viz-treemap { flex: 1 1 100%; width: 100%; }
 .donut {
   width: 104px; height: 104px;
   border-radius: 50%;
@@ -459,6 +461,21 @@ body.light .engine-opt.active { color: #fff; }
 .legend-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .legend-name { flex: 1; }
 .legend-count { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* File Activity — alternate chart styles */
+.stat-bars { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.stat-bar-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.stat-bar-lbl { flex: 0 0 52px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.stat-bar-track { flex: 1; height: 12px; background: var(--bg3); border-radius: 6px; overflow: hidden; min-width: 20px; }
+.stat-bar-fill { height: 100%; border-radius: 6px; }
+.stat-bar-num { flex: 0 0 auto; min-width: 34px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-bar-pct { flex: 0 0 auto; min-width: 42px; text-align: right; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.stat-waffle { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; width: 150px; }
+.stat-waffle-cell { aspect-ratio: 1; border-radius: 2px; }
+.stat-treemap { position: relative; width: 100%; height: 150px; }
+.stat-tile { position: absolute; box-sizing: border-box; border: 2px solid var(--bg2); border-radius: 4px; overflow: hidden; }
+.stat-tile .tl { position: absolute; left: 6px; top: 5px; font-size: 10px; font-weight: 800; color: rgba(0,0,0,.68); letter-spacing: .2px; }
+.stat-tile .tn { position: absolute; right: 6px; bottom: 5px; font-size: 12px; font-weight: 800; color: rgba(0,0,0,.72); }
 .stat-row {
   display: flex; align-items: center; gap: 12px;
   padding: 5px 8px;
