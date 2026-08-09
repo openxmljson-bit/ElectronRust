@@ -792,6 +792,41 @@ body.tbl-amber .table-row.zebra .td.idx,
 body.tbl-amber .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,160,44,.12), rgba(224,160,44,.12)), var(--bg2); }
 body.tbl-amber .th.sorted, body.tbl-amber .sort-arrow { color: #e0a02c; }
 
+body.tbl-rose .table-head { background: linear-gradient(0deg, rgba(224,82,130,.17), rgba(224,82,130,.17)), var(--bg3); }
+body.tbl-rose .table-row.zebra { background: rgba(224,82,130,.10); }
+body.tbl-rose .table-row:hover { background: rgba(224,82,130,.19); }
+body.tbl-rose .table-row.zebra .td.idx,
+body.tbl-rose .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,82,130,.10), rgba(224,82,130,.10)), var(--bg2); }
+body.tbl-rose .th.sorted, body.tbl-rose .sort-arrow { color: #e05282; }
+
+body.tbl-teal .table-head { background: linear-gradient(0deg, rgba(45,190,190,.17), rgba(45,190,190,.17)), var(--bg3); }
+body.tbl-teal .table-row.zebra { background: rgba(45,190,190,.10); }
+body.tbl-teal .table-row:hover { background: rgba(45,190,190,.19); }
+body.tbl-teal .table-row.zebra .td.idx,
+body.tbl-teal .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(45,190,190,.10), rgba(45,190,190,.10)), var(--bg2); }
+body.tbl-teal .th.sorted, body.tbl-teal .sort-arrow { color: #2dbebe; }
+
+body.tbl-coral .table-head { background: linear-gradient(0deg, rgba(224,110,80,.17), rgba(224,110,80,.17)), var(--bg3); }
+body.tbl-coral .table-row.zebra { background: rgba(224,110,80,.11); }
+body.tbl-coral .table-row:hover { background: rgba(224,110,80,.20); }
+body.tbl-coral .table-row.zebra .td.idx,
+body.tbl-coral .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(224,110,80,.11), rgba(224,110,80,.11)), var(--bg2); }
+body.tbl-coral .th.sorted, body.tbl-coral .sort-arrow { color: #e06e50; }
+
+body.tbl-slate .table-head { background: linear-gradient(0deg, rgba(130,144,168,.20), rgba(130,144,168,.20)), var(--bg3); }
+body.tbl-slate .table-row.zebra { background: rgba(130,144,168,.12); }
+body.tbl-slate .table-row:hover { background: rgba(130,144,168,.20); }
+body.tbl-slate .table-row.zebra .td.idx,
+body.tbl-slate .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(130,144,168,.12), rgba(130,144,168,.12)), var(--bg2); }
+body.tbl-slate .th.sorted, body.tbl-slate .sort-arrow { color: #9aa6bd; }
+
+body.tbl-indigo .table-head { background: linear-gradient(0deg, rgba(92,108,230,.18), rgba(92,108,230,.18)), var(--bg3); }
+body.tbl-indigo .table-row.zebra { background: rgba(92,108,230,.11); }
+body.tbl-indigo .table-row:hover { background: rgba(92,108,230,.20); }
+body.tbl-indigo .table-row.zebra .td.idx,
+body.tbl-indigo .table-row.zebra .td.pinned { background: linear-gradient(0deg, rgba(92,108,230,.11), rgba(92,108,230,.11)), var(--bg2); }
+body.tbl-indigo .th.sorted, body.tbl-indigo .sort-arrow { color: #6c7ce6; }
+
 /* table toolbar */
 /* Table action buttons now live inline in the main toolbar. */
 .table-tools { display: inline-flex; align-items: center; gap: 8px; }

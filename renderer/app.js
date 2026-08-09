@@ -2527,16 +2527,32 @@ function selRect(t) {
 // OS browser (never in-app).
 let renderLinks = localStorage.getItem('oxj-render-links') === '1';
 
-// Global table theme (colour skin + striping), applied via a body class and
-// remembered across sessions.
-const TABLE_THEMES = ['default', 'striped', 'clean', 'ocean', 'forest', 'grape', 'amber'];
+// Global table theme (colour skin + striping), applied via a body class,
+// remembered across sessions, and mirrored to the native View menu.
+const TABLE_THEME_DEFS = [
+  { name: 'default', label: 'Default' },
+  { name: 'striped', label: 'Striped' },
+  { name: 'clean', label: 'Clean (no stripes)' },
+  { name: 'ocean', label: 'Ocean · blue' },
+  { name: 'forest', label: 'Forest · green' },
+  { name: 'grape', label: 'Grape · purple' },
+  { name: 'amber', label: 'Amber' },
+  { name: 'rose', label: 'Rose · pink' },
+  { name: 'teal', label: 'Teal · cyan' },
+  { name: 'coral', label: 'Coral' },
+  { name: 'slate', label: 'Slate · grey' },
+  { name: 'indigo', label: 'Indigo' },
+];
+const TABLE_THEMES = TABLE_THEME_DEFS.map((t) => t.name);
 let tableTheme = localStorage.getItem('oxj-table-theme') || 'default';
-function applyTableTheme(name) {
+function applyTableTheme(name, fromMenu) {
   if (!TABLE_THEMES.includes(name)) name = 'default';
   tableTheme = name;
   try { localStorage.setItem('oxj-table-theme', name); } catch {}
   document.body.classList.remove(...TABLE_THEMES.map((n) => 'tbl-' + n));
   if (name !== 'default') document.body.classList.add('tbl-' + name);
+  // Keep the native View-menu radio in sync (skip when the change came from it).
+  if (!fromMenu) { try { window.oxj.setTableTheme(name); } catch {} }
 }
 applyTableTheme(tableTheme);
 function isHttpUrl(v) {
@@ -2909,15 +2925,7 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   });
   items.push({
     label: 'Table Theme',
-    submenu: [
-      { name: 'default', label: 'Default' },
-      { name: 'striped', label: 'Striped' },
-      { name: 'clean', label: 'Clean (no stripes)' },
-      { name: 'ocean', label: 'Ocean · blue' },
-      { name: 'forest', label: 'Forest · green' },
-      { name: 'grape', label: 'Grape · purple' },
-      { name: 'amber', label: 'Amber' },
-    ].map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })),
+    submenu: TABLE_THEME_DEFS.map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })),
   });
   showContextMenu(r.left, r.bottom + 4, items);
 });
@@ -3975,6 +3983,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
       break;
     case 'bookmarks':
       openUModalTab('bookmarks');
+      break;
+    case 'table-theme':
+      applyTableTheme(arg, true);
       break;
     case 'activate':
       openLicenseLock(licensed);
