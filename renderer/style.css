@@ -235,6 +235,8 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
   align-items: center;
   justify-content: center;
 }
+.center-bottom-row > .gigabyte-card { flex: 1.4 1 0; }   /* a bit wider, keeps text on one line */
+.center-bottom-row .gigabyte-card .tagline-big { white-space: nowrap; font-size: 20px; letter-spacing: 1.5px; }
 .center-bottom-row .narik-card { padding: 14px 8px; }
 .center-bottom-row .narik-brand { font-size: 30px; }
 .chips { margin: 14px 0 18px; display: flex; gap: 8px; justify-content: center; }
