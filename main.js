@@ -2054,6 +2054,7 @@ app.whenReady().then(() => {
     try { if (typeof p === 'string' && p) { shell.showItemInFolder(p); return true; } } catch {}
     return false;
   });
+  ipcMain.handle('app-version', async () => app.getVersion());
   // Open a URL in the OS default browser — http/https only, never in-app.
   ipcMain.handle('open-external', async (_e, url) => {
     try {

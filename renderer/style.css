@@ -183,6 +183,7 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
 /* ---------- Welcome ---------- */
 #screen-welcome { align-items: center; justify-content: flex-start; padding-top: 18px; }
 .welcome-card {
+  position: relative;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -192,6 +193,11 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
   min-width: 0;
   max-width: 560px;
   box-shadow: 0 18px 60px rgba(0,0,0,.45);
+}
+.app-version {
+  position: absolute; top: 12px; right: 14px;
+  font-family: var(--mono); font-size: 11px; color: var(--fg-dim);
+  letter-spacing: .3px; user-select: text;
 }
 .logo { font-size: 30px; font-weight: 800; letter-spacing: 2px; }
 .logo span { color: var(--accent); }
