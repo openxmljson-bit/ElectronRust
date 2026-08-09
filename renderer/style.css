@@ -216,6 +216,27 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
   background-clip: text;
   color: transparent;
 }
+/* GIGABYTES + NARIK watermark side by side, below the centre card, so the
+   watermark never gets pushed off-screen when the Recent list grows. */
+.center-bottom-row {
+  align-self: stretch;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+.center-bottom-row > .gigabyte-card,
+.center-bottom-row > .narik-card {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  align-self: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.center-bottom-row .narik-card { padding: 14px 8px; }
+.center-bottom-row .narik-brand { font-size: 30px; }
 .chips { margin: 14px 0 18px; display: flex; gap: 8px; justify-content: center; }
 .chip {
   background: var(--bg3);
