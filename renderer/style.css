@@ -501,7 +501,7 @@ body.light .engine-opt.active { color: #fff; }
 .stat-bar-pct { flex: 0 0 auto; min-width: 42px; text-align: right; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 .stat-waffle { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; width: 150px; }
 .stat-waffle-cell { aspect-ratio: 1; border-radius: 2px; }
-.stat-treemap { position: relative; width: 100%; height: 150px; }
+.stat-treemap { position: relative; width: 100%; height: 240px; }
 .stat-tile { position: absolute; box-sizing: border-box; border: 2px solid var(--bg2); border-radius: 4px; overflow: hidden; }
 .stat-tile .tl { position: absolute; left: 6px; top: 5px; font-size: 10px; font-weight: 800; color: rgba(0,0,0,.68); letter-spacing: .2px; }
 .stat-tile .tn { position: absolute; right: 6px; bottom: 5px; font-size: 12px; font-weight: 800; color: rgba(0,0,0,.72); }

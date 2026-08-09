@@ -975,17 +975,27 @@ function statPolar(viz, entries) {
   viz.appendChild(svg);
 }
 
-// Treemap: proportional tiles via alternating spiral slices.
+// Treemap: proportional tiles via alternating spiral slices. Caps the number of
+// tiles (rest merged into "Other") and hides labels on tiles too small to fit,
+// so it stays readable in the narrow card.
 function statTreemap(viz, entries) {
   const box = document.createElement('div'); box.className = 'stat-treemap';
-  const items = entries.slice(0, 7);
+  let items = entries.slice(0, 6);
+  if (entries.length > 6) {
+    const rest = entries.slice(6).reduce((s, [, v]) => s + v, 0);
+    if (rest > 0) items = items.concat([['Other', rest]]);
+  }
   const addTile = (e, x, y, w, h) => {
     const [fmt, v] = e;
     const i = items.indexOf(e);
     const t = document.createElement('div'); t.className = 'stat-tile';
     t.style.left = x + '%'; t.style.top = y + '%'; t.style.width = w + '%'; t.style.height = h + '%';
     t.style.background = STAT_PALETTE[i % STAT_PALETTE.length];
-    t.innerHTML = '<span class="tl">' + htmlEsc(fmt) + '</span><span class="tn">' + fmtInt(v) + '</span>';
+    t.title = fmt + ' — ' + fmtInt(v);
+    let html = '';
+    if (w > 16 && h > 12) html += '<span class="tl">' + htmlEsc(fmt) + '</span>';
+    if (w > 12 && h > 9) html += '<span class="tn">' + fmtInt(v) + '</span>';
+    t.innerHTML = html;
     box.appendChild(t);
   };
   const place = (list, x, y, w, h, horiz) => {
