@@ -2923,10 +2923,6 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
     label: (renderLinks ? '✓ ' : '') + 'Render URLs as Hyperlinks',
     action: () => { renderLinks = !renderLinks; localStorage.setItem('oxj-render-links', renderLinks ? '1' : '0'); renderTable(); },
   });
-  items.push({
-    label: 'Table Theme',
-    submenu: TABLE_THEME_DEFS.map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })),
-  });
   showContextMenu(r.left, r.bottom + 4, items);
 });
 // Table "Export ▾" dropdown: CSV / JSON.
@@ -2938,6 +2934,13 @@ $('btn-tbl-export').addEventListener('click', (ev) => {
     { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
     { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
   ]);
+});
+// Table "Theme ▾" dropdown: colour skins (global, remembered).
+$('btn-tbl-theme').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4,
+    TABLE_THEME_DEFS.map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })));
 });
 
 // ---------- DuckDB dataset diff (compare two delimited tables) ----------
