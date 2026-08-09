@@ -2526,6 +2526,35 @@ function selRect(t) {
 // remembered across sessions. Only http(s) URLs are linkified; they open in the
 // OS browser (never in-app).
 let renderLinks = localStorage.getItem('oxj-render-links') === '1';
+
+// Global table theme (colour skin + striping), applied via a body class,
+// remembered across sessions, and mirrored to the native View menu.
+const TABLE_THEME_DEFS = [
+  { name: 'ocean', label: 'Ocean · blue' },
+  { name: 'graphite', label: 'Graphite' },
+  { name: 'striped', label: 'Striped' },
+  { name: 'clean', label: 'Clean (no stripes)' },
+  { name: 'forest', label: 'Forest · green' },
+  { name: 'grape', label: 'Grape · purple' },
+  { name: 'amber', label: 'Amber' },
+  { name: 'rose', label: 'Rose · pink' },
+  { name: 'teal', label: 'Teal · cyan' },
+  { name: 'coral', label: 'Coral' },
+  { name: 'slate', label: 'Slate · grey' },
+  { name: 'indigo', label: 'Indigo' },
+];
+const TABLE_THEMES = TABLE_THEME_DEFS.map((t) => t.name);
+let tableTheme = localStorage.getItem('oxj-table-theme') || 'ocean';
+function applyTableTheme(name, fromMenu) {
+  if (!TABLE_THEMES.includes(name)) name = 'ocean';
+  tableTheme = name;
+  try { localStorage.setItem('oxj-table-theme', name); } catch {}
+  document.body.classList.remove(...TABLE_THEMES.map((n) => 'tbl-' + n));
+  document.body.classList.add('tbl-' + name); // 'graphite' has no rules = neutral base
+  // Keep the native View-menu radio in sync (skip when the change came from it).
+  if (!fromMenu) { try { window.oxj.setTableTheme(name); } catch {} }
+}
+applyTableTheme(tableTheme);
 function isHttpUrl(v) {
   const s = String(v).trim();
   if (s.length > 2048 || !/^https?:\/\//i.test(s)) return false;
@@ -2905,6 +2934,13 @@ $('btn-tbl-export').addEventListener('click', (ev) => {
     { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
     { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
   ]);
+});
+// Table "Theme ▾" dropdown: colour skins (global, remembered).
+$('btn-tbl-theme').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const r = ev.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4,
+    TABLE_THEME_DEFS.map((o) => ({ label: (tableTheme === o.name ? '✓ ' : '') + o.label, action: () => applyTableTheme(o.name) })));
 });
 
 // ---------- DuckDB dataset diff (compare two delimited tables) ----------
@@ -3950,6 +3986,9 @@ window.oxj.onMenu(async ({ action, arg }) => {
       break;
     case 'bookmarks':
       openUModalTab('bookmarks');
+      break;
+    case 'table-theme':
+      applyTableTheme(arg, true);
       break;
     case 'activate':
       openLicenseLock(licensed);

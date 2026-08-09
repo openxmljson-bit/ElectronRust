@@ -1559,6 +1559,20 @@ function buildMenu() {
             click: () => setThemePref(v),
           })),
         },
+        {
+          label: 'Table Theme',
+          submenu: [
+            ['ocean', 'Ocean · blue'], ['graphite', 'Graphite'], ['striped', 'Striped'], ['clean', 'Clean (no stripes)'],
+            ['forest', 'Forest · green'], ['grape', 'Grape · purple'],
+            ['amber', 'Amber'], ['rose', 'Rose · pink'], ['teal', 'Teal · cyan'],
+            ['coral', 'Coral'], ['slate', 'Slate · grey'], ['indigo', 'Indigo'],
+          ].map(([name, label]) => ({
+            label,
+            type: 'radio',
+            checked: (getSettings().tableTheme || 'ocean') === name,
+            click: (mi, bw) => { saveSetting('tableTheme', name); sendMenu(bw, 'table-theme', name); },
+          })),
+        },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'forceReload' },
@@ -2055,6 +2069,7 @@ app.whenReady().then(() => {
     return false;
   });
   ipcMain.handle('app-version', async () => app.getVersion());
+  ipcMain.handle('set-table-theme', async (_e, name) => { saveSetting('tableTheme', String(name || 'default')); buildMenu(); return true; });
   // Open a URL in the OS default browser — http/https only, never in-app.
   ipcMain.handle('open-external', async (_e, url) => {
     try {
