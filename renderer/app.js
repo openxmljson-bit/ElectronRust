@@ -2530,10 +2530,10 @@ let renderLinks = localStorage.getItem('oxj-render-links') === '1';
 // Global table theme (colour skin + striping), applied via a body class,
 // remembered across sessions, and mirrored to the native View menu.
 const TABLE_THEME_DEFS = [
-  { name: 'default', label: 'Default' },
+  { name: 'ocean', label: 'Ocean · blue' },
+  { name: 'graphite', label: 'Graphite' },
   { name: 'striped', label: 'Striped' },
   { name: 'clean', label: 'Clean (no stripes)' },
-  { name: 'ocean', label: 'Ocean · blue' },
   { name: 'forest', label: 'Forest · green' },
   { name: 'grape', label: 'Grape · purple' },
   { name: 'amber', label: 'Amber' },
@@ -2544,13 +2544,13 @@ const TABLE_THEME_DEFS = [
   { name: 'indigo', label: 'Indigo' },
 ];
 const TABLE_THEMES = TABLE_THEME_DEFS.map((t) => t.name);
-let tableTheme = localStorage.getItem('oxj-table-theme') || 'default';
+let tableTheme = localStorage.getItem('oxj-table-theme') || 'ocean';
 function applyTableTheme(name, fromMenu) {
-  if (!TABLE_THEMES.includes(name)) name = 'default';
+  if (!TABLE_THEMES.includes(name)) name = 'ocean';
   tableTheme = name;
   try { localStorage.setItem('oxj-table-theme', name); } catch {}
   document.body.classList.remove(...TABLE_THEMES.map((n) => 'tbl-' + n));
-  if (name !== 'default') document.body.classList.add('tbl-' + name);
+  document.body.classList.add('tbl-' + name); // 'graphite' has no rules = neutral base
   // Keep the native View-menu radio in sync (skip when the change came from it).
   if (!fromMenu) { try { window.oxj.setTableTheme(name); } catch {} }
 }
