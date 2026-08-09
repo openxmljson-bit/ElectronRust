@@ -59,6 +59,19 @@
       "**/node_modules/@duckdb/**",
       "**/*.node"
     ],
+    "fileAssociations": [
+      { "ext": "json", "name": "JSON File", "role": "Viewer" },
+      { "ext": "ndjson", "name": "Newline-Delimited JSON", "role": "Viewer" },
+      { "ext": "jsonl", "name": "JSON Lines File", "role": "Viewer" },
+      { "ext": "xml", "name": "XML File", "role": "Viewer" },
+      { "ext": "yaml", "name": "YAML File", "role": "Viewer" },
+      { "ext": "yml", "name": "YAML File", "role": "Viewer" },
+      { "ext": "csv", "name": "CSV File", "role": "Viewer" },
+      { "ext": "tsv", "name": "Tab-Separated Values", "role": "Viewer" },
+      { "ext": "psv", "name": "Pipe-Separated Values", "role": "Viewer" },
+      { "ext": "tab", "name": "Tab-Delimited File", "role": "Viewer" },
+      { "ext": "parquet", "name": "Apache Parquet File", "role": "Viewer" }
+    ],
     "mac": {
       "target": [
         "dmg",
