@@ -12,6 +12,21 @@ const os = require('os');
 const si = require('systeminformation');
 const { DuckClient } = require('./duck-client');
 
+// Folder of the most recently opened document. Save dialogs (export, bookmarks,
+// etc.) default here so a file opened from X exports back to X, instead of the
+// OS default (Downloads). Updated whenever a file is opened, in either engine.
+let lastOpenDir = '';
+function rememberOpenDir(p) {
+  try { if (p && typeof p === 'string') { const d = path.dirname(p); if (d && d !== '.') lastOpenDir = d; } } catch {}
+}
+// Resolve a suggested save name to a full path in the last-opened folder when the
+// name carries no directory of its own; otherwise honour what was passed.
+function defaultSavePath(name) {
+  if (!name) return lastOpenDir || undefined;
+  try { if (lastOpenDir && path.dirname(name) === '.') return path.join(lastOpenDir, name); } catch {}
+  return name;
+}
+
 // ---------------- DuckDB engine (delimited/tabular files) ----------------
 // Lazily booted on first delimited open. Events are forwarded to the renderer.
 let duck = null;
@@ -1039,6 +1054,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   killIngest(tabId, true);
   killSession(tabId);
   addRecent(filePath, fileFormat);
+  rememberOpenDir(filePath);
 
   // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
@@ -1844,7 +1860,7 @@ app.whenReady().then(() => {
   ipcMain.handle('save-text', async (e, { defaultName, text }) => {
     try {
       const win = BrowserWindow.fromWebContents(e.sender);
-      const res = await dialog.showSaveDialog(win, { defaultPath: defaultName });
+      const res = await dialog.showSaveDialog(win, { defaultPath: defaultSavePath(defaultName) });
       if (res.canceled || !res.filePath) return ok(null);
       fs.writeFileSync(res.filePath, text);
       return ok(res.filePath);
@@ -2099,7 +2115,7 @@ app.whenReady().then(() => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const { text, defaultName } = exportByFormat(String(format || 'postman'));
     const res = await dialog.showSaveDialog(win, {
-      defaultPath: defaultName,
+      defaultPath: defaultSavePath(defaultName),
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (res.canceled || !res.filePath) return { cancelled: true };
@@ -2108,12 +2124,12 @@ app.whenReady().then(() => {
   });
 
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
-  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
+  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) { addRecent(p, format || null); rememberOpenDir(p); } return true; });
   // Save-path picker (the DuckDB engine writes the file itself via COPY TO).
   ipcMain.handle('pick-save-path', async (e, { defaultName, filters }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const res = await dialog.showSaveDialog(win, {
-      defaultPath: defaultName || undefined,
+      defaultPath: defaultSavePath(defaultName),
       filters: filters && filters.length ? filters : [{ name: 'All files', extensions: ['*'] }],
     });
     return res.canceled || !res.filePath ? null : res.filePath;
