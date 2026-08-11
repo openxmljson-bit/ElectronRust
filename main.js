@@ -1257,7 +1257,12 @@ function planLabel(tier, expiresAt, refMs) {
   if (!expiresAt) return 'Lifetime';
   const exp = Date.parse(expiresAt);
   if (!Number.isFinite(exp)) return 'Lifetime';
-  const days = Math.round((exp - (refMs || Date.now())) / 86400000);
+  // Measure the term in WHOLE days (expiry is a day boundary; the reference is
+  // rounded down to its day) so the plan reflects the key's original span — a
+  // 7-day key always reads "7-day Trial" regardless of the time of day it was
+  // activated, and never drifts as the clock advances.
+  const ref = refMs || Date.now();
+  const days = Math.floor(exp / 86400000) - Math.floor(ref / 86400000);
   if (days >= 300) return 'Annual';
   if (days >= 25 && days <= 45) return '30-day Trial';
   if (days > 0 && days <= 20) return days + '-day Trial';
