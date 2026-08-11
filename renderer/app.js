@@ -6006,7 +6006,12 @@ async function refreshMembership() {
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
-  $('lic-heading').textContent = licensed ? 'License active — enter a new key to re-activate' : 'Activate to unlock';
+  // Keep the heading a short title and put the instruction on its own line
+  // (the subtitle) so nothing wraps mid-phrase.
+  $('lic-heading').textContent = licensed ? 'License active' : 'Activate to unlock';
+  $('lic-sub').textContent = licensed
+    ? 'Enter a new key to re-activate.'
+    : 'Enter the email and license key from your purchase.';
   setLicError('');
   $('license-lock').classList.remove('hidden');
   setTimeout(() => ($('lic-email').value ? $('lic-key') : $('lic-email')).focus(), 30);
