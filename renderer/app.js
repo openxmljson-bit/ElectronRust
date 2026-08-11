@@ -6006,12 +6006,10 @@ async function refreshMembership() {
 }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
-  // Keep the heading a short title and put the instruction on its own line
-  // (the subtitle) so nothing wraps mid-phrase.
+  // Short title; the "re-activate" note sits on its own line above the standing
+  // purchase instruction (which is always shown) so nothing wraps mid-phrase.
   $('lic-heading').textContent = licensed ? 'License active' : 'Activate to unlock';
-  $('lic-sub').textContent = licensed
-    ? 'Enter a new key to re-activate.'
-    : 'Enter the email and license key from your purchase.';
+  $('lic-reactivate').classList.toggle('hidden', !licensed);
   setLicError('');
   $('license-lock').classList.remove('hidden');
   setTimeout(() => ($('lic-email').value ? $('lic-key') : $('lic-email')).focus(), 30);
