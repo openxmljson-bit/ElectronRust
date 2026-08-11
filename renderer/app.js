@@ -2631,6 +2631,15 @@ let cellDragging = false;
 function startCellSelect(e, t, row, vis) {
   if (e.button !== 0) return;
   e.preventDefault();
+  // Selecting a cell makes the grid the copy context. Because preventDefault
+  // above stops the browser moving focus, explicitly drop any focus/selection
+  // still held by the Source pane so Cmd+C copies the cell, not source text.
+  try {
+    const ae = document.activeElement;
+    if (ae && ae.closest && ae.closest('#source-panel') && ae.blur) ae.blur();
+    const s = window.getSelection && window.getSelection();
+    if (s && !s.isCollapsed) s.removeAllRanges();
+  } catch {}
   cellDragging = true;
   if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
   else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
@@ -2698,6 +2707,18 @@ async function copyTableSelection(t) {
 // the native Edit ▸ Copy accelerator drives it; fast path writes synchronously
 // from loaded pages, otherwise fall back to the async clipboard write.
 document.addEventListener('copy', (e) => {
+  // Don't hijack copy when the user is copying text they selected elsewhere —
+  // the Source pane (Monaco or its <pre> fallback), an input, or any editable.
+  // Only the grid's own cell selection should drive this handler. Require a real
+  // (non-collapsed) text selection for the Source-pane case so a stale cursor
+  // left in the pane doesn't steal copy while the user is working in the grid.
+  if (isEditableFocus()) return;
+  const srcPanel = $('source-panel');
+  const dsel = window.getSelection ? window.getSelection() : null;
+  if (
+    srcPanel && !srcPanel.classList.contains('hidden') &&
+    dsel && !dsel.isCollapsed && dsel.anchorNode && srcPanel.contains(dsel.anchorNode)
+  ) return;
   const t = cur;
   if (!t || t.view !== 'table' || t.plain || !t.tableSel) return;
   const sel = selRect(t);
