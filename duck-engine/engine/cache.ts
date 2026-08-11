@@ -21,7 +21,12 @@ import type {
   OpenOptions,
 } from '../shared/protocol.js';
 
-export const MANIFEST_VERSION = 3;
+// Bump whenever the ingest logic can change how the SAME file parses, so stale
+// cached parses are ignored and the file re-ingests. v4: quote-aware RFC-4180
+// read + extension-first delimiter (a .tsv previously mis-parsed as
+// space-delimited, or fragmented on newlines inside quoted fields, re-reads
+// correctly as one tab-delimited record per row).
+export const MANIFEST_VERSION = 4;
 
 export interface CachePaths {
   root: string;

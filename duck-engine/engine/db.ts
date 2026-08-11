@@ -72,19 +72,24 @@ export function mapDuckError(err: unknown, context?: string): EngineError {
       msg,
     );
   }
+  // Check encoding BEFORE the generic CSV-Error branch: DuckDB reports a bad
+  // encoding as "CSV Error on Line: N ... not utf-8 encoded", so that string
+  // also matches the CSV-Error pattern below. Ordering it first means a
+  // mis-encoded file gets the actionable "not UTF-8" message and hint rather
+  // than the vague "did not parse cleanly".
+  if (/not utf-8|Invalid unicode|byte sequence mismatch/i.test(msg)) {
+    return new EngineError(
+      'parse-failed',
+      'The file is not UTF-8 encoded.',
+      'Pick the right encoding (Latin-1 or UTF-16) in Advanced options.',
+      msg,
+    );
+  }
   if (/CSV Error|Value with unterminated quote|sniffing file|dialect/i.test(msg)) {
     return new EngineError(
       'parse-failed',
       'The delimited file did not parse cleanly.',
       'Set the delimiter and quote character explicitly, or enable "Read every column as text".',
-      msg,
-    );
-  }
-  if (/not utf-8|Invalid unicode/i.test(msg)) {
-    return new EngineError(
-      'parse-failed',
-      'The file is not UTF-8 encoded.',
-      'Pick the right encoding (Latin-1 or UTF-16) in Advanced options.',
       msg,
     );
   }
