@@ -5971,6 +5971,20 @@ document.getElementById('engine-seg').addEventListener('click', async (e) => {
   refreshEngineMode();
 });
 
+// Shorten a long email with a middle ellipsis so it fits the Account card while
+// keeping the readable start of the name and the whole domain (the full address
+// is still shown on hover). "kiran.peddikuppa@netcoreunbxd.com" -> "kiran.pedd…@netcoreunbxd.com".
+function shortEmail(email, max) {
+  if (!email || email.length <= max) return email;
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return email.slice(0, Math.max(1, max - 1)) + '…';
+  const domain = email.slice(at); // includes the '@'
+  const local = email.slice(0, at);
+  const keep = max - domain.length - 1; // room for the local part + the ellipsis
+  if (keep < 3) return email; // domain alone is long — leave it to the CSS/tooltip
+  return local.slice(0, keep) + '…' + domain;
+}
+
 // Membership card on the welcome screen — visible only when a license is active.
 async function refreshMembership() {
   const wrap = $('membership-wrap');
@@ -5981,12 +5995,13 @@ async function refreshMembership() {
   if (!licensed) { wrap.classList.add('hidden'); return; } // may have changed while awaiting
   const list = $('membership-list');
   list.textContent = '';
-  const addRow = (k, v, cls) => {
+  const addRow = (k, v, cls, title) => {
     const row = document.createElement('div');
     row.className = 'stat-kv';
     const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k;
     const vv = document.createElement('span'); vv.className = 'v'; vv.textContent = v;
     if (cls) vv.classList.add(cls);
+    if (title) vv.title = title; // full value on hover when the display is shortened
     row.append(kk, vv);
     list.appendChild(row);
   };
@@ -6000,7 +6015,7 @@ async function refreshMembership() {
   }
   addRow('Status', 'Active');
   addRow('Plan', s.plan || 'NARIK Edition');
-  addRow('Email', s.email || '');
+  addRow('Email', shortEmail(s.email || '', 30), 'ellip', s.email || '');
   addRow('Valid', valid, validCls);
   wrap.classList.remove('hidden');
 }

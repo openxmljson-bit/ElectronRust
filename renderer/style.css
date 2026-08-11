@@ -1208,7 +1208,10 @@ body.resizing .monaco-host, body.resizing .tree-scroll { pointer-events: none; }
 /* Statistics modal rows */
 .stat-kv { display: flex; justify-content: space-between; gap: 24px; padding: 5px 2px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12.5px; }
 .stat-kv:last-child { border-bottom: none; }
-.stat-kv .k { color: var(--fg-dim); }
+.stat-kv .k { color: var(--fg-dim); flex: 0 0 auto; }
+/* A value that may be long (e.g. an email): let it shrink and clip with an
+   ellipsis instead of overflowing the card. */
+.stat-kv .v.ellip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Toast + drop overlay */
 .toast {
