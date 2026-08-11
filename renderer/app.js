@@ -3361,7 +3361,9 @@ async function runTableExportDuck(t, fmt) {
       const res = await window.oxj.duckInvoke('exportView', { datasetId: t.duck.datasetId, view, targetPath: target, format: 'csv', limit: null, includeHeader: true });
       toast('Exported ' + fmtInt(res.rowsWritten) + ' rows → ' + baseName(res.targetPath), true);
     } else {
-      toast('Exporting JSON…', true);
+      // JSON / XML / YAML: assemble row objects from pages, then serialize.
+      const ext = fmt === 'rawjson' ? 'json' : fmt;
+      toast('Exporting ' + ext.toUpperCase() + '…', true);
       const CAP = 200000;
       const total = Math.min(CAP, t.duck.rowCount || 0);
       const out = [];
@@ -3370,7 +3372,8 @@ async function runTableExportDuck(t, fmt) {
         for (const r of (res.rows || [])) { const o = {}; visIdx.forEach((c, k) => { o[names[k]] = r[c]; }); out.push(o); }
         if (!tabAlive(t)) return;
       }
-      const saved = await window.oxj.saveText(stampName('export_' + baseName(t.file || 'table'), 'json'), JSON.stringify(out, null, 2));
+      const text = fmt === 'xml' ? exportXml(out) : fmt === 'yaml' ? toYaml(out) : JSON.stringify(out, null, 2);
+      const saved = await window.oxj.saveText(stampName('export_' + baseName(t.file || 'table'), ext), text);
       if (saved) toast('Exported ' + fmtInt(out.length) + (total < (t.duck.rowCount || 0) ? ' (capped at ' + fmtInt(CAP) + ')' : '') + ' rows → ' + baseName(saved), true);
     }
   } catch (err) { toast('Export failed: ' + cleanErr(err)); }
@@ -4064,7 +4067,10 @@ window.oxj.onMenu(async ({ action, arg }) => {
       copyAsCurl();
       break;
     case 'export-doc':
-      exportDocAs(cur, arg);
+      // Tabular (DuckDB) tabs have no Rust tree to walk — export the rows via
+      // the table exporter (CSV/JSON straight, XML/YAML assembled) instead.
+      if (isDuck(cur)) runTableExport(cur, arg);
+      else exportDocAs(cur, arg);
       break;
     case 'export-selection':
       exportSelection(cur, arg);
