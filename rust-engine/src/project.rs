@@ -275,6 +275,321 @@ pub fn run_project(file: &str, format: &str, paths_file: &str, out: &str) -> Res
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Whole-document streaming conversion: JSON/NDJSON source -> JSON/XML/YAML/CSV.
+//
+// Reuses the same streaming reader as `project` (one array element / ndjson line
+// at a time), so converting a multi-GB document never materialises it in memory
+// — the output is written straight to a file. YAML sources arrive here already
+// converted to a temp JSON by the host; CSV/TSV sources are handled by DuckDB.
+// ---------------------------------------------------------------------------
+
+fn ys(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}
+
+// A YAML flow scalar. Anything that could be misread (looks numeric/boolean,
+// has structural chars or leading/trailing space) is double-quoted via JSON,
+// which is a valid YAML scalar too.
+fn yaml_scalar(v: &Value) -> String {
+    match v {
+        Value::Null => "null".into(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => {
+            let risky = s.is_empty()
+                || s.trim() != s.as_str()
+                || s.parse::<f64>().is_ok()
+                || matches!(
+                    s.to_ascii_lowercase().as_str(),
+                    "true" | "false" | "null" | "yes" | "no" | "~"
+                )
+                || s.chars()
+                    .any(|c| ":#{}[]&*!|>'\"%@`,".contains(c) || c == '\n' || c == '\t');
+            if risky {
+                serde_json::to_string(s).unwrap_or_else(|_| String::from("\"\""))
+            } else {
+                s.clone()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn write_yaml<W: Write>(w: &mut W, v: &Value, indent: usize) -> Result<(), String> {
+    let pad = "  ".repeat(indent);
+    match v {
+        Value::Array(a) => {
+            if a.is_empty() {
+                writeln!(w, "{}[]", pad).map_err(ys)?;
+            }
+            for it in a {
+                if it.is_object() || it.is_array() {
+                    writeln!(w, "{}-", pad).map_err(ys)?;
+                    write_yaml(w, it, indent + 1)?;
+                } else {
+                    writeln!(w, "{}- {}", pad, yaml_scalar(it)).map_err(ys)?;
+                }
+            }
+        }
+        Value::Object(m) => {
+            if m.is_empty() {
+                writeln!(w, "{}{{}}", pad).map_err(ys)?;
+            }
+            for (k, val) in m {
+                if val.is_object() || val.is_array() {
+                    writeln!(w, "{}{}:", pad, k).map_err(ys)?;
+                    write_yaml(w, val, indent + 1)?;
+                } else {
+                    writeln!(w, "{}{}: {}", pad, k, yaml_scalar(val)).map_err(ys)?;
+                }
+            }
+        }
+        _ => {
+            writeln!(w, "{}{}", pad, yaml_scalar(v)).map_err(ys)?;
+        }
+    }
+    Ok(())
+}
+
+fn xml_esc(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            _ => o.push(c),
+        }
+    }
+    o
+}
+
+// A safe XML element name from an arbitrary key.
+fn xml_name(k: &str) -> String {
+    let n: String = k
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    match n.chars().next() {
+        Some(c) if c.is_alphabetic() || c == '_' => n,
+        _ => format!("_{}", n),
+    }
+}
+
+fn write_xml<W: Write>(w: &mut W, v: &Value, name: &str, indent: usize) -> Result<(), String> {
+    let pad = "  ".repeat(indent);
+    let tag = xml_name(name);
+    match v {
+        Value::Array(a) => {
+            for it in a {
+                write_xml(w, it, name, indent)?;
+            }
+        }
+        Value::Object(m) => {
+            if m.is_empty() {
+                writeln!(w, "{}<{}/>", pad, tag).map_err(ys)?;
+                return Ok(());
+            }
+            writeln!(w, "{}<{}>", pad, tag).map_err(ys)?;
+            for (k, val) in m {
+                write_xml(w, val, k, indent + 1)?;
+            }
+            writeln!(w, "{}</{}>", pad, tag).map_err(ys)?;
+        }
+        Value::Null => {
+            writeln!(w, "{}<{}></{}>", pad, tag, tag).map_err(ys)?;
+        }
+        other => {
+            let s = match other {
+                Value::String(s) => s.clone(),
+                _ => other.to_string(),
+            };
+            writeln!(w, "{}<{}>{}</{}>", pad, tag, xml_esc(&s), tag).map_err(ys)?;
+        }
+    }
+    Ok(())
+}
+
+fn csv_cell(v: &Value) -> String {
+    let s = match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    if s.contains('"') || s.contains(',') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
+    }
+}
+
+struct ConvState {
+    first: bool,
+    header: Vec<String>,
+    header_done: bool,
+}
+
+// Emit one top-level record (an array element or ndjson line) in the target
+// format. CSV takes its column set from the first record's object keys.
+fn emit_record<W: Write>(w: &mut W, to: &str, v: &Value, st: &mut ConvState) -> Result<(), String> {
+    match to {
+        "json" | "rawjson" => {
+            if !st.first {
+                w.write_all(b",\n").map_err(ys)?;
+            }
+            let s = serde_json::to_string_pretty(v).map_err(ys)?;
+            w.write_all("  ".as_bytes()).map_err(ys)?;
+            w.write_all(s.replace('\n', "\n  ").as_bytes()).map_err(ys)?;
+        }
+        "xml" => write_xml(w, v, "item", 1)?,
+        "yaml" => {
+            if v.is_object() || v.is_array() {
+                writeln!(w, "-").map_err(ys)?;
+                write_yaml(w, v, 1)?;
+            } else {
+                writeln!(w, "- {}", yaml_scalar(v)).map_err(ys)?;
+            }
+        }
+        "csv" => {
+            if !st.header_done {
+                st.header = match v {
+                    Value::Object(m) => m.keys().cloned().collect(),
+                    _ => vec!["value".into()],
+                };
+                let hs: Vec<String> = st
+                    .header
+                    .iter()
+                    .map(|h| csv_cell(&Value::String(h.clone())))
+                    .collect();
+                w.write_all(hs.join(",").as_bytes()).map_err(ys)?;
+                w.write_all(b"\n").map_err(ys)?;
+                st.header_done = true;
+            }
+            let row: Vec<String> = st
+                .header
+                .iter()
+                .map(|h| {
+                    let cell = match v {
+                        Value::Object(m) => m.get(h).cloned().unwrap_or(Value::Null),
+                        other => {
+                            if st.header.len() == 1 {
+                                other.clone()
+                            } else {
+                                Value::Null
+                            }
+                        }
+                    };
+                    csv_cell(&cell)
+                })
+                .collect();
+            w.write_all(row.join(",").as_bytes()).map_err(ys)?;
+            w.write_all(b"\n").map_err(ys)?;
+        }
+        _ => return Err(format!("unsupported target format: {}", to)),
+    }
+    st.first = false;
+    Ok(())
+}
+
+pub fn run_convert(file: &str, format: &str, to: &str, out: &str) -> Result<(), String> {
+    if !matches!(to, "json" | "rawjson" | "xml" | "yaml" | "csv") {
+        return Err(format!("unsupported target format: {}", to));
+    }
+    let f = File::open(file).map_err(|e| format!("cannot open source: {e}"))?;
+    let mut reader = BufReader::new(f);
+    skip_bom(&mut reader);
+    let fmt = detect_format(format, &mut reader)?;
+    let mut outf =
+        BufWriter::new(File::create(out).map_err(|e| format!("cannot create output: {e}"))?);
+    emit(&json!({"event": "start", "total": Value::Null}));
+    let mut records: u64 = 0;
+    let mut st = ConvState {
+        first: true,
+        header: Vec::new(),
+        header_done: false,
+    };
+
+    // A single top-level object is one value, not a stream of records.
+    if let Fmt::JsonObject = fmt {
+        let v: Value =
+            serde_json::from_reader(&mut reader).map_err(|e| format!("parse error: {e}"))?;
+        match to {
+            "json" | "rawjson" => {
+                let s = serde_json::to_string_pretty(&v).map_err(ys)?;
+                outf.write_all(s.as_bytes()).map_err(ys)?;
+            }
+            "xml" => write_xml(&mut outf, &v, "root", 0)?,
+            "yaml" => write_yaml(&mut outf, &v, 0)?,
+            "csv" => emit_record(&mut outf, "csv", &v, &mut st)?,
+            _ => unreachable!(),
+        }
+        records = 1;
+        outf.flush().map_err(ys)?;
+        emit(&json!({"event": "done", "records": records}));
+        return Ok(());
+    }
+
+    // Array / NDJSON: prefix, one record at a time, suffix.
+    match to {
+        "json" | "rawjson" => outf.write_all(b"[\n").map_err(ys)?,
+        "xml" => outf.write_all(b"<root>\n").map_err(ys)?,
+        _ => {}
+    }
+
+    match fmt {
+        Fmt::Ndjson => {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let n = reader.read_line(&mut line).map_err(ys)?;
+                if n == 0 {
+                    break;
+                }
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                let v: Value =
+                    serde_json::from_str(s).map_err(|e| format!("line {}: {e}", records + 1))?;
+                emit_record(&mut outf, to, &v, &mut st)?;
+                records += 1;
+                if records % 5000 == 0 {
+                    emit(&json!({"event": "progress", "done": records, "total": Value::Null}));
+                }
+            }
+        }
+        Fmt::JsonArray => {
+            for_each_array_element(&mut reader, |bytes| {
+                let v: Value = serde_json::from_slice(bytes)
+                    .map_err(|e| format!("element {}: {e}", records + 1))?;
+                emit_record(&mut outf, to, &v, &mut st)?;
+                records += 1;
+                if records % 5000 == 0 {
+                    emit(&json!({"event": "progress", "done": records, "total": Value::Null}));
+                }
+                Ok(())
+            })?;
+        }
+        Fmt::JsonObject => unreachable!(),
+    }
+
+    match to {
+        "json" | "rawjson" => outf.write_all(b"\n]\n").map_err(ys)?,
+        "xml" => outf.write_all(b"</root>\n").map_err(ys)?,
+        _ => {}
+    }
+    outf.flush().map_err(ys)?;
+    emit(&json!({"event": "done", "records": records}));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

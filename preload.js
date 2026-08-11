@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('oxj', {
   setMenuState: (s) => ipcRenderer.send('menu-state', s),
   openHtmlInBrowser: (html) => unwrap('open-html', html),
   project: (args) => unwrap('project', args),
+  convertDoc: (args) => unwrap('convert-doc', args),
   onProjectProgress: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('project-progress', h);

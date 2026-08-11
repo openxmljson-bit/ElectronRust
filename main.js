@@ -2218,6 +2218,48 @@ app.whenReady().then(() => {
     if (projProc) { try { projProc.kill('SIGTERM'); } catch {} }
   });
 
+  // Whole-document format conversion, streamed by the engine straight to `out`
+  // (no size cap). Works on JSON/NDJSON sources; YAML is transcoded to a temp
+  // JSON first. XML/tabular sources use their own paths in the renderer.
+  ipcMain.handle('convert-doc', async (e, { file, to, out }) => {
+    try {
+      if (!file || !fs.existsSync(file)) throw new Error('source file not found — it may have moved since it was opened');
+      if (!out) throw new Error('no output path chosen');
+      let src = file;
+      if (isYamlFile(file)) src = yamlToTempJson(file);
+      else if (/\.xml$/i.test(file)) throw new Error('XML sources are converted in-app, not streamed');
+      const wc = e.sender;
+      const result = await new Promise((resolve, reject) => {
+        const proc = spawn(engineBin(), ['convert', '--file', src, '--format', 'auto', '--to', to, '--out', out]);
+        let errBuf = '';
+        let last = null;
+        const rl = readline.createInterface({ input: proc.stdout });
+        rl.on('line', (line) => {
+          line = line.trim();
+          if (!line) return;
+          try {
+            const m = JSON.parse(line);
+            if (m.event === 'start' || m.event === 'progress') { if (!wc.isDestroyed()) wc.send('project-progress', m); }
+            else if (m.event === 'done') last = m;
+            else if (m.event === 'error') errBuf = m.message || errBuf;
+          } catch { /* non-JSON line */ }
+        });
+        proc.stderr.on('data', (d) => { errBuf += d; });
+        proc.on('error', reject);
+        proc.on('exit', (code) => {
+          if (code === 0) { resolve({ out, records: last ? last.records : null }); return; }
+          try { fs.unlinkSync(out); } catch {} // remove any partial output
+          const lc = (errBuf || '').toLowerCase();
+          if (code === 2 || lc.includes('usage') || lc.includes('unknown')) reject(new Error('convert unsupported — rebuild the engine (npm run build:engine)'));
+          else reject(new Error((errBuf || '').slice(0, 300) || 'convert failed (code ' + code + ')'));
+        });
+      });
+      return ok(result);
+    } catch (err) {
+      return fail(err);
+    }
+  });
+
   // Write an HTML report to a temp file and open it in the default browser.
   ipcMain.handle('open-html', async (_e, html) => {
     try {

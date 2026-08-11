@@ -4281,11 +4281,31 @@ function exportDocName(t, ext) {
 // Whole document, converted to the requested format.
 async function exportDocAs(t, fmt) {
   if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
+  const ext = fmt === 'rawjson' ? 'json' : fmt;
+  // JSON/NDJSON/YAML sources stream through the engine straight to a file, so a
+  // multi-GB document converts without the whole-document node budget. (XML
+  // sources and small docs fall back to the in-memory reconstruction below.)
+  const src = t.file || '';
+  const streamable = /\.(json|ndjson|jsonl|ya?ml)$/i.test(src);
+  if (streamable && window.oxj.convertDoc) {
+    const target = await window.oxj.pickSavePath(exportDocName(t, ext), [{ name: ext.toUpperCase(), extensions: [ext] }]);
+    if (!target) return;
+    try {
+      toast('Exporting ' + ext.toUpperCase() + '…', true);
+      const res = await window.oxj.convertDoc({ file: src, to: fmt, out: target });
+      const n = res && res.records != null ? fmtInt(res.records) + ' records → ' : '';
+      toast('Exported ' + n + baseName(res && res.out ? res.out : target), true);
+      return;
+    } catch (err) {
+      toast('Export failed: ' + cleanErr(err));
+      return;
+    }
+  }
+  // In-memory reconstruction (XML sources, or documents that fit the budget).
   const root = t.visible && t.visible[0];
   if (!root) { toast('Nothing to export'); return; }
   try {
     const text = await convertNode(t, root, fmt, EXPORT_BUDGET);
-    const ext = fmt === 'rawjson' ? 'json' : fmt;
     const saved = await window.oxj.saveText(exportDocName(t, ext), text);
     if (saved) toast('Saved ' + baseName(saved), true);
   } catch (err) {
