@@ -27,6 +27,37 @@ function defaultSavePath(name) {
   return name;
 }
 
+// Spawn the engine's streaming `convert` (JSON/NDJSON source -> target format,
+// straight to `out`). Forwards progress as `project-progress` to the window.
+// Shared by the convert-doc and export-table-doc IPCs.
+function runConvertToFile(src, to, out, wc) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(engineBin(), ['convert', '--file', src, '--format', 'auto', '--to', to, '--out', out]);
+    let errBuf = '';
+    let last = null;
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on('line', (line) => {
+      line = line.trim();
+      if (!line) return;
+      try {
+        const m = JSON.parse(line);
+        if (m.event === 'start' || m.event === 'progress') { if (wc && !wc.isDestroyed()) wc.send('project-progress', m); }
+        else if (m.event === 'done') last = m;
+        else if (m.event === 'error') errBuf = m.message || errBuf;
+      } catch { /* non-JSON line */ }
+    });
+    proc.stderr.on('data', (d) => { errBuf += d; });
+    proc.on('error', reject);
+    proc.on('exit', (code) => {
+      if (code === 0) { resolve({ records: last ? last.records : null }); return; }
+      try { fs.unlinkSync(out); } catch {} // remove any partial output
+      const lc = (errBuf || '').toLowerCase();
+      if (code === 2 || lc.includes('usage') || lc.includes('unknown')) reject(new Error('convert unsupported — rebuild the engine (npm run build:engine)'));
+      else reject(new Error((errBuf || '').slice(0, 300) || 'convert failed (code ' + code + ')'));
+    });
+  });
+}
+
 // ---------------- DuckDB engine (delimited/tabular files) ----------------
 // Lazily booted on first delimited open. Events are forwarded to the renderer.
 let duck = null;
@@ -2244,35 +2275,37 @@ app.whenReady().then(() => {
       let src = file;
       if (isYamlFile(file)) src = yamlToTempJson(file);
       else if (/\.xml$/i.test(file)) throw new Error('XML sources are converted in-app, not streamed');
-      const wc = e.sender;
-      const result = await new Promise((resolve, reject) => {
-        const proc = spawn(engineBin(), ['convert', '--file', src, '--format', 'auto', '--to', to, '--out', out]);
-        let errBuf = '';
-        let last = null;
-        const rl = readline.createInterface({ input: proc.stdout });
-        rl.on('line', (line) => {
-          line = line.trim();
-          if (!line) return;
-          try {
-            const m = JSON.parse(line);
-            if (m.event === 'start' || m.event === 'progress') { if (!wc.isDestroyed()) wc.send('project-progress', m); }
-            else if (m.event === 'done') last = m;
-            else if (m.event === 'error') errBuf = m.message || errBuf;
-          } catch { /* non-JSON line */ }
-        });
-        proc.stderr.on('data', (d) => { errBuf += d; });
-        proc.on('error', reject);
-        proc.on('exit', (code) => {
-          if (code === 0) { resolve({ out, records: last ? last.records : null }); return; }
-          try { fs.unlinkSync(out); } catch {} // remove any partial output
-          const lc = (errBuf || '').toLowerCase();
-          if (code === 2 || lc.includes('usage') || lc.includes('unknown')) reject(new Error('convert unsupported — rebuild the engine (npm run build:engine)'));
-          else reject(new Error((errBuf || '').slice(0, 300) || 'convert failed (code ' + code + ')'));
-        });
-      });
-      return ok(result);
+      const result = await runConvertToFile(src, to, out, e.sender);
+      return ok({ out, records: result.records });
     } catch (err) {
       return fail(err);
+    }
+  });
+
+  // Tabular (DuckDB) whole-view export at any size, streamed to a file — never
+  // materialised as a JS string (which failed with "Invalid string length" on
+  // large tables). JSON uses DuckDB's native COPY (FORMAT json); XML/YAML COPY
+  // to a temp JSON first, then the streaming `convert` turns it into the target.
+  ipcMain.handle('export-table-doc', async (e, { datasetId, view, to, out }) => {
+    const jobId = 'exp-' + Date.now();
+    const tmp = path.join(os.tmpdir(), 'narik_export_' + Date.now() + '.json');
+    try {
+      if (!out) throw new Error('no output path chosen');
+      if (to === 'json' || to === 'rawjson') {
+        const r = await duckEngine().invoke('exportView', { datasetId, view, targetPath: out, format: 'json', limit: null, includeHeader: true, jobId });
+        return ok({ out, records: r && r.rowsWritten != null ? r.rowsWritten : null });
+      }
+      if (to === 'xml' || to === 'yaml') {
+        await duckEngine().invoke('exportView', { datasetId, view, targetPath: tmp, format: 'json', limit: null, includeHeader: true, jobId });
+        const result = await runConvertToFile(tmp, to, out, e.sender);
+        return ok({ out, records: result.records });
+      }
+      throw new Error('unsupported export format: ' + to);
+    } catch (err) {
+      try { fs.unlinkSync(out); } catch {}
+      return fail(err);
+    } finally {
+      try { fs.unlinkSync(tmp); } catch {}
     }
   });
 

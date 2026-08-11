@@ -299,7 +299,7 @@ export interface SqlResult {
   executed: string;
 }
 
-export type ExportFormat = 'csv' | 'tsv' | 'psv' | 'parquet' | 'xlsx-csv';
+export type ExportFormat = 'csv' | 'tsv' | 'psv' | 'parquet' | 'xlsx-csv' | 'json';
 
 export interface ExportRequest {
   datasetId: string;

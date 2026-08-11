@@ -3352,31 +3352,28 @@ $('btn-cols-none').addEventListener('click', () => {
 async function runTableExportDuck(t, fmt) {
   const visIdx = visCols(t);
   const names = visIdx.map((c) => t.tableHeaders[c]);
+  const view = { ...t.duck.view, select: names };
+  const ext = fmt === 'rawjson' ? 'json' : fmt;
+  const target = await window.oxj.pickSavePath(stampName('export_' + baseName(t.file || 'table'), ext),
+    [{ name: ext.toUpperCase(), extensions: [ext] }]);
+  if (!target) return;
+  const stop = exportProgress('Exporting ' + ext.toUpperCase());
   try {
     if (fmt === 'csv') {
-      const target = await window.oxj.pickSavePath(stampName('export_' + baseName(t.file || 'table'), 'csv'), [{ name: 'CSV', extensions: ['csv'] }]);
-      if (!target) return;
-      toast('Exporting…', true);
-      const view = { ...t.duck.view, select: names };
+      // DuckDB streams the whole view to disk via COPY — no size limit.
       const res = await window.oxj.duckInvoke('exportView', { datasetId: t.duck.datasetId, view, targetPath: target, format: 'csv', limit: null, includeHeader: true });
-      toast('Exported ' + fmtInt(res.rowsWritten) + ' rows → ' + baseName(res.targetPath), true);
-    } else {
-      // JSON / XML / YAML: assemble row objects from pages, then serialize.
-      const ext = fmt === 'rawjson' ? 'json' : fmt;
-      toast('Exporting ' + ext.toUpperCase() + '…', true);
-      const CAP = 200000;
-      const total = Math.min(CAP, t.duck.rowCount || 0);
-      const out = [];
-      for (let off = 0; off < total; off += 1000) {
-        const res = await window.oxj.duckInvoke('getPage', { datasetId: t.duck.datasetId, view: t.duck.view, offset: off, limit: 1000, maxCellChars: 1000000 });
-        for (const r of (res.rows || [])) { const o = {}; visIdx.forEach((c, k) => { o[names[k]] = r[c]; }); out.push(o); }
-        if (!tabAlive(t)) return;
-      }
-      const text = fmt === 'xml' ? exportXml(out) : fmt === 'yaml' ? toYaml(out) : JSON.stringify(out, null, 2);
-      const saved = await window.oxj.saveText(stampName('export_' + baseName(t.file || 'table'), ext), text);
-      if (saved) toast('Exported ' + fmtInt(out.length) + (total < (t.duck.rowCount || 0) ? ' (capped at ' + fmtInt(CAP) + ')' : '') + ' rows → ' + baseName(saved), true);
+      stop(); toast('Exported ' + fmtInt(res.rowsWritten) + ' rows → ' + baseName(res.targetPath), true);
+      return;
     }
-  } catch (err) { toast('Export failed: ' + cleanErr(err)); }
+    // JSON / XML / YAML: streamed by the engine straight to the file (JSON via
+    // native COPY, XML/YAML via a temp JSON + streaming convert). Nothing is
+    // assembled in the renderer, so a multi-GB table no longer overflows the
+    // JS string limit ("Invalid string length").
+    const res = await window.oxj.exportTableDoc({ datasetId: t.duck.datasetId, view, to: fmt, out: target });
+    stop();
+    const n = res && res.records != null ? fmtInt(res.records) + ' rows → ' : '';
+    toast('Exported ' + n + baseName(res && res.out ? res.out : target), true);
+  } catch (err) { stop(); toast('Export failed: ' + cleanErr(err)); }
 }
 
 // Export the visible columns + filtered/sorted rows via the engine, into a new tab.
@@ -4290,13 +4287,15 @@ async function exportDocAs(t, fmt) {
   if (streamable && window.oxj.convertDoc) {
     const target = await window.oxj.pickSavePath(exportDocName(t, ext), [{ name: ext.toUpperCase(), extensions: [ext] }]);
     if (!target) return;
+    const stop = exportProgress('Exporting ' + ext.toUpperCase());
     try {
-      toast('Exporting ' + ext.toUpperCase() + '…', true);
       const res = await window.oxj.convertDoc({ file: src, to: fmt, out: target });
+      stop();
       const n = res && res.records != null ? fmtInt(res.records) + ' records → ' : '';
       toast('Exported ' + n + baseName(res && res.out ? res.out : target), true);
       return;
     } catch (err) {
+      stop();
       toast('Export failed: ' + cleanErr(err));
       return;
     }
@@ -5068,6 +5067,27 @@ function showProjectionProgress() {
     onCancel(cb) { box.querySelector('.pp-cancel').onclick = cb; },
     close() { back.remove(); },
   };
+}
+
+// Lightweight progress modal for exports. Returns a stop() function. Live record
+// counts come from the engine's streaming `convert` (project-progress events);
+// the DuckDB COPY phase shows as indeterminate activity.
+function exportProgress(label) {
+  const back = document.createElement('div');
+  back.className = 'modal-backdrop';
+  const box = document.createElement('div');
+  box.className = 'modal';
+  box.innerHTML =
+    '<div class="modal-title">' + label + '…</div>' +
+    '<div class="bar-outer"><div class="bar-inner pp-bar indeterminate" style="width:100%"></div></div>' +
+    '<div class="pp-stat">Working…</div>';
+  back.appendChild(box);
+  document.body.appendChild(back);
+  const stat = box.querySelector('.pp-stat');
+  const off = window.oxj.onProjectProgress((m) => {
+    if (m && (m.event === 'progress' || m.event === 'start') && m.done) stat.textContent = fmtInt(m.done) + ' records';
+  });
+  return () => { try { off && off(); } catch {} back.remove(); };
 }
 
 async function runProjection(t, paths) {

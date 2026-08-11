@@ -115,6 +115,9 @@ function copyOptions(format: ExportFormat, req: ExportRequest): string {
       return `FORMAT csv, HEADER ${header}, DELIMITER '|'${compression}`;
     case 'parquet':
       return `FORMAT parquet, COMPRESSION ${req.compression && req.compression !== 'none' ? req.compression : 'zstd'}`;
+    case 'json':
+      // DuckDB streams a JSON array straight to the file — no in-memory buffer.
+      return `FORMAT json, ARRAY true${compression}`;
     default:
       return `FORMAT csv, HEADER ${header}`;
   }
