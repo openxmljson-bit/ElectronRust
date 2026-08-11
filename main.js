@@ -12,6 +12,52 @@ const os = require('os');
 const si = require('systeminformation');
 const { DuckClient } = require('./duck-client');
 
+// Folder of the most recently opened document. Save dialogs (export, bookmarks,
+// etc.) default here so a file opened from X exports back to X, instead of the
+// OS default (Downloads). Updated whenever a file is opened, in either engine.
+let lastOpenDir = '';
+function rememberOpenDir(p) {
+  try { if (p && typeof p === 'string') { const d = path.dirname(p); if (d && d !== '.') lastOpenDir = d; } } catch {}
+}
+// Resolve a suggested save name to a full path in the last-opened folder when the
+// name carries no directory of its own; otherwise honour what was passed.
+function defaultSavePath(name) {
+  if (!name) return lastOpenDir || undefined;
+  try { if (lastOpenDir && path.dirname(name) === '.') return path.join(lastOpenDir, name); } catch {}
+  return name;
+}
+
+// Spawn the engine's streaming `convert` (JSON/NDJSON source -> target format,
+// straight to `out`). Forwards progress as `project-progress` to the window.
+// Shared by the convert-doc and export-table-doc IPCs.
+function runConvertToFile(src, to, out, wc) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(engineBin(), ['convert', '--file', src, '--format', 'auto', '--to', to, '--out', out]);
+    let errBuf = '';
+    let last = null;
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on('line', (line) => {
+      line = line.trim();
+      if (!line) return;
+      try {
+        const m = JSON.parse(line);
+        if (m.event === 'start' || m.event === 'progress') { if (wc && !wc.isDestroyed()) wc.send('project-progress', m); }
+        else if (m.event === 'done') last = m;
+        else if (m.event === 'error') errBuf = m.message || errBuf;
+      } catch { /* non-JSON line */ }
+    });
+    proc.stderr.on('data', (d) => { errBuf += d; });
+    proc.on('error', reject);
+    proc.on('exit', (code) => {
+      if (code === 0) { resolve({ records: last ? last.records : null }); return; }
+      try { fs.unlinkSync(out); } catch {} // remove any partial output
+      const lc = (errBuf || '').toLowerCase();
+      if (code === 2 || lc.includes('usage') || lc.includes('unknown')) reject(new Error('convert unsupported — rebuild the engine (npm run build:engine)'));
+      else reject(new Error((errBuf || '').slice(0, 300) || 'convert failed (code ' + code + ')'));
+    });
+  });
+}
+
 // ---------------- DuckDB engine (delimited/tabular files) ----------------
 // Lazily booted on first delimited open. Events are forwarded to the renderer.
 let duck = null;
@@ -1039,6 +1085,7 @@ async function loadFile(wc, tabId, filePath, force, fileFormat) {
   killIngest(tabId, true);
   killSession(tabId);
   addRecent(filePath, fileFormat);
+  rememberOpenDir(filePath);
 
   // For YAML, the engine reads a converted temp JSON; the tab keeps filePath.
   const enginePath = isYamlFile(filePath) ? yamlToTempJson(filePath) : filePath;
@@ -1849,7 +1896,7 @@ app.whenReady().then(() => {
   ipcMain.handle('save-text', async (e, { defaultName, text }) => {
     try {
       const win = BrowserWindow.fromWebContents(e.sender);
-      const res = await dialog.showSaveDialog(win, { defaultPath: defaultName });
+      const res = await dialog.showSaveDialog(win, { defaultPath: defaultSavePath(defaultName) });
       if (res.canceled || !res.filePath) return ok(null);
       fs.writeFileSync(res.filePath, text);
       return ok(res.filePath);
@@ -2104,7 +2151,7 @@ app.whenReady().then(() => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const { text, defaultName } = exportByFormat(String(format || 'postman'));
     const res = await dialog.showSaveDialog(win, {
-      defaultPath: defaultName,
+      defaultPath: defaultSavePath(defaultName),
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (res.canceled || !res.filePath) return { cancelled: true };
@@ -2113,12 +2160,12 @@ app.whenReady().then(() => {
   });
 
   // DuckDB opens happen renderer-side (not via loadFile), so recents are noted here.
-  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) addRecent(p, format || null); return true; });
+  ipcMain.handle('note-recent', async (_e, { path: p, format }) => { if (typeof p === 'string' && !isTempPath(p)) { addRecent(p, format || null); rememberOpenDir(p); } return true; });
   // Save-path picker (the DuckDB engine writes the file itself via COPY TO).
   ipcMain.handle('pick-save-path', async (e, { defaultName, filters }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const res = await dialog.showSaveDialog(win, {
-      defaultPath: defaultName || undefined,
+      defaultPath: defaultSavePath(defaultName),
       filters: filters && filters.length ? filters : [{ name: 'All files', extensions: ['*'] }],
     });
     return res.canceled || !res.filePath ? null : res.filePath;
@@ -2221,6 +2268,50 @@ app.whenReady().then(() => {
 
   ipcMain.on('cancel-project', () => {
     if (projProc) { try { projProc.kill('SIGTERM'); } catch {} }
+  });
+
+  // Whole-document format conversion, streamed by the engine straight to `out`
+  // (no size cap). Works on JSON/NDJSON sources; YAML is transcoded to a temp
+  // JSON first. XML/tabular sources use their own paths in the renderer.
+  ipcMain.handle('convert-doc', async (e, { file, to, out }) => {
+    try {
+      if (!file || !fs.existsSync(file)) throw new Error('source file not found — it may have moved since it was opened');
+      if (!out) throw new Error('no output path chosen');
+      let src = file;
+      if (isYamlFile(file)) src = yamlToTempJson(file);
+      else if (/\.xml$/i.test(file)) throw new Error('XML sources are converted in-app, not streamed');
+      const result = await runConvertToFile(src, to, out, e.sender);
+      return ok({ out, records: result.records });
+    } catch (err) {
+      return fail(err);
+    }
+  });
+
+  // Tabular (DuckDB) whole-view export at any size, streamed to a file — never
+  // materialised as a JS string (which failed with "Invalid string length" on
+  // large tables). JSON uses DuckDB's native COPY (FORMAT json); XML/YAML COPY
+  // to a temp JSON first, then the streaming `convert` turns it into the target.
+  ipcMain.handle('export-table-doc', async (e, { datasetId, view, to, out }) => {
+    const jobId = 'exp-' + Date.now();
+    const tmp = path.join(os.tmpdir(), 'narik_export_' + Date.now() + '.json');
+    try {
+      if (!out) throw new Error('no output path chosen');
+      if (to === 'json' || to === 'rawjson') {
+        const r = await duckEngine().invoke('exportView', { datasetId, view, targetPath: out, format: 'json', limit: null, includeHeader: true, jobId });
+        return ok({ out, records: r && r.rowsWritten != null ? r.rowsWritten : null });
+      }
+      if (to === 'xml' || to === 'yaml') {
+        await duckEngine().invoke('exportView', { datasetId, view, targetPath: tmp, format: 'json', limit: null, includeHeader: true, jobId });
+        const result = await runConvertToFile(tmp, to, out, e.sender);
+        return ok({ out, records: result.records });
+      }
+      throw new Error('unsupported export format: ' + to);
+    } catch (err) {
+      try { fs.unlinkSync(out); } catch {}
+      return fail(err);
+    } finally {
+      try { fs.unlinkSync(tmp); } catch {}
+    }
   });
 
   // Write an HTML report to a temp file and open it in the default browser.

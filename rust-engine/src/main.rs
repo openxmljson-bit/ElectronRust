@@ -214,6 +214,46 @@ fn main() {
                 exit(1);
             }
         }
+        "convert" => {
+            // Whole-document streaming conversion: JSON/NDJSON source -> a target
+            // format written straight to a file (no in-memory materialisation).
+            let mut file = String::new();
+            let mut format = String::from("auto");
+            let mut to = String::new();
+            let mut out = String::new();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--file" => {
+                        i += 1;
+                        file = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--format" => {
+                        i += 1;
+                        format = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--to" => {
+                        i += 1;
+                        to = args.get(i).cloned().unwrap_or_default();
+                    }
+                    "--out" => {
+                        i += 1;
+                        out = args.get(i).cloned().unwrap_or_default();
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if file.is_empty() || to.is_empty() || out.is_empty() {
+                emit_error("convert requires --file <src> --to <fmt> --out <path>");
+                exit(2);
+            }
+            if let Err(e) = project::run_convert(&file, &format, &to, &out) {
+                let _ = std::fs::remove_file(&out);
+                emit_error(&e);
+                exit(1);
+            }
+        }
         _ => {
             emit_error("unknown command (expected 'ingest' or 'serve')");
             exit(2);
