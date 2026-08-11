@@ -9,7 +9,7 @@
 
 import { createReadStream, createWriteStream } from 'node:fs';
 import { rename, rm, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
@@ -86,6 +86,12 @@ interface CsvVariant {
   sampleSize?: number;
   /** undefined leaves the decision to DuckDB's sniffer. */
   header?: boolean;
+  /**
+   * Override null_padding. Must be false for a quote-aware read of a file with
+   * newlines inside quoted fields — DuckDB's parallel scanner rejects
+   * null_padding alongside quoted newlines.
+   */
+  nullPadding?: boolean;
 }
 
 function csvArgs(o: OpenOptions, opts: CsvVariant): string[] {
@@ -124,10 +130,21 @@ function csvArgs(o: OpenOptions, opts: CsvVariant): string[] {
   if (header !== undefined) args.push(`header=${header}`);
   const encoding = opts.encoding ?? o.encoding;
   if (encoding && encoding !== 'utf-8') args.push(`encoding=${quoteLit(encoding)}`);
-  args.push(`null_padding=${o.nullPadding === false ? 'false' : 'true'}`);
+  const nullPadding =
+    opts.nullPadding !== undefined ? opts.nullPadding : o.nullPadding !== false;
+  args.push(`null_padding=${nullPadding ? 'true' : 'false'}`);
   args.push(`sample_size=${opts.sampleSize ?? o.sampleSize ?? 200_000}`);
   if (opts.allVarchar || o.allVarchar) args.push(`all_varchar=true`);
-  if (opts.lenient || o.ignoreErrors) args.push(`ignore_errors=true`);
+  if (opts.lenient || o.ignoreErrors) {
+    args.push(`ignore_errors=true`);
+    // strict_mode=false lets DuckDB tolerate the things real-world exports throw
+    // at it — unescaped/unpaired quotes and newlines embedded in fields (common
+    // in product-feed description columns). Without it, a single messy row makes
+    // the parser's state machine bail on the correct (tab) delimiter entirely,
+    // and the ladder falls through to a wrong delimiter (space), shredding every
+    // row into dozens of auto-named columns. Other editors are lenient here too.
+    args.push(`strict_mode=false`);
+  }
   if (o.columnTypes && Object.keys(o.columnTypes).length > 0) {
     const entries = Object.entries(o.columnTypes)
       .map(([k, v]) => `${quoteLit(k)}: ${quoteLit(v)}`)
@@ -135,6 +152,31 @@ function csvArgs(o: OpenOptions, opts: CsvVariant): string[] {
     args.push(`types={${entries}}`);
   }
   return args;
+}
+
+/**
+ * The delimiter a file extension unambiguously implies. A `.tsv` is tab-separated
+ * by definition, so trusting the extension is more reliable than content sniffing
+ * on real-world files whose headers and values are full of spaces, quotes and
+ * category paths (e.g. product feeds: "feed label", "Arts & Entertainment > …").
+ * On those, DuckDB's sniffer can settle on a space delimiter and shred every row
+ * into the wrong columns. Trying the extension's delimiter first — then falling
+ * back to auto-detect if it yields a single column — makes the result match what
+ * a person expects from the file's type.
+ */
+function extensionDelimiter(path: string): string | null {
+  const ext = extname(path).toLowerCase().replace(/\.(gz|zst|zstd)$/, '');
+  switch (ext) {
+    case '.tsv':
+    case '.tab':
+      return '\t';
+    case '.csv':
+      return ',';
+    case '.psv':
+      return '|';
+    default:
+      return null;
+  }
 }
 
 /** Delimiters tried when neither the user nor detection settles the question. */
@@ -228,9 +270,39 @@ function buildPlans(
         ),
       );
     } else {
-      const delimiters: (string | null)[] = [null];
-      for (const d of [o.delimiter ?? null, ...detectedCandidates, ...FALLBACK_DELIMITERS]) {
-        if (d && !delimiters.includes(d)) delimiters.push(d);
+      // Trust the file extension first (a .tsv is tab-separated), then DuckDB's
+      // auto-detect, then our detected candidates and the generic fallbacks. The
+      // extension goes ahead of null so a real .tsv/.csv is read with the right
+      // delimiter before the content sniffer gets a chance to mis-guess space.
+      const extDelim = extensionDelimiter(path);
+      const delimiters: (string | null)[] = [];
+      for (const d of [extDelim, null, o.delimiter ?? null, ...detectedCandidates, ...FALLBACK_DELIMITERS]) {
+        if (d === null ? !delimiters.includes(null) : !delimiters.includes(d)) delimiters.push(d);
+      }
+
+      // Pass 0: the RFC-4180 reading — quote-aware, with null_padding OFF. This
+      // is how spreadsheets and most CSV tools read a file: a "…" field keeps
+      // any newlines inside it as ONE value instead of fragmenting the record
+      // across several rows (product-feed description columns are full of quoted
+      // multi-line text). null_padding must be off because DuckDB's parallel
+      // scanner refuses it alongside quoted newlines — which is exactly why the
+      // quote-aware attempts were failing and the ladder fell back to a quote-off
+      // read that split every description into extra rows. Tried first, before
+      // the quote-off readings, so a well-formed quoted file parses correctly;
+      // if the quotes are genuinely broken it yields one column and is skipped.
+      for (const d of delimiters.slice(0, 4)) {
+        const label = [
+          ...(d === null ? [] : [`Read with ${describeDelimiter(d)} as the delimiter, honouring quotes.`]),
+        ];
+        plans.push(csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false }, 2, label));
+        if (!o.hasHeaderExplicit) {
+          plans.push(
+            csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false, header: true }, 2, [
+              ...label,
+              'The first row was read as column names.',
+            ]),
+          );
+        }
       }
 
       // Pass 1: every delimiter under both quote readings, demanding a real split.
