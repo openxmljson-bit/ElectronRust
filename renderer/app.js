@@ -2698,6 +2698,13 @@ async function copyTableSelection(t) {
 // the native Edit ▸ Copy accelerator drives it; fast path writes synchronously
 // from loaded pages, otherwise fall back to the async clipboard write.
 document.addEventListener('copy', (e) => {
+  // Don't hijack copy when the user is copying text they selected elsewhere —
+  // the Source pane (Monaco or its <pre> fallback), an input, or any editable.
+  // Only the grid's own cell selection should drive this handler.
+  if (isEditableFocus()) return;
+  const srcPanel = $('source-panel');
+  const anchor = window.getSelection && window.getSelection().anchorNode;
+  if (srcPanel && !srcPanel.classList.contains('hidden') && anchor && srcPanel.contains(anchor)) return;
   const t = cur;
   if (!t || t.view !== 'table' || t.plain || !t.tableSel) return;
   const sel = selRect(t);
