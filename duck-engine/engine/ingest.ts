@@ -221,7 +221,10 @@ function buildPlans(
       minColumns: number,
       notes: string[],
     ): ReaderPlan => {
-      const full = { ...variant, skipRows: skip };
+      // A plan may pin its own skip (Pass 0 reads from the very top); otherwise
+      // use the detected preamble skip.
+      const planSkip = variant.skipRows !== undefined ? variant.skipRows : skip;
+      const full = { ...variant, skipRows: planSkip };
       return {
         strategy,
         reader: `read_csv(${p}, ${csvArgs(o, full).join(', ')})`,
@@ -294,10 +297,16 @@ function buildPlans(
         const label = [
           ...(d === null ? [] : [`Read with ${describeDelimiter(d)} as the delimiter, honouring quotes.`]),
         ];
-        plans.push(csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false }, 2, label));
+        // skipRows: 0 — read from the very top and let DuckDB find the header.
+        // The line-based preamble/skip detection is unreliable on files with
+        // newlines inside quoted fields (it fragments records and can flag the
+        // real header row as a "preamble" to skip, which is how a clean CSV ends
+        // up with column00.. names). A genuine title/preamble makes this plan
+        // yield one column, so it's rejected and the skip-aware passes handle it.
+        plans.push(csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false, skipRows: 0 }, 2, label));
         if (!o.hasHeaderExplicit) {
           plans.push(
-            csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false, header: true }, 2, [
+            csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false, skipRows: 0, header: true }, 2, [
               ...label,
               'The first row was read as column names.',
             ]),
