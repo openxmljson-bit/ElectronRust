@@ -25,8 +25,10 @@ import type {
 // cached parses are ignored and the file re-ingests. v4: quote-aware RFC-4180
 // read + extension-first delimiter (a .tsv previously mis-parsed as
 // space-delimited, or fragmented on newlines inside quoted fields, re-reads
-// correctly as one tab-delimited record per row).
-export const MANIFEST_VERSION = 4;
+// correctly as one tab-delimited record per row). v5: Pass 0 no longer inherits
+// the line-based preamble skip, so a CSV with newlines inside quoted fields
+// keeps its real header instead of skipping it and showing column00.. names.
+export const MANIFEST_VERSION = 5;
 
 export interface CachePaths {
   root: string;
