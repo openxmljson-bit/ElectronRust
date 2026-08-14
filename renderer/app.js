@@ -6007,7 +6007,9 @@ async function refreshMembership() {
   };
   const exp = s.expires_at;
   const d = daysUntil(exp);
-  let valid = 'Lifetime', validCls = '';
+  // No expiry: "Valid" describes the term, so say "Never expires" rather than
+  // repeating "Lifetime" (which is already the Plan for a lifetime licence).
+  let valid = 'Never expires', validCls = '';
   if (exp) {
     if (d <= 0) { valid = 'Expired'; validCls = 'expiring'; }
     else if (d <= EXPIRY_NUDGE_DAYS) { valid = 'Expires in ' + d + ' day' + (d === 1 ? '' : 's'); validCls = 'expiring'; }
