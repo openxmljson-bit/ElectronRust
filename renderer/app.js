@@ -5533,13 +5533,22 @@ async function inferSchemaFromTree(t, node, budget) {
   }
   if (k === K.ARR) {
     if (!node.n || budget.n <= 0) return { type: 'array' };
-    const SAMPLE = 500;
-    const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: 0, limit: Math.min(SAMPLE, Number(node.n)) });
+    // Walk EVERY element (bounded by the shared budget), not just the first N —
+    // so unique attributes that only appear in later records are still captured.
     const subs = [];
-    for (const c of (res.items || [])) {
+    let off = 0;
+    const PAGE = 1000;
+    for (;;) {
       if (budget.n <= 0) break;
-      budget.n -= 1;
-      subs.push(await inferSchemaFromTree(t, c, budget));
+      const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: off, limit: PAGE });
+      const items = res.items || [];
+      for (const c of items) {
+        if (budget.n <= 0) break;
+        budget.n -= 1;
+        subs.push(await inferSchemaFromTree(t, c, budget));
+      }
+      if (items.length < PAGE) break;
+      off += PAGE;
     }
     return subs.length ? { type: 'array', items: mergeSchemas(subs) } : { type: 'array' };
   }
