@@ -898,15 +898,34 @@ fn infer_schema(conn: &Connection, n: &NodeRow, budget: &mut i64) -> Result<Valu
             Ok(json!({"type": "object", "properties": props, "required": required}))
         }
         1 => {
-            // Sample up to 100 elements — enough to capture heterogeneity.
-            let kids = fetch_children_page(conn, n.id, 0, 100)?;
+            // Walk EVERY element (bounded by the shared budget), paging through
+            // the array, so unique attributes that first appear in later records
+            // are captured — not just the ones in the first N elements.
             let mut items: Option<Value> = None;
-            for k in &kids {
-                let sch = infer_schema(conn, k, budget)?;
-                items = Some(match items {
-                    Some(prev) => merge_schema(prev, sch),
-                    None => sch,
-                });
+            let mut off: i64 = 0;
+            let page: i64 = 1000;
+            loop {
+                if *budget <= 0 {
+                    break;
+                }
+                let kids = fetch_children_page(conn, n.id, off, page)?;
+                if kids.is_empty() {
+                    break;
+                }
+                for k in &kids {
+                    if *budget <= 0 {
+                        break;
+                    }
+                    let sch = infer_schema(conn, k, budget)?;
+                    items = Some(match items {
+                        Some(prev) => merge_schema(prev, sch),
+                        None => sch,
+                    });
+                }
+                if (kids.len() as i64) < page {
+                    break;
+                }
+                off += page;
             }
             match items {
                 Some(it) => Ok(json!({"type": "array", "items": it})),
