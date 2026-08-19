@@ -3412,11 +3412,12 @@ function initMonaco() {
         readOnly: true,
         automaticLayout: true,
         minimap: { enabled: true },
-        wordWrap: 'off',
+        wordWrap: sourceWrap ? 'on' : 'off',
         largeFileOptimizations: true,
         scrollBeyondLastLine: false,
         fontSize: 12.5,
       });
+      applySourceWrap();
       if (sourceOpen) scheduleSourceUpdate();
       if (cur && cur.phase === 'ready' && cur.plain) renderScreen();
     });
@@ -3542,6 +3543,22 @@ function closeSource() {
 }
 $('btn-source').addEventListener('click', () => (sourceOpen ? closeSource() : openSource()));
 $('btn-close-source').addEventListener('click', closeSource);
+
+// Word-wrap toggle for the Source panel (Monaco + the <pre> fallback), persisted.
+let sourceWrap = localStorage.getItem('oxj-source-wrap') === '1';
+function applySourceWrap() {
+  if (monacoReady && monacoEditor) monacoEditor.updateOptions({ wordWrap: sourceWrap ? 'on' : 'off' });
+  const fb = $('source-fallback');
+  if (fb) fb.classList.toggle('wrap', sourceWrap);
+  const btn = $('btn-wrap-source');
+  if (btn) { btn.classList.toggle('active', sourceWrap); btn.textContent = sourceWrap ? 'No wrap' : 'Wrap'; }
+}
+$('btn-wrap-source').addEventListener('click', () => {
+  sourceWrap = !sourceWrap;
+  localStorage.setItem('oxj-source-wrap', sourceWrap ? '1' : '0');
+  applySourceWrap();
+});
+applySourceWrap();
 
 // Full File ↗ — open the complete original file in a new read-only tab.
 function fullFileLang(p) {
