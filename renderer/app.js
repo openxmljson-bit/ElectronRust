@@ -267,8 +267,9 @@ function renderScreen() {
     $('btn-flow').classList.toggle('hidden', plain || duck || t.docFormat === 'xml');
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
     const memMode = t.meta && t.meta.mode === 'memory';
-    $('btn-tools').classList.toggle('hidden',
-      plain || (t.docFormat !== 'json' && t.docFormat !== 'ndjson'));
+    const jsonDoc = !plain && (t.docFormat === 'json' || t.docFormat === 'ndjson');
+    $('btn-tools').classList.toggle('hidden', !jsonDoc);
+    $('btn-jq').classList.toggle('hidden', !jsonDoc); // jq: JSON documents only
     $('search-scope').classList.toggle('hidden', plain || duck);   // JSON scopes only
     $('search-mode').classList.toggle('hidden', plain || !duck);   // duck: contains/exact/regex
     $('search-box').classList.toggle('hidden', plain);             // duck: search every column
@@ -5842,8 +5843,6 @@ $('btn-tools').addEventListener('click', (ev) => {
   // All tools handle memory mode too (Deep Dive & schema infer from the tree,
   // compare/validate reconstruct the doc), so they're always offered.
   const items = [
-    { label: 'jq Filter…', action: () => openJqModal(cur) },
-    { sep: true },
     { label: 'JSON Deep Dive…', action: jsonDeepDive },
     { label: 'Compare With Open Tab…', action: compareWithTab },
     { sep: true },
@@ -5851,6 +5850,12 @@ $('btn-tools').addEventListener('click', (ev) => {
     { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
   ];
   showContextMenu(r.left, r.bottom + 4, items);
+});
+$('btn-jq').addEventListener('click', () => {
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain) return;
+  if (t.docFormat !== 'json' && t.docFormat !== 'ndjson') return;
+  openJqModal(t);
 });
 
 // ---------- jq filter (system jq, result in a new tab) ----------
