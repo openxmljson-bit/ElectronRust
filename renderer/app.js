@@ -6046,12 +6046,16 @@ async function refreshMembership() {
     else if (d <= EXPIRY_NUDGE_DAYS) { valid = 'Expires in ' + d + ' day' + (d === 1 ? '' : 's'); validCls = 'expiring'; }
     else valid = 'Until ' + String(exp).slice(0, 10);
   }
+  const free = isFreeTier(s.tier);
+  const badge = $('edition-badge');
+  if (badge) { badge.textContent = free ? 'NARIK FREE' : 'NARIK EDITION'; badge.classList.toggle('free', free); }
   addRow('Status', 'Active');
-  addRow('Plan', s.plan || 'NARIK Edition');
+  addRow('Plan', s.plan || (free ? 'Free' : 'NARIK Edition'));
   addRow('Email', shortEmail(s.email || '', 30), 'ellip', s.email || '');
   addRow('Valid', valid, validCls);
   wrap.classList.remove('hidden');
 }
+function isFreeTier(tier) { return String(tier || '').toLowerCase() === 'narikfree'; }
 function openLicenseLock(canClose) {
   $('lic-close').classList.toggle('hidden', !canClose);
   // Short title; the "re-activate" note sits on its own line above the standing
@@ -6072,7 +6076,10 @@ async function initLicense() {
     showEdition(true, s.expires_at);
     const d = daysUntil(s.expires_at);
     if (Number.isFinite(d) && d > 0 && d <= EXPIRY_NUDGE_DAYS) {
-      toast('Your NARIK EDITION license expires in ' + d + ' day' + (d === 1 ? '' : 's') + ' — renew to avoid interruption.', true);
+      const days = d + ' day' + (d === 1 ? '' : 's');
+      toast(isFreeTier(s.tier)
+        ? 'Your free NARIK plan ends in ' + days + ' — upgrade from Manage / Renew to keep going.'
+        : 'Your NARIK EDITION license expires in ' + days + ' — renew to avoid interruption.', true);
     }
   } else {
     showEdition(false);
