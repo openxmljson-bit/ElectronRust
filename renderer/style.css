@@ -921,6 +921,8 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 }
 /* Free edition: a distinct (teal) badge so free reads apart from paid. */
 .edition-badge.free { background: #0f9d8c; }
+.edition-validity { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); margin: 2px 2px 6px; }
+#welcome-upgrade { font-weight: 700; }
 .welcome-license { margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .welcome-validity { color: var(--fg-dim); font-size: 12px; }
 .welcome-validity.expiring { color: #e0a02c; font-weight: 700; }

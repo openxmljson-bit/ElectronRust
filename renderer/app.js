@@ -6049,6 +6049,15 @@ async function refreshMembership() {
   const free = isFreeTier(s.tier);
   const badge = $('edition-badge');
   if (badge) { badge.textContent = free ? 'NARIK FREE' : 'NARIK EDITION'; badge.classList.toggle('free', free); }
+  // Free edition: a "Valid until <date>" line by the badge and an Upgrade button.
+  const vEl = $('edition-validity');
+  if (vEl) {
+    const showV = free && exp;
+    vEl.classList.toggle('hidden', !showV);
+    if (showV) vEl.textContent = 'Valid until ' + String(exp).slice(0, 10);
+  }
+  const up = $('welcome-upgrade');
+  if (up) up.classList.toggle('hidden', !free);
   addRow('Status', 'Active');
   addRow('Plan', s.plan || (free ? 'Free' : 'NARIK Edition'));
   addRow('Email', shortEmail(s.email || '', 30), 'ellip', s.email || '');
@@ -6120,6 +6129,7 @@ $('lic-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lic-
 $('lic-close').addEventListener('click', hideLicenseLock);
 $('lic-buy').addEventListener('click', () => window.oxj.license.store());
 $('welcome-manage').addEventListener('click', () => openLicenseLock(true)); // renew / change key
+$('welcome-upgrade').addEventListener('click', () => window.oxj.license.store()); // free -> store
 
 // ---------- init ----------
 initMonaco();
