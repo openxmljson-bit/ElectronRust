@@ -1286,7 +1286,7 @@ const LICENSE_STORE_URL = process.env.NARIK_STORE_URL || 'https://openxmljson.co
 // The shared backend serves several products off one signing secret, so every
 // request MUST scope itself to "narik", and only these tiers unlock this app.
 const NARIK_PRODUCT = 'narik';
-const NARIK_TIERS = ['Narik', 'Unbxd'];
+const NARIK_TIERS = ['Narik', 'NarikFree', 'Unbxd'];
 
 // Keys are XXXX-XXXX-XXXX-XXXX-XXXX-XXXX. The server is lenient, but normalise to
 // canonical form (uppercase, dashed, no spaces) before sending.
