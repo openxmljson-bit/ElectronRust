@@ -2906,6 +2906,7 @@ function openTransformDialog(t) {
   box.appendChild(rowF);
 
   const rowOpt = document.createElement('div'); rowOpt.className = 'modal-row';
+  rowOpt.style.gap = '22px'; rowOpt.style.alignItems = 'center'; // space the checkboxes apart
   const mkChk = (labelText) => {
     const l = document.createElement('label'); l.className = 'jq-opt';
     l.style.whiteSpace = 'nowrap'; l.style.flex = '0 0 auto'; // keep the label on one line
