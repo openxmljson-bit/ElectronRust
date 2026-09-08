@@ -175,7 +175,10 @@ function showTabMenu(x, y, t) {
 }
 
 function setCurrent(t) {
-  if (cur && cur.phase === 'ready') cur.treeScrollTop = treeScroll.scrollTop;
+  if (cur && cur.phase === 'ready') {
+    cur.treeScrollTop = treeScroll.scrollTop;
+    cur.tableScrollTop = tableScroll.scrollTop; // remember each tab's own table scroll
+  }
   cur = t;
   closeSearch();
   renderTabs();
@@ -309,6 +312,10 @@ function renderScreen() {
       $('search-mode').value = t.duck.searchMode || 'contains';
       setView('table');
       buildTableHead(t);
+      // Restore this tab's own scroll position (the scroll element is shared
+      // across tabs, so without this a new tab inherits the previous tab's).
+      tableScroll.scrollTop = t.tableScrollTop || 0;
+      renderTable();
       $('status-doc').textContent =
         t.tableFormatLabel + ' · ' + fmtInt(t.duck.rowCount) + ' rows · ' + fmtBytes(srcBytes);
       $('status-load').textContent = t.duck.strategy === 'cache-hit'
