@@ -2481,7 +2481,7 @@ function duckViewSpec(t) {
   const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
   const q = t.duck && t.duck.searchQuery;
   const search = q ? { query: q, mode: (t.duck.searchMode || 'contains'), columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
-  return { filters, combine: 'and', search, sort, select: null };
+  return { filters, combine: 'and', search, sort, select: null, transforms: t.tableTransforms || {} };
 }
 
 async function applyTableViewDuck(t) {
@@ -2494,6 +2494,7 @@ async function applyTableViewDuck(t) {
     const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
     if (!tabAlive(t)) return;
     t.duck.rowCount = vi.rowCount;
+    if (vi.columns && vi.columns.length) t.duck.columns = vi.columns; // reflect transform type changes
     t.tableViewTotal = vi.rowCount;
     buildTableHead(t);
     renderTable();
@@ -2882,6 +2883,81 @@ function openSortDialog(t) {
   box.appendChild(actions);
 }
 
+// Transform a whole column (non-destructive, applied in the view — so it shows
+// in the grid and in exports): find/replace and/or prefix/suffix. NULL and empty
+// cells are skipped. find/replace runs first, then prefix/suffix.
+function openTransformDialog(t) {
+  if (!isDuck(t)) { toast('Column transforms work on delimited (CSV/TSV) tables'); return; }
+  t.tableTransforms = t.tableTransforms || {};
+  const { back, box } = simpleModal('Transform column');
+  const row = document.createElement('div'); row.className = 'modal-row';
+  const l1 = document.createElement('label'); l1.textContent = 'Column';
+  const sel = colSelect(t);
+  row.append(l1, sel);
+  box.appendChild(row);
+
+  // Find & replace
+  const rowF = document.createElement('div'); rowF.className = 'modal-row';
+  const lf = document.createElement('label'); lf.textContent = 'Find';
+  const find = document.createElement('input'); find.type = 'text'; find.placeholder = 'text to find (blank = none)';
+  const lr = document.createElement('label'); lr.textContent = 'Replace';
+  const repl = document.createElement('input'); repl.type = 'text'; repl.placeholder = 'replacement (blank = delete)';
+  rowF.append(lf, find, lr, repl);
+  box.appendChild(rowF);
+
+  const rowOpt = document.createElement('div'); rowOpt.className = 'modal-row';
+  rowOpt.style.gap = '22px'; rowOpt.style.alignItems = 'center'; // space the checkboxes apart
+  const mkChk = (labelText) => {
+    const l = document.createElement('label'); l.className = 'jq-opt';
+    l.style.whiteSpace = 'nowrap'; l.style.flex = '0 0 auto'; // keep the label on one line
+    const c = document.createElement('input'); c.type = 'checkbox';
+    l.append(c, document.createTextNode(' ' + labelText));
+    rowOpt.appendChild(l); return c;
+  };
+  const rx = mkChk('Regex'); const ic = mkChk('Ignore case');
+  box.appendChild(rowOpt);
+
+  // Prefix / suffix
+  const row2 = document.createElement('div'); row2.className = 'modal-row';
+  const lp = document.createElement('label'); lp.textContent = 'Prefix';
+  const pre = document.createElement('input'); pre.type = 'text'; pre.placeholder = 'e.g. https://';
+  const ls = document.createElement('label'); ls.textContent = 'Suffix';
+  const suf = document.createElement('input'); suf.type = 'text'; suf.placeholder = 'e.g. _v1';
+  row2.append(lp, pre, ls, suf);
+  box.appendChild(row2);
+
+  // Prefill from any existing transform on the selected column.
+  const fill = () => {
+    const name = t.tableHeaders[parseInt(sel.value, 10)];
+    const ex = t.tableTransforms[name] || {};
+    find.value = ex.find || ''; repl.value = ex.replace || '';
+    rx.checked = !!ex.regex; ic.checked = !!ex.ignoreCase;
+    pre.value = ex.prefix || ''; suf.value = ex.suffix || '';
+  };
+  sel.onchange = fill; fill();
+
+  const hint = document.createElement('div'); hint.className = 'jq-hint';
+  hint.textContent = 'Applied to the whole column; empty and NULL cells are left unchanged. Find/replace runs first, then prefix/suffix. Shows in the grid and in exports. Clear all fields to remove.';
+  box.appendChild(hint);
+
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Apply';
+  ok.onclick = () => {
+    const name = t.tableHeaders[parseInt(sel.value, 10)];
+    const tr = {};
+    if (find.value) { tr.find = find.value; tr.replace = repl.value; if (rx.checked) tr.regex = true; if (ic.checked) tr.ignoreCase = true; }
+    if (pre.value) tr.prefix = pre.value;
+    if (suf.value) tr.suffix = suf.value;
+    if (Object.keys(tr).length) t.tableTransforms[name] = tr;
+    else delete t.tableTransforms[name];
+    back.remove();
+    applyTableView(t);
+  };
+  actions.append(cancel, ok);
+  box.appendChild(actions);
+}
+
 function openFilterDialog(t, presetCol) {
   const { back, box } = simpleModal('Filter rows');
   const working = (t.tableFilters || []).map((f) => ({ ...f }));
@@ -2928,11 +3004,14 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   ev.stopPropagation();
   const r = ev.currentTarget.getBoundingClientRect();
   const filterActive = !!(t.tableFilters && t.tableFilters.length);
+  const transformActive = !!(t.tableTransforms && Object.keys(t.tableTransforms).length);
   const items = [
     { label: 'Filter…', action: () => openFilterDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
+    { label: 'Transform Column…', action: () => openTransformDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
     { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
+    { label: 'Clear Transforms', disabled: !transformActive, action: () => { t.tableTransforms = {}; applyTableView(t); } },
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];

@@ -26,6 +26,7 @@ import {
   displayExpr,
   isIdentityView,
   orderByClause,
+  projectExpr,
   quoteIdent,
   quotePath,
   searchExpr,
@@ -152,7 +153,14 @@ export class ViewManager {
 
     const where = whereClause(view, manifest.columns);
     const order = orderByClause(view.sort, manifest.columns);
-    const projected = columns.map((c) => quoteIdent(c.name)).join(', ');
+    // Prefix/suffix transforms are applied here, in the same SELECT that the
+    // grid and Export both read — so what's shown is exactly what's exported.
+    const tf = view.transforms || {};
+    const projected = columns.map((c) => projectExpr(c.name, tf)).join(', ');
+    // A transformed column is now text; reflect that in the reported schema.
+    const active = (x?: { prefix?: string; suffix?: string; find?: string }) =>
+      !!x && (!!x.prefix || !!x.suffix || (x.find != null && x.find !== ''));
+    const outColumns = columns.map((c) => (active(tf[c.name]) ? { ...c, type: 'VARCHAR' } : c));
 
     const inner = `SELECT ${PARQUET_ROWNUM} AS ${quoteIdent(SOURCE_ROWNUM)}, ${projected}
       FROM read_parquet(${quotePath(manifest.parquetPath)}, ${PARQUET_ROWNUM}=true)
@@ -189,7 +197,7 @@ export class ViewManager {
       identity: false,
       materialized: true,
       path: outPath,
-      columns,
+      columns: outColumns,
       rowCount,
       buildMs: Date.now() - started,
       rowNumExpr: PARQUET_ROWNUM,
