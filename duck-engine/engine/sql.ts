@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import type {
   ColumnInfo,
+  ColumnTransform,
   FilterSpec,
   SearchSpec,
   SortSpec,
@@ -245,11 +246,32 @@ export function selectedColumns(view: ViewSpec, columns: ColumnInfo[]): ColumnIn
   return picked.length > 0 ? picked : columns;
 }
 
-/** True when the view neither filters, searches nor sorts. */
+/** True when at least one column carries a prefix/suffix transform. */
+export function hasTransforms(view: ViewSpec): boolean {
+  const t = view.transforms;
+  return !!t && Object.values(t).some((x) => !!x && (!!x.prefix || !!x.suffix));
+}
+
+/**
+ * SELECT expression for one column, applying its prefix/suffix transform if any.
+ * The transform is skipped for NULL and empty values (they pass through
+ * unchanged); everything else becomes `prefix || value || suffix` as text.
+ */
+export function projectExpr(name: string, transforms?: Record<string, ColumnTransform>): string {
+  const id = quoteIdent(name);
+  const tr = transforms && transforms[name];
+  if (!tr || (!tr.prefix && !tr.suffix)) return id;
+  const casted = `CAST(${id} AS VARCHAR)`;
+  const pre = tr.prefix ? `${quoteLit(tr.prefix)} || ` : '';
+  const suf = tr.suffix ? ` || ${quoteLit(tr.suffix)}` : '';
+  return `CASE WHEN ${id} IS NULL OR ${casted} = '' THEN ${casted} ELSE ${pre}${casted}${suf} END AS ${id}`;
+}
+
+/** True when the view neither filters, searches, sorts nor transforms. */
 export function isIdentityView(view: ViewSpec): boolean {
   const activeFilters = view.filters.filter((f) => f.enabled);
   const searchFilters = !!(view.search?.asFilter && view.search.query);
-  return activeFilters.length === 0 && !searchFilters && view.sort.length === 0;
+  return activeFilters.length === 0 && !searchFilters && view.sort.length === 0 && !hasTransforms(view);
 }
 
 /** Stable key for a (dataset, view) pair — used to name and reuse derived Parquet files. */
@@ -272,6 +294,12 @@ export function viewKey(datasetId: string, view: ViewSpec, columns: ColumnInfo[]
         : null,
     sort: view.sort.map((s) => [s.column, s.dir, !!s.nullsFirst]),
     select: view.select ? view.select.slice().sort() : null,
+    transforms: view.transforms
+      ? Object.entries(view.transforms)
+          .filter(([, v]) => v && (v.prefix || v.suffix))
+          .map(([k, v]) => [k, v.prefix ?? '', v.suffix ?? ''])
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      : null,
     cols: columns.map((c) => c.name + ':' + c.type),
   };
   return createHash('sha1')

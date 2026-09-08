@@ -213,6 +213,12 @@ export interface SearchSpec {
   asFilter: boolean;
 }
 
+/** A per-column value transform applied at view time (non-destructive). */
+export interface ColumnTransform {
+  prefix?: string;
+  suffix?: string;
+}
+
 export interface ViewSpec {
   filters: FilterSpec[];
   combine: 'and' | 'or';
@@ -220,6 +226,8 @@ export interface ViewSpec {
   sort: SortSpec[];
   /** Projection. null = every column. */
   select: string[] | null;
+  /** Column name -> prefix/suffix applied to the whole column (skips NULL/empty). */
+  transforms?: Record<string, ColumnTransform>;
 }
 
 export const EMPTY_VIEW: ViewSpec = {
@@ -228,6 +236,7 @@ export const EMPTY_VIEW: ViewSpec = {
   search: null,
   sort: [],
   select: null,
+  transforms: {},
 };
 
 export interface ViewInfo {

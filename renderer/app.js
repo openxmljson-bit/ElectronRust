@@ -2481,7 +2481,7 @@ function duckViewSpec(t) {
   const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
   const q = t.duck && t.duck.searchQuery;
   const search = q ? { query: q, mode: (t.duck.searchMode || 'contains'), columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
-  return { filters, combine: 'and', search, sort, select: null };
+  return { filters, combine: 'and', search, sort, select: null, transforms: t.tableTransforms || {} };
 }
 
 async function applyTableViewDuck(t) {
@@ -2494,6 +2494,7 @@ async function applyTableViewDuck(t) {
     const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
     if (!tabAlive(t)) return;
     t.duck.rowCount = vi.rowCount;
+    if (vi.columns && vi.columns.length) t.duck.columns = vi.columns; // reflect transform type changes
     t.tableViewTotal = vi.rowCount;
     buildTableHead(t);
     renderTable();
@@ -2882,6 +2883,53 @@ function openSortDialog(t) {
   box.appendChild(actions);
 }
 
+// Add a prefix and/or suffix to every value in a column (non-destructive, applied
+// in the view — so it shows in the grid and in exports). NULL/empty are skipped.
+function openTransformDialog(t) {
+  if (!isDuck(t)) { toast('Prefix / suffix works on delimited (CSV/TSV) tables'); return; }
+  t.tableTransforms = t.tableTransforms || {};
+  const { back, box } = simpleModal('Add prefix / suffix to a column');
+  const row = document.createElement('div'); row.className = 'modal-row';
+  const l1 = document.createElement('label'); l1.textContent = 'Column';
+  const sel = colSelect(t);
+  row.append(l1, sel);
+  box.appendChild(row);
+
+  const row2 = document.createElement('div'); row2.className = 'modal-row';
+  const lp = document.createElement('label'); lp.textContent = 'Prefix';
+  const pre = document.createElement('input'); pre.type = 'text'; pre.placeholder = 'e.g. https://';
+  const ls = document.createElement('label'); ls.textContent = 'Suffix';
+  const suf = document.createElement('input'); suf.type = 'text'; suf.placeholder = 'e.g. _v1';
+  row2.append(lp, pre, ls, suf);
+  box.appendChild(row2);
+
+  // Prefill from any existing transform on the selected column.
+  const fill = () => {
+    const name = t.tableHeaders[parseInt(sel.value, 10)];
+    const ex = t.tableTransforms[name] || {};
+    pre.value = ex.prefix || ''; suf.value = ex.suffix || '';
+  };
+  sel.onchange = fill; fill();
+
+  const hint = document.createElement('div'); hint.className = 'jq-hint';
+  hint.textContent = 'Applied to the whole column; empty and NULL cells are left unchanged. Shows in the grid and in exports. Leave both blank to remove.';
+  box.appendChild(hint);
+
+  const actions = document.createElement('div'); actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Apply';
+  ok.onclick = () => {
+    const name = t.tableHeaders[parseInt(sel.value, 10)];
+    const p = pre.value, s = suf.value;
+    if (p || s) t.tableTransforms[name] = { prefix: p, suffix: s };
+    else delete t.tableTransforms[name];
+    back.remove();
+    applyTableView(t);
+  };
+  actions.append(cancel, ok);
+  box.appendChild(actions);
+}
+
 function openFilterDialog(t, presetCol) {
   const { back, box } = simpleModal('Filter rows');
   const working = (t.tableFilters || []).map((f) => ({ ...f }));
@@ -2928,11 +2976,14 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   ev.stopPropagation();
   const r = ev.currentTarget.getBoundingClientRect();
   const filterActive = !!(t.tableFilters && t.tableFilters.length);
+  const transformActive = !!(t.tableTransforms && Object.keys(t.tableTransforms).length);
   const items = [
     { label: 'Filter…', action: () => openFilterDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
+    { label: 'Add Prefix / Suffix…', action: () => openTransformDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
     { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
+    { label: 'Clear Prefix / Suffix', disabled: !transformActive, action: () => { t.tableTransforms = {}; applyTableView(t); } },
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];
