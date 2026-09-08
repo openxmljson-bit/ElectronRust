@@ -2908,6 +2908,7 @@ function openTransformDialog(t) {
   const rowOpt = document.createElement('div'); rowOpt.className = 'modal-row';
   const mkChk = (labelText) => {
     const l = document.createElement('label'); l.className = 'jq-opt';
+    l.style.whiteSpace = 'nowrap'; l.style.flex = '0 0 auto'; // keep the label on one line
     const c = document.createElement('input'); c.type = 'checkbox';
     l.append(c, document.createTextNode(' ' + labelText));
     rowOpt.appendChild(l); return c;
