@@ -213,8 +213,17 @@ export interface SearchSpec {
   asFilter: boolean;
 }
 
-/** A per-column value transform applied at view time (non-destructive). */
+/** A per-column value transform applied at view time (non-destructive).
+ *  Order of application: find/replace first, then prefix/suffix. */
 export interface ColumnTransform {
+  /** Substring (or regex, when `regex` is set) to find. */
+  find?: string;
+  /** Replacement text (empty string deletes matches). */
+  replace?: string;
+  /** Treat `find` as a regular expression. */
+  regex?: boolean;
+  /** Case-insensitive find. */
+  ignoreCase?: boolean;
   prefix?: string;
   suffix?: string;
 }

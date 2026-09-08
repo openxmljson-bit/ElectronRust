@@ -246,25 +246,47 @@ export function selectedColumns(view: ViewSpec, columns: ColumnInfo[]): ColumnIn
   return picked.length > 0 ? picked : columns;
 }
 
-/** True when at least one column carries a prefix/suffix transform. */
+function transformActive(x?: ColumnTransform): boolean {
+  return !!x && (!!x.prefix || !!x.suffix || (x.find != null && x.find !== ''));
+}
+
+/** True when at least one column carries a transform. */
 export function hasTransforms(view: ViewSpec): boolean {
   const t = view.transforms;
-  return !!t && Object.values(t).some((x) => !!x && (!!x.prefix || !!x.suffix));
+  return !!t && Object.values(t).some((x) => transformActive(x));
+}
+
+/** Escape a literal string for safe use inside a regexp pattern. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * SELECT expression for one column, applying its prefix/suffix transform if any.
- * The transform is skipped for NULL and empty values (they pass through
- * unchanged); everything else becomes `prefix || value || suffix` as text.
+ * SELECT expression for one column, applying its transform if any: find/replace
+ * first, then prefix/suffix. The transform is skipped for NULL and empty values
+ * (they pass through unchanged); the result is text.
  */
 export function projectExpr(name: string, transforms?: Record<string, ColumnTransform>): string {
   const id = quoteIdent(name);
   const tr = transforms && transforms[name];
-  if (!tr || (!tr.prefix && !tr.suffix)) return id;
+  if (!transformActive(tr)) return id;
   const casted = `CAST(${id} AS VARCHAR)`;
-  const pre = tr.prefix ? `${quoteLit(tr.prefix)} || ` : '';
-  const suf = tr.suffix ? ` || ${quoteLit(tr.suffix)}` : '';
-  return `CASE WHEN ${id} IS NULL OR ${casted} = '' THEN ${casted} ELSE ${pre}${casted}${suf} END AS ${id}`;
+  let val = casted;
+  if (tr!.find != null && tr!.find !== '') {
+    const repl = quoteLit(tr!.replace ?? '');
+    if (tr!.regex) {
+      const opts = 'g' + (tr!.ignoreCase ? 'i' : '');
+      val = `regexp_replace(${val}, ${quoteLit(tr!.find)}, ${repl}, ${quoteLit(opts)})`;
+    } else if (tr!.ignoreCase) {
+      // Case-insensitive literal find via an escaped regex.
+      val = `regexp_replace(${val}, ${quoteLit(escapeRegex(tr!.find))}, ${repl}, 'gi')`;
+    } else {
+      val = `replace(${val}, ${quoteLit(tr!.find)}, ${repl})`; // literal, all occurrences
+    }
+  }
+  const pre = tr!.prefix ? `${quoteLit(tr!.prefix)} || ` : '';
+  const suf = tr!.suffix ? ` || ${quoteLit(tr!.suffix)}` : '';
+  return `CASE WHEN ${id} IS NULL OR ${casted} = '' THEN ${casted} ELSE ${pre}${val}${suf} END AS ${id}`;
 }
 
 /** True when the view neither filters, searches, sorts nor transforms. */
@@ -296,8 +318,8 @@ export function viewKey(datasetId: string, view: ViewSpec, columns: ColumnInfo[]
     select: view.select ? view.select.slice().sort() : null,
     transforms: view.transforms
       ? Object.entries(view.transforms)
-          .filter(([, v]) => v && (v.prefix || v.suffix))
-          .map(([k, v]) => [k, v.prefix ?? '', v.suffix ?? ''])
+          .filter(([, v]) => transformActive(v))
+          .map(([k, v]) => [k, v.find ?? '', v.replace ?? '', !!v.regex, !!v.ignoreCase, v.prefix ?? '', v.suffix ?? ''])
           .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
       : null,
     cols: columns.map((c) => c.name + ':' + c.type),

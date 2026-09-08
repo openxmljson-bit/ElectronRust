@@ -2883,18 +2883,39 @@ function openSortDialog(t) {
   box.appendChild(actions);
 }
 
-// Add a prefix and/or suffix to every value in a column (non-destructive, applied
-// in the view — so it shows in the grid and in exports). NULL/empty are skipped.
+// Transform a whole column (non-destructive, applied in the view — so it shows
+// in the grid and in exports): find/replace and/or prefix/suffix. NULL and empty
+// cells are skipped. find/replace runs first, then prefix/suffix.
 function openTransformDialog(t) {
-  if (!isDuck(t)) { toast('Prefix / suffix works on delimited (CSV/TSV) tables'); return; }
+  if (!isDuck(t)) { toast('Column transforms work on delimited (CSV/TSV) tables'); return; }
   t.tableTransforms = t.tableTransforms || {};
-  const { back, box } = simpleModal('Add prefix / suffix to a column');
+  const { back, box } = simpleModal('Transform column');
   const row = document.createElement('div'); row.className = 'modal-row';
   const l1 = document.createElement('label'); l1.textContent = 'Column';
   const sel = colSelect(t);
   row.append(l1, sel);
   box.appendChild(row);
 
+  // Find & replace
+  const rowF = document.createElement('div'); rowF.className = 'modal-row';
+  const lf = document.createElement('label'); lf.textContent = 'Find';
+  const find = document.createElement('input'); find.type = 'text'; find.placeholder = 'text to find (blank = none)';
+  const lr = document.createElement('label'); lr.textContent = 'Replace';
+  const repl = document.createElement('input'); repl.type = 'text'; repl.placeholder = 'replacement (blank = delete)';
+  rowF.append(lf, find, lr, repl);
+  box.appendChild(rowF);
+
+  const rowOpt = document.createElement('div'); rowOpt.className = 'modal-row';
+  const mkChk = (labelText) => {
+    const l = document.createElement('label'); l.className = 'jq-opt';
+    const c = document.createElement('input'); c.type = 'checkbox';
+    l.append(c, document.createTextNode(' ' + labelText));
+    rowOpt.appendChild(l); return c;
+  };
+  const rx = mkChk('Regex'); const ic = mkChk('Ignore case');
+  box.appendChild(rowOpt);
+
+  // Prefix / suffix
   const row2 = document.createElement('div'); row2.className = 'modal-row';
   const lp = document.createElement('label'); lp.textContent = 'Prefix';
   const pre = document.createElement('input'); pre.type = 'text'; pre.placeholder = 'e.g. https://';
@@ -2907,12 +2928,14 @@ function openTransformDialog(t) {
   const fill = () => {
     const name = t.tableHeaders[parseInt(sel.value, 10)];
     const ex = t.tableTransforms[name] || {};
+    find.value = ex.find || ''; repl.value = ex.replace || '';
+    rx.checked = !!ex.regex; ic.checked = !!ex.ignoreCase;
     pre.value = ex.prefix || ''; suf.value = ex.suffix || '';
   };
   sel.onchange = fill; fill();
 
   const hint = document.createElement('div'); hint.className = 'jq-hint';
-  hint.textContent = 'Applied to the whole column; empty and NULL cells are left unchanged. Shows in the grid and in exports. Leave both blank to remove.';
+  hint.textContent = 'Applied to the whole column; empty and NULL cells are left unchanged. Find/replace runs first, then prefix/suffix. Shows in the grid and in exports. Clear all fields to remove.';
   box.appendChild(hint);
 
   const actions = document.createElement('div'); actions.className = 'modal-actions';
@@ -2920,8 +2943,11 @@ function openTransformDialog(t) {
   const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Apply';
   ok.onclick = () => {
     const name = t.tableHeaders[parseInt(sel.value, 10)];
-    const p = pre.value, s = suf.value;
-    if (p || s) t.tableTransforms[name] = { prefix: p, suffix: s };
+    const tr = {};
+    if (find.value) { tr.find = find.value; tr.replace = repl.value; if (rx.checked) tr.regex = true; if (ic.checked) tr.ignoreCase = true; }
+    if (pre.value) tr.prefix = pre.value;
+    if (suf.value) tr.suffix = suf.value;
+    if (Object.keys(tr).length) t.tableTransforms[name] = tr;
     else delete t.tableTransforms[name];
     back.remove();
     applyTableView(t);
@@ -2980,10 +3006,10 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   const items = [
     { label: 'Filter…', action: () => openFilterDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
-    { label: 'Add Prefix / Suffix…', action: () => openTransformDialog(t) },
+    { label: 'Transform Column…', action: () => openTransformDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
     { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
-    { label: 'Clear Prefix / Suffix', disabled: !transformActive, action: () => { t.tableTransforms = {}; applyTableView(t); } },
+    { label: 'Clear Transforms', disabled: !transformActive, action: () => { t.tableTransforms = {}; applyTableView(t); } },
     { sep: true },
     { label: 'Profile', action: () => runProfile(t) },
   ];

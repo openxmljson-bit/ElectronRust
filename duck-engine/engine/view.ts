@@ -158,9 +158,9 @@ export class ViewManager {
     const tf = view.transforms || {};
     const projected = columns.map((c) => projectExpr(c.name, tf)).join(', ');
     // A transformed column is now text; reflect that in the reported schema.
-    const outColumns = columns.map((c) =>
-      tf[c.name] && (tf[c.name].prefix || tf[c.name].suffix) ? { ...c, type: 'VARCHAR' } : c,
-    );
+    const active = (x?: { prefix?: string; suffix?: string; find?: string }) =>
+      !!x && (!!x.prefix || !!x.suffix || (x.find != null && x.find !== ''));
+    const outColumns = columns.map((c) => (active(tf[c.name]) ? { ...c, type: 'VARCHAR' } : c));
 
     const inner = `SELECT ${PARQUET_ROWNUM} AS ${quoteIdent(SOURCE_ROWNUM)}, ${projected}
       FROM read_parquet(${quotePath(manifest.parquetPath)}, ${PARQUET_ROWNUM}=true)
