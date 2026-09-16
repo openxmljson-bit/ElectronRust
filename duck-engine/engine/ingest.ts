@@ -314,6 +314,24 @@ function buildPlans(
         }
       }
 
+      // Pass 0b — encoding fallback. The detected encoding can be wrong, and some
+      // encodings are rejected by DuckDB outright (e.g. latin-1 on a UTF-8 file
+      // whose multi-byte chars use C1 bytes → "File is not latin-1 encoded", a
+      // hard failure that would otherwise sink every plan). Retry the primary
+      // delimiters, quote-aware, under the other encodings. These sit after the
+      // detected-encoding reads, so a correctly-detected file never reaches them.
+      const otherEncodings = ['utf-8', 'latin-1', 'utf-16'].filter((e) => e !== (o.encoding || 'utf-8'));
+      for (const enc of otherEncodings) {
+        for (const d of delimiters.slice(0, 3)) {
+          plans.push(
+            csvPlan('csv-auto', { delimiter: d, quoteChar: '"', nullPadding: false, skipRows: 0, encoding: enc }, 2, [
+              ...(d === null ? [] : [`Read with ${describeDelimiter(d)} as the delimiter.`]),
+              `Retried as ${enc} because the detected encoding did not read.`,
+            ]),
+          );
+        }
+      }
+
       // Pass 1: every delimiter under both quote readings, demanding a real split.
       //
       // The header=true retry sits right here, next to its own delimiter, rather
@@ -396,17 +414,27 @@ function buildPlans(
     }
   }
 
-  // Last resort for anything text-shaped: one row per line, one column.
-  plans.push({
-    strategy: 'raw-lines',
-    reader: `read_csv(${p}, delim='\\x00', quote='', escape='', header=false, columns={'line': 'VARCHAR'}, ignore_errors=true${
-      o.encoding && o.encoding !== 'utf-8' ? `, encoding=${quoteLit(o.encoding)}` : ''
-    })`,
-    notes: [
-      'The file could not be parsed as structured data, so it was loaded as one line per row.',
-    ],
-    minColumns: 1,
-  });
+  // Last resort for anything text-shaped: one row per line, one column. Try the
+  // detected encoding first, then the others, so a rejected encoding can't sink
+  // even this fallback and the user always gets *something* to look at.
+  const rawEncodings: (string | null)[] = [];
+  for (const enc of [o.encoding ?? null, 'utf-8', 'latin-1', 'utf-16']) {
+    if (!rawEncodings.includes(enc)) rawEncodings.push(enc);
+  }
+  for (const enc of rawEncodings) {
+    plans.push({
+      strategy: 'raw-lines',
+      reader: `read_csv(${p}, delim='\\x00', quote='', escape='', header=false, columns={'line': 'VARCHAR'}, ignore_errors=true${
+        enc && enc !== 'utf-8' ? `, encoding=${quoteLit(enc)}` : ''
+      })`,
+      notes: [
+        enc && enc !== 'utf-8'
+          ? `The file could not be parsed as structured data, so it was loaded as one line per row (read as ${enc}).`
+          : 'The file could not be parsed as structured data, so it was loaded as one line per row.',
+      ],
+      minColumns: 1,
+    });
+  }
 
   return plans;
 }
