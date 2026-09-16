@@ -111,8 +111,16 @@ function isValidUtf8(buf: Buffer): boolean {
     break;
   }
   const slice = buf.subarray(0, end);
-  const decoded = slice.toString('utf8');
-  return !decoded.includes('�');
+  // A fatal decoder throws on genuinely invalid bytes but accepts a file that
+  // legitimately CONTAINS the replacement character U+FFFD (bytes EF BF BD).
+  // Checking for '�' in the decoded text instead would wrongly flag such a file
+  // as non-UTF-8 — which then picks latin-1, and DuckDB rejects it outright.
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(slice);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 interface EncodingGuess {
