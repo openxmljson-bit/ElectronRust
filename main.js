@@ -1625,7 +1625,7 @@ function buildMenu() {
         { type: 'separator' },
         // Cmd+C belongs to Edit ▸ Copy, so Copy Row uses Cmd+Shift+C.
         { label: 'Copy Row', accelerator: 'CmdOrCtrl+Shift+C', click: (mi, bw) => sendMenu(bw, 'copy-row') },
-        { label: 'Copy as cURL', click: (mi, bw) => sendMenu(bw, 'copy-curl') },
+        // "Copy as cURL" now lives on the toolbar Actions menu (URL docs only).
       ],
     },
     {
