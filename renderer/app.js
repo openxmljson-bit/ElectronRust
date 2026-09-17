@@ -6000,11 +6000,14 @@ function showValidationReport(t, p, res) {
 async function compareWithTab() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  // Any other ready JSON/XML tab qualifies — memory mode is fine (runCompare
+  // reconstructs both docs and diffs in the renderer). DuckDB tables use their
+  // own "Compare with…" and can't be diffed here.
   const others = tabs.filter(
-    (x) => x !== t && x.phase === 'ready' && !x.plain && !(x.meta && x.meta.mode === 'memory')
+    (x) => x !== t && x.phase === 'ready' && !x.plain && !isDuck(x)
   );
   if (!others.length) {
-    toast('Open the document to compare with in another tab first (database mode)');
+    toast('Open another document in a tab to compare with first');
     return;
   }
   const { box, back } = simpleModal('Compare "' + t.title + '" with…');
