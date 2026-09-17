@@ -2600,8 +2600,11 @@ function renderTable() {
     row.style.top = i * ROW_H + 'px';
     const idxCell = document.createElement('div');
     idxCell.className = 'td idx';
+    if (sel && i >= sel.r0 && i <= sel.r1) idxCell.classList.add('row-sel'); // whole-row selection cue
     idxCell.style.width = iw + 'px';
     idxCell.textContent = fmtInt(i);
+    idxCell.addEventListener('mousedown', (e) => startRowSelect(e, t, i));
+    idxCell.addEventListener('mouseenter', (e) => extendRowSelect(e, t, i));
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
     cols.forEach((c, vi) => {
@@ -2661,7 +2664,35 @@ function extendCellSelect(e, t, row, vis) {
   t.tableSel.fVis = vis;
   renderTable();
 }
-document.addEventListener('mouseup', () => { cellDragging = false; });
+
+// Row selection from the row-number gutter: click selects the whole row (every
+// column), shift+click extends to a range, and dragging down the gutter selects
+// several. The existing Cmd+C block-copy then copies the whole row(s).
+let rowDragging = false;
+function lastVisIdx(t) { return Math.max(0, visCols(t).length - 1); }
+function startRowSelect(e, t, row) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  try {
+    const ae = document.activeElement;
+    if (ae && ae.closest && ae.closest('#source-panel') && ae.blur) ae.blur();
+    const s = window.getSelection && window.getSelection();
+    if (s && !s.isCollapsed) s.removeAllRanges();
+  } catch {}
+  rowDragging = true;
+  const last = lastVisIdx(t);
+  if (e.shiftKey && t.tableSel) { t.tableSel.aVis = 0; t.tableSel.fVis = last; t.tableSel.fRow = row; }
+  else t.tableSel = { aRow: row, aVis: 0, fRow: row, fVis: last };
+  renderTable();
+  if (sourceOpen) scheduleSourceUpdate(); // Source pane follows the selected row
+}
+function extendRowSelect(e, t, row) {
+  if (!rowDragging || !t.tableSel) return;
+  t.tableSel.fRow = row;
+  t.tableSel.fVis = lastVisIdx(t);
+  renderTable();
+}
+document.addEventListener('mouseup', () => { cellDragging = false; rowDragging = false; });
 
 // Keyboard nav within the grid (arrows move the focus cell; shift extends).
 document.addEventListener('keydown', (e) => {

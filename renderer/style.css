@@ -752,6 +752,10 @@ body.light .narik-brand {
 .th.drop-target { box-shadow: inset 2px 0 0 var(--accent); }
 /* cell selection */
 .td.cell-sel { background: var(--sel); }
+/* Row-number gutter is a clickable row selector. */
+.td.idx { cursor: pointer; user-select: none; }
+.td.idx:hover { color: var(--fg); }
+.table-row .td.idx.row-sel, .table-row.zebra .td.idx.row-sel { background: var(--sel); color: var(--fg); font-weight: 600; }
 .table-row .td { cursor: default; user-select: none; }
 .td .cell-link { color: var(--accent); text-decoration: none; cursor: pointer; }
 .td .cell-link:hover { text-decoration: underline; }
@@ -788,6 +792,9 @@ body[class*="tbl-"] .table-row .td.idx,
 body[class*="tbl-"] .td.pinned { background: linear-gradient(0deg, var(--t), var(--t)), var(--bg); }
 body[class*="tbl-"] .table-row.zebra .td.idx,
 body[class*="tbl-"] .table-row.zebra .td.pinned { background: linear-gradient(0deg, var(--t), var(--t)), var(--bg2); }
+/* Selected row gutter must beat the themed gutter background above. */
+body[class*="tbl-"] .table-row .td.idx.row-sel,
+body[class*="tbl-"] .table-row.zebra .td.idx.row-sel { background: var(--sel); color: var(--fg); font-weight: 600; }
 body[class*="tbl-"] .th.sorted,
 body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 
