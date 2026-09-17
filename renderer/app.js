@@ -6023,7 +6023,14 @@ async function compareWithTab() {
       back.remove();
       try {
         toast('Comparing…', true);
-        const res = await window.oxj.diffTabs(t.id, o.id);
+        let res;
+        try {
+          res = await window.oxj.diffTabs(t.id, o.id);
+        } catch (err) {
+          if (!isMemoryModeErr(cleanErr(err))) throw err;
+          const [av, bv] = await Promise.all([reconstructDoc(t), reconstructDoc(o)]);
+          res = jsDiff(av, bv);
+        }
         const total = Number(res.added) + Number(res.removed) + Number(res.changed);
         if (!total) {
           toast('Documents are structurally identical ✓', true);
