@@ -756,6 +756,7 @@ body.light .narik-brand {
 .td.idx { cursor: pointer; user-select: none; }
 .td.idx:hover { color: var(--fg); }
 .table-row .td.idx.row-sel, .table-row.zebra .td.idx.row-sel { background: var(--sel); color: var(--fg); font-weight: 600; }
+.th.col-sel { background: var(--sel); color: var(--fg); }
 .table-row .td { cursor: default; user-select: none; }
 .td .cell-link { color: var(--accent); text-decoration: none; cursor: pointer; }
 .td .cell-link:hover { text-decoration: underline; }
@@ -795,6 +796,8 @@ body[class*="tbl-"] .table-row.zebra .td.pinned { background: linear-gradient(0d
 /* Selected row gutter must beat the themed gutter background above. */
 body[class*="tbl-"] .table-row .td.idx.row-sel,
 body[class*="tbl-"] .table-row.zebra .td.idx.row-sel { background: var(--sel); color: var(--fg); font-weight: 600; }
+/* Selected column header (⌘/Ctrl-click) must beat the themed header background. */
+body[class*="tbl-"] .th.col-sel { background: var(--sel); color: var(--fg); }
 body[class*="tbl-"] .th.sorted,
 body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 

@@ -1147,7 +1147,7 @@ async function openDuck(t, path) {
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
-  t.tableSel = null; t.tableRowSet = null; t.tableSort = null; t.tableFilters = [];
+  t.tableSel = null; t.tableRowSet = null; t.tableColSet = null; t.tableSort = null; t.tableFilters = [];
   t.view = 'table';
   t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
   t.phase = 'ready';
@@ -2325,9 +2325,10 @@ function buildTableHead(t) {
     const th = document.createElement('div');
     th.className = 'th';
     th.textContent = t.tableHeaders[c];
-    th.title = t.tableHeaders[c] + ' — click to sort';
+    th.title = t.tableHeaders[c] + ' — click to sort · ⌘/Ctrl-click to select column';
     th.style.width = colWidth(t, c) + 'px';
     th.dataset.col = String(c);
+    if (t.tableColSet && t.tableColSet.has(c)) th.classList.add('col-sel');
     if (t.tableSort && t.tableSort.col === c) {
       th.classList.add('sorted');
       const ar = document.createElement('span');
@@ -2335,8 +2336,13 @@ function buildTableHead(t) {
       ar.textContent = t.tableSort.dir === 'asc' ? ' ▲' : ' ▼';
       th.appendChild(ar);
     }
-    // Click the header to cycle sort: asc → desc → none.
-    th.addEventListener('click', (ev) => { if (!ev.target.classList.contains('col-resizer')) cycleSort(t, c); });
+    // Click the header to cycle sort (asc → desc → none); ⌘/Ctrl-click selects
+    // the whole column instead (toggle, so several columns can be picked).
+    th.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('col-resizer')) return;
+      if (ev.metaKey || ev.ctrlKey) { ev.preventDefault(); toggleColSelect(t, c); return; }
+      cycleSort(t, c);
+    });
     if (t.colPinned.has(c)) {
       th.classList.add('pinned');
       th.style.left = pinnedLeft + 'px';
@@ -2497,6 +2503,7 @@ async function applyTableViewDuck(t) {
   t.tableInflight = new Set();
   t.tableSel = null;
   t.tableRowSet = null; // row indices shift when the view changes
+  t.tableColSet = null;
   tableScroll.scrollTop = 0;
   try {
     const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
@@ -2533,13 +2540,25 @@ function selRect(t) {
 }
 
 function hasTableSelection(t) {
-  return !!(t && (t.tableSel || (t.tableRowSet && t.tableRowSet.size)));
+  return !!(t && (t.tableSel || (t.tableRowSet && t.tableRowSet.size) || (t.tableColSet && t.tableColSet.size)));
 }
 
+// Whole-column selection can span the entire dataset; cap the materialised rows
+// so copy/new-tab stay responsive on huge tables (the rest via Export).
+const COL_SELECT_ROW_CAP = 100000;
+
 // The effective selection as { rows: sorted row indices, cols: origin column
-// indices }. A gutter row-set (Cmd/Shift multi-select of whole rows, possibly
-// non-contiguous) takes precedence over the rectangular cell block.
+// indices }. Precedence: column-set (whole columns) → row-set (whole rows) →
+// the rectangular cell block.
 function selectedRowsCols(t) {
+  if (t.tableColSet && t.tableColSet.size) {
+    const total = (t.tableViewTotal != null ? t.tableViewTotal : (t.duck ? t.duck.rowCount : 0)) || 0;
+    const n = Math.min(total, COL_SELECT_ROW_CAP);
+    const rows = [];
+    for (let r = 0; r < n; r++) rows.push(r);
+    const cols = visCols(t).filter((c) => t.tableColSet.has(c)); // keep display order
+    return { rows, cols, wholeColumns: true, capped: n < total, total };
+  }
   if (t.tableRowSet && t.tableRowSet.size) {
     return { rows: [...t.tableRowSet].sort((a, b) => a - b), cols: visCols(t) };
   }
@@ -2551,6 +2570,20 @@ function selectedRowsCols(t) {
   const oc = [];
   for (let v = s.v0; v <= s.v1; v++) oc.push(cols[v]);
   return { rows, cols: oc };
+}
+
+// Toggle a whole-column selection (clears cell/row selection). Rebuilds the head
+// so the selected header highlights.
+function toggleColSelect(t, c) {
+  t.tableSel = null; t.tableRowSet = null;
+  if (!t.tableColSet) t.tableColSet = new Set();
+  if (t.tableColSet.has(c)) t.tableColSet.delete(c); else t.tableColSet.add(c);
+  buildTableHead(t); renderTable();
+}
+function selectColumn(t, c) {
+  t.tableSel = null; t.tableRowSet = null;
+  t.tableColSet = new Set([c]);
+  buildTableHead(t); renderTable();
 }
 
 // "Render URLs as Hyperlinks" — a table format option, toggled from Actions and
@@ -2635,7 +2668,8 @@ function renderTable() {
       td.className = 'td';
       td.style.width = colWidth(t, c) + 'px';
       if (t.colPinned.has(c)) { td.classList.add('pinned'); td.style.left = pinnedLeft[vi] + 'px'; }
-      if (rowInSet || (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1)) td.classList.add('cell-sel');
+      const colInSet = !!(t.tableColSet && t.tableColSet.has(c));
+      if (colInSet || rowInSet || (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1)) td.classList.add('cell-sel');
       const cell = cells[c];
       const val = cell && cell.value != null ? cell.value : '';
       const linkThis = renderLinks || (t.colLinks && t.colLinks.has(c));
@@ -2676,7 +2710,9 @@ function startCellSelect(e, t, row, vis) {
     if (s && !s.isCollapsed) s.removeAllRanges();
   } catch {}
   cellDragging = true;
-  t.tableRowSet = null; // a cell-block selection replaces any gutter row-set
+  const hadCol = !!(t.tableColSet && t.tableColSet.size);
+  t.tableRowSet = null; t.tableColSet = null; // a cell block replaces row/column selections
+  if (hadCol) buildTableHead(t);
   if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
   else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
   renderTable();
@@ -2708,6 +2744,9 @@ function startRowSelect(e, t, row) {
     if (s && !s.isCollapsed) s.removeAllRanges();
   } catch {}
   t.tableSel = null; // the gutter uses the row-set model, not the cell block
+  const hadCol = !!(t.tableColSet && t.tableColSet.size);
+  t.tableColSet = null;
+  if (hadCol) buildTableHead(t);
   rowDragging = true;
   plainRowDrag = false;
   if (e.metaKey || e.ctrlKey) {
@@ -2750,7 +2789,9 @@ document.addEventListener('keydown', (e) => {
       const r = [...t.tableRowSet].sort((a, b) => a - b)[0];
       t.tableSel = { aRow: r, aVis: 0, fRow: r, fVis: 0 };
     }
-    t.tableRowSet = null;
+    const hadCol = !!(t.tableColSet && t.tableColSet.size);
+    t.tableRowSet = null; t.tableColSet = null;
+    if (hadCol) buildTableHead(t);
     if (!t.tableSel) t.tableSel = { aRow: 0, aVis: 0, fRow: 0, fVis: 0 };
   }
   const s = t.tableSel;
@@ -2785,6 +2826,7 @@ async function copyTableSelection(t) {
     lines.push(s.cols.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
   }
   await copyText(lines.join('\n'), 'selection');
+  if (s.capped) toast('Copied the first ' + fmtInt(s.rows.length) + ' of ' + fmtInt(s.total) + ' rows — use Export for the whole column.', true);
   return true;
 }
 
@@ -2805,6 +2847,7 @@ async function selectionToNewTab(t) {
     const file = await window.oxj.textToFile('selection', 'csv', lines.join('\n'));
     const nt = newTab(true);
     if (nt) openPath(file, nt, false, { format: 'csv' });
+    if (s.capped) toast('Included the first ' + fmtInt(s.rows.length) + ' of ' + fmtInt(s.total) + ' rows — use Export for the whole column.', true);
   } catch (err) { toast('Selection failed: ' + cleanErr(err)); }
 }
 
@@ -2842,7 +2885,10 @@ document.addEventListener('copy', (e) => {
 // ---------- header context menu ----------
 function showHeaderMenu(e, t, c) {
   const hasFilter = t.tableFilters && t.tableFilters.some((f) => f.col === c);
+  const colSelected = !!(t.tableColSet && t.tableColSet.has(c));
   const items = [
+    { label: colSelected ? 'Deselect Column' : 'Select Column', action: () => toggleColSelect(t, c) },
+    { sep: true },
     { label: 'Filter "' + t.tableHeaders[c] + '"…', action: () => openFilterDialog(t, c) },
   ];
   if (hasFilter) items.push({ label: 'Clear this filter', action: () => { t.tableFilters = t.tableFilters.filter((f) => f.col !== c); applyTableView(t); } });
