@@ -6000,11 +6000,14 @@ function showValidationReport(t, p, res) {
 async function compareWithTab() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
+  // Any other ready JSON/XML tab qualifies — memory mode is fine (runCompare
+  // reconstructs both docs and diffs in the renderer). DuckDB tables use their
+  // own "Compare with…" and can't be diffed here.
   const others = tabs.filter(
-    (x) => x !== t && x.phase === 'ready' && !x.plain && !(x.meta && x.meta.mode === 'memory')
+    (x) => x !== t && x.phase === 'ready' && !x.plain && !isDuck(x)
   );
   if (!others.length) {
-    toast('Open the document to compare with in another tab first (database mode)');
+    toast('Open another document in a tab to compare with first');
     return;
   }
   const { box, back } = simpleModal('Compare "' + t.title + '" with…');
@@ -6020,7 +6023,14 @@ async function compareWithTab() {
       back.remove();
       try {
         toast('Comparing…', true);
-        const res = await window.oxj.diffTabs(t.id, o.id);
+        let res;
+        try {
+          res = await window.oxj.diffTabs(t.id, o.id);
+        } catch (err) {
+          if (!isMemoryModeErr(cleanErr(err))) throw err;
+          const [av, bv] = await Promise.all([reconstructDoc(t), reconstructDoc(o)]);
+          res = jsDiff(av, bv);
+        }
         const total = Number(res.added) + Number(res.removed) + Number(res.changed);
         if (!total) {
           toast('Documents are structurally identical ✓', true);
