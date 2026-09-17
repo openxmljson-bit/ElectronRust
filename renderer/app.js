@@ -1147,7 +1147,7 @@ async function openDuck(t, path) {
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
-  t.tableSel = null; t.tableSort = null; t.tableFilters = [];
+  t.tableSel = null; t.tableRowSet = null; t.tableSort = null; t.tableFilters = [];
   t.view = 'table';
   t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
   t.phase = 'ready';
@@ -2496,6 +2496,7 @@ async function applyTableViewDuck(t) {
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.tableSel = null;
+  t.tableRowSet = null; // row indices shift when the view changes
   tableScroll.scrollTop = 0;
   try {
     const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
@@ -2529,6 +2530,27 @@ function selRect(t) {
     r0: Math.min(s.aRow, s.fRow), r1: Math.max(s.aRow, s.fRow),
     v0: Math.min(s.aVis, s.fVis), v1: Math.max(s.aVis, s.fVis),
   };
+}
+
+function hasTableSelection(t) {
+  return !!(t && (t.tableSel || (t.tableRowSet && t.tableRowSet.size)));
+}
+
+// The effective selection as { rows: sorted row indices, cols: origin column
+// indices }. A gutter row-set (Cmd/Shift multi-select of whole rows, possibly
+// non-contiguous) takes precedence over the rectangular cell block.
+function selectedRowsCols(t) {
+  if (t.tableRowSet && t.tableRowSet.size) {
+    return { rows: [...t.tableRowSet].sort((a, b) => a - b), cols: visCols(t) };
+  }
+  const s = selRect(t);
+  if (!s) return null;
+  const rows = [];
+  for (let r = s.r0; r <= s.r1; r++) rows.push(r);
+  const cols = visCols(t);
+  const oc = [];
+  for (let v = s.v0; v <= s.v1; v++) oc.push(cols[v]);
+  return { rows, cols: oc };
 }
 
 // "Render URLs as Hyperlinks" — a table format option, toggled from Actions and
@@ -2598,10 +2620,14 @@ function renderTable() {
     const row = document.createElement('div');
     row.className = 'table-row' + (i % 2 ? ' zebra' : '');
     row.style.top = i * ROW_H + 'px';
+    const rowInSet = !!(t.tableRowSet && t.tableRowSet.has(i));
     const idxCell = document.createElement('div');
     idxCell.className = 'td idx';
+    if (rowInSet || (sel && i >= sel.r0 && i <= sel.r1)) idxCell.classList.add('row-sel'); // whole-row selection cue
     idxCell.style.width = iw + 'px';
     idxCell.textContent = fmtInt(i);
+    idxCell.addEventListener('mousedown', (e) => startRowSelect(e, t, i));
+    idxCell.addEventListener('mouseenter', (e) => extendRowSelect(e, t, i));
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
     cols.forEach((c, vi) => {
@@ -2609,7 +2635,7 @@ function renderTable() {
       td.className = 'td';
       td.style.width = colWidth(t, c) + 'px';
       if (t.colPinned.has(c)) { td.classList.add('pinned'); td.style.left = pinnedLeft[vi] + 'px'; }
-      if (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1) td.classList.add('cell-sel');
+      if (rowInSet || (sel && i >= sel.r0 && i <= sel.r1 && vi >= sel.v0 && vi <= sel.v1)) td.classList.add('cell-sel');
       const cell = cells[c];
       const val = cell && cell.value != null ? cell.value : '';
       const linkThis = renderLinks || (t.colLinks && t.colLinks.has(c));
@@ -2650,6 +2676,7 @@ function startCellSelect(e, t, row, vis) {
     if (s && !s.isCollapsed) s.removeAllRanges();
   } catch {}
   cellDragging = true;
+  t.tableRowSet = null; // a cell-block selection replaces any gutter row-set
   if (e.shiftKey && t.tableSel) { t.tableSel.fRow = row; t.tableSel.fVis = vis; }
   else t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
   renderTable();
@@ -2661,7 +2688,53 @@ function extendCellSelect(e, t, row, vis) {
   t.tableSel.fVis = vis;
   renderTable();
 }
-document.addEventListener('mouseup', () => { cellDragging = false; });
+
+// Row selection from the row-number gutter (whole rows, every column):
+//   plain click  — select just this row
+//   shift+click  — extend a contiguous range from the anchor
+//   Cmd/Ctrl+clk — toggle this row, keeping the others (non-contiguous)
+//   plain drag   — sweep a contiguous range
+// Held in t.tableRowSet (a Set of row indices); the block cell selection is
+// cleared while a row-set is active. Cmd+C / "Selection to New Tab" read it.
+let rowDragging = false;
+let plainRowDrag = false;
+function startRowSelect(e, t, row) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  try {
+    const ae = document.activeElement;
+    if (ae && ae.closest && ae.closest('#source-panel') && ae.blur) ae.blur();
+    const s = window.getSelection && window.getSelection();
+    if (s && !s.isCollapsed) s.removeAllRanges();
+  } catch {}
+  t.tableSel = null; // the gutter uses the row-set model, not the cell block
+  rowDragging = true;
+  plainRowDrag = false;
+  if (e.metaKey || e.ctrlKey) {
+    if (!t.tableRowSet) t.tableRowSet = new Set();
+    if (t.tableRowSet.has(row)) t.tableRowSet.delete(row); else t.tableRowSet.add(row);
+    t.rowAnchor = row;
+  } else if (e.shiftKey && t.rowAnchor != null) {
+    if (!t.tableRowSet) t.tableRowSet = new Set();
+    const lo = Math.min(t.rowAnchor, row), hi = Math.max(t.rowAnchor, row);
+    for (let r = lo; r <= hi; r++) t.tableRowSet.add(r);
+  } else {
+    t.tableRowSet = new Set([row]);
+    t.rowAnchor = row;
+    plainRowDrag = true; // a plain click may become a sweep
+  }
+  renderTable();
+  if (sourceOpen) scheduleSourceUpdate();
+}
+function extendRowSelect(e, t, row) {
+  if (!rowDragging || !plainRowDrag || t.rowAnchor == null) return;
+  const lo = Math.min(t.rowAnchor, row), hi = Math.max(t.rowAnchor, row);
+  const set = new Set();
+  for (let r = lo; r <= hi; r++) set.add(r);
+  t.tableRowSet = set;
+  renderTable();
+}
+document.addEventListener('mouseup', () => { cellDragging = false; rowDragging = false; plainRowDrag = false; });
 
 // Keyboard nav within the grid (arrows move the focus cell; shift extends).
 document.addEventListener('keydown', (e) => {
@@ -2670,8 +2743,15 @@ document.addEventListener('keydown', (e) => {
   if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   const cols = visCols(t);
   if (!cols.length) return;
-  if (!t.tableSel && ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-    t.tableSel = { aRow: 0, aVis: 0, fRow: 0, fVis: 0 };
+  if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    // Arrow keys drive the cell block; leaving a gutter row-set active would
+    // otherwise keep overriding it for copy/export.
+    if (t.tableRowSet && t.tableRowSet.size && !t.tableSel) {
+      const r = [...t.tableRowSet].sort((a, b) => a - b)[0];
+      t.tableSel = { aRow: r, aVis: 0, fRow: r, fVis: 0 };
+    }
+    t.tableRowSet = null;
+    if (!t.tableSel) t.tableSel = { aRow: 0, aVis: 0, fRow: 0, fVis: 0 };
   }
   const s = t.tableSel;
   if (!s) return;
@@ -2695,21 +2775,37 @@ document.addEventListener('keydown', (e) => {
 // Copy the selected block as tab/newline-separated text (fetch any rows not
 // yet loaded from the engine).
 async function copyTableSelection(t) {
-  const sel = selRect(t);
-  if (!sel) return false;
-  const cols = visCols(t);
-  const originCols = [];
-  for (let v = sel.v0; v <= sel.v1; v++) originCols.push(cols[v]);
-  const rows = [];
-  for (let r = sel.r0; r <= sel.r1; r++) {
+  const s = selectedRowsCols(t);
+  if (!s) return false;
+  const lines = [];
+  for (const r of s.rows) {
     let page = t.tablePages.get(Math.floor(r / 100));
     if (!page) { await fetchTablePage(t, Math.floor(r / 100)); page = t.tablePages.get(Math.floor(r / 100)); }
-    const rd = page ? page[r % 100] : null;
-    const cells = rd ? rd.cells : [];
-    rows.push(originCols.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
+    const cells = page ? (page[r % 100] || {}).cells || [] : [];
+    lines.push(s.cols.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
   }
-  await copyText(rows.join('\n'), 'selection');
+  await copyText(lines.join('\n'), 'selection');
   return true;
+}
+
+// Open the selected rows/columns (header + values) as a new CSV table tab.
+async function selectionToNewTab(t) {
+  const s = selectedRowsCols(t);
+  if (!s) { toast('Select rows or cells first'); return; }
+  try {
+    toast('Building selection…', true);
+    const lines = [s.cols.map((c) => csvCell(t.tableHeaders[c], ',')).join(',')];
+    for (const r of s.rows) {
+      let page = t.tablePages.get(Math.floor(r / 100));
+      if (!page) { await fetchTablePage(t, Math.floor(r / 100)); page = t.tablePages.get(Math.floor(r / 100)); }
+      if (!tabAlive(t)) return;
+      const cells = page ? (page[r % 100] || {}).cells || [] : [];
+      lines.push(s.cols.map((c) => csvCell(cells[c] && cells[c].value != null ? cells[c].value : '', ',')).join(','));
+    }
+    const file = await window.oxj.textToFile('selection', 'csv', lines.join('\n'));
+    const nt = newTab(true);
+    if (nt) openPath(file, nt, false, { format: 'csv' });
+  } catch (err) { toast('Selection failed: ' + cleanErr(err)); }
 }
 
 // Cmd/Ctrl-C in the grid copies the selected block. Handle the copy event so
@@ -2729,23 +2825,17 @@ document.addEventListener('copy', (e) => {
     dsel && !dsel.isCollapsed && dsel.anchorNode && srcPanel.contains(dsel.anchorNode)
   ) return;
   const t = cur;
-  if (!t || t.view !== 'table' || t.plain || !t.tableSel) return;
-  const sel = selRect(t);
-  if (!sel) return;
+  if (!t || t.view !== 'table' || t.plain || !hasTableSelection(t)) return;
+  const s = selectedRowsCols(t);
+  if (!s) return;
   e.preventDefault();
-  let allLoaded = true;
-  for (let r = sel.r0; r <= sel.r1; r++) if (!t.tablePages.get(Math.floor(r / 100))) { allLoaded = false; break; }
+  const allLoaded = s.rows.every((r) => t.tablePages.get(Math.floor(r / 100)));
   if (!allLoaded) { copyTableSelection(t); return; }
-  const cols = visCols(t);
-  const oc = [];
-  for (let v = sel.v0; v <= sel.v1; v++) oc.push(cols[v]);
-  const lines = [];
-  for (let r = sel.r0; r <= sel.r1; r++) {
+  const lines = s.rows.map((r) => {
     const page = t.tablePages.get(Math.floor(r / 100));
-    const rd = page ? page[r % 100] : null;
-    const cells = rd ? rd.cells : [];
-    lines.push(oc.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t'));
-  }
+    const cells = page ? (page[r % 100] || {}).cells || [] : [];
+    return s.cols.map((c) => { const cell = cells[c]; return cell && cell.value != null ? String(cell.value) : ''; }).join('\t');
+  });
   e.clipboardData.setData('text/plain', lines.join('\n'));
 });
 
@@ -3041,6 +3131,8 @@ $('btn-tbl-export').addEventListener('click', (ev) => {
   showContextMenu(r.left, r.bottom + 4, [
     { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
     { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
+    { sep: true },
+    { label: 'Selection to New Tab', disabled: !hasTableSelection(t), action: () => selectionToNewTab(t) },
   ]);
 });
 // Table "Theme ▾" dropdown: colour skins (global, remembered).
