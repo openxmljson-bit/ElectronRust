@@ -4787,14 +4787,32 @@ function csvCell(v, delim) {
   }
   return s;
 }
+// Find the "record set" array inside an object. Handles nested wrappers like
+// RSS/Atom feeds (rss → channel → item[]) or {data:{results:[…]}} by searching
+// descendants and preferring the largest array of objects.
+function findTabularArray(v) {
+  if (Array.isArray(v)) return v;
+  if (!v || typeof v !== 'object') return null;
+  let best = null;
+  const consider = (arr) => {
+    const objCount = arr.filter((r) => r && typeof r === 'object' && !Array.isArray(r)).length;
+    const score = objCount * 1e6 + arr.length; // prefer arrays of objects, then longer
+    if (!best || score > best.score) best = { arr, score };
+  };
+  const seen = new Set();
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || seen.has(node) || depth > 6) return;
+    seen.add(node);
+    if (Array.isArray(node)) { consider(node); return; }
+    for (const val of Object.values(node)) walk(val, depth + 1);
+  };
+  walk(v, 0);
+  return best ? best.arr : null;
+}
+
 function toCsvStr(v) {
   const delim = ',';
-  let arr = v;
-  if (!Array.isArray(arr) && arr && typeof arr === 'object') {
-    const arrProps = Object.values(arr).filter(Array.isArray);
-    if (arrProps.length === 1) arr = arrProps[0];
-    else arr = null;
-  }
+  let arr = Array.isArray(v) ? v : findTabularArray(v);
   if (!Array.isArray(arr)) throw new Error('this node is not tabular (need an array)');
   if (arr.every((r) => r === null || typeof r !== 'object')) {
     return 'value\n' + arr.map((r) => csvCell(r, delim)).join('\n');
