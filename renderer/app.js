@@ -2743,6 +2743,29 @@ async function copyTableSelection(t) {
   return true;
 }
 
+// Open the selected rows/columns (header + values) as a new CSV table tab.
+async function selectionToNewTab(t) {
+  const sel = selRect(t);
+  if (!sel) { toast('Select rows or cells first'); return; }
+  const cols = visCols(t);
+  const originCols = [];
+  for (let v = sel.v0; v <= sel.v1; v++) originCols.push(cols[v]);
+  try {
+    toast('Building selection…', true);
+    const lines = [originCols.map((c) => csvCell(t.tableHeaders[c], ',')).join(',')];
+    for (let r = sel.r0; r <= sel.r1; r++) {
+      let page = t.tablePages.get(Math.floor(r / 100));
+      if (!page) { await fetchTablePage(t, Math.floor(r / 100)); page = t.tablePages.get(Math.floor(r / 100)); }
+      if (!tabAlive(t)) return;
+      const cells = page ? (page[r % 100] || {}).cells || [] : [];
+      lines.push(originCols.map((c) => csvCell(cells[c] && cells[c].value != null ? cells[c].value : '', ',')).join(','));
+    }
+    const file = await window.oxj.textToFile('selection', 'csv', lines.join('\n'));
+    const nt = newTab(true);
+    if (nt) openPath(file, nt, false, { format: 'csv' });
+  } catch (err) { toast('Selection failed: ' + cleanErr(err)); }
+}
+
 // Cmd/Ctrl-C in the grid copies the selected block. Handle the copy event so
 // the native Edit ▸ Copy accelerator drives it; fast path writes synchronously
 // from loaded pages, otherwise fall back to the async clipboard write.
@@ -3072,6 +3095,8 @@ $('btn-tbl-export').addEventListener('click', (ev) => {
   showContextMenu(r.left, r.bottom + 4, [
     { label: 'Export CSV…', action: () => runTableExport(t, 'csv') },
     { label: 'Export JSON…', action: () => runTableExport(t, 'json') },
+    { sep: true },
+    { label: 'Selection to New Tab', disabled: !t.tableSel, action: () => selectionToNewTab(t) },
   ]);
 });
 // Table "Theme ▾" dropdown: colour skins (global, remembered).
