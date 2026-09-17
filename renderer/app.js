@@ -5935,6 +5935,9 @@ $('btn-tools').addEventListener('click', (ev) => {
     { label: 'Generate JSON Schema', action: generateSchema },
     { label: 'Validate Against JSON Schema…', action: validateAgainstSchema },
   ];
+  if (t.origin) { // opened from a URL: offer the request as a cURL command
+    items.push({ sep: true }, { label: 'Copy as cURL', action: copyAsCurl });
+  }
   showContextMenu(r.left, r.bottom + 4, items);
 });
 $('btn-jq').addEventListener('click', () => {
