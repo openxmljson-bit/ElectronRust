@@ -4521,11 +4521,11 @@ function exportDocName(t, ext) {
 async function exportDocAs(t, fmt) {
   if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
   const ext = fmt === 'rawjson' ? 'json' : fmt;
-  // JSON/NDJSON/YAML sources stream through the engine straight to a file, so a
-  // multi-GB document converts without the whole-document node budget. (XML
-  // sources and small docs fall back to the in-memory reconstruction below.)
+  // JSON/NDJSON/YAML/XML sources stream through the engine straight to a file, so
+  // a multi-GB document converts without the whole-document node budget. (Only
+  // small/unsaved docs fall back to the in-memory reconstruction below.)
   const src = t.file || '';
-  const streamable = /\.(json|ndjson|jsonl|ya?ml)$/i.test(src);
+  const streamable = /\.(json|ndjson|jsonl|ya?ml|xml)$/i.test(src);
   if (streamable && window.oxj.convertDoc) {
     const target = await window.oxj.pickSavePath(exportDocName(t, ext), [{ name: ext.toUpperCase(), extensions: [ext] }]);
     if (!target) return;
@@ -4787,14 +4787,32 @@ function csvCell(v, delim) {
   }
   return s;
 }
+// Find the "record set" array inside an object. Handles nested wrappers like
+// RSS/Atom feeds (rss → channel → item[]) or {data:{results:[…]}} by searching
+// descendants and preferring the largest array of objects.
+function findTabularArray(v) {
+  if (Array.isArray(v)) return v;
+  if (!v || typeof v !== 'object') return null;
+  let best = null;
+  const consider = (arr) => {
+    const objCount = arr.filter((r) => r && typeof r === 'object' && !Array.isArray(r)).length;
+    const score = objCount * 1e6 + arr.length; // prefer arrays of objects, then longer
+    if (!best || score > best.score) best = { arr, score };
+  };
+  const seen = new Set();
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || seen.has(node) || depth > 6) return;
+    seen.add(node);
+    if (Array.isArray(node)) { consider(node); return; }
+    for (const val of Object.values(node)) walk(val, depth + 1);
+  };
+  walk(v, 0);
+  return best ? best.arr : null;
+}
+
 function toCsvStr(v) {
   const delim = ',';
-  let arr = v;
-  if (!Array.isArray(arr) && arr && typeof arr === 'object') {
-    const arrProps = Object.values(arr).filter(Array.isArray);
-    if (arrProps.length === 1) arr = arrProps[0];
-    else arr = null;
-  }
+  let arr = Array.isArray(v) ? v : findTabularArray(v);
   if (!Array.isArray(arr)) throw new Error('this node is not tabular (need an array)');
   if (arr.every((r) => r === null || typeof r !== 'object')) {
     return 'value\n' + arr.map((r) => csvCell(r, delim)).join('\n');
@@ -4814,16 +4832,46 @@ function toCsvStr(v) {
 }
 
 function xmlTextToObj(text) {
+  let lastErr = '';
   const parse = (s) => {
     const doc = new DOMParser().parseFromString(s, 'application/xml');
-    return doc.querySelector('parsererror') ? null : doc;
+    const pe = doc.querySelector('parsererror');
+    if (pe) { lastErr = (pe.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200); return null; }
+    return doc;
+  };
+  // Escape bare "&" that isn't a real entity (common in feed URLs like ?a=1&b=2
+  // and in titles), which a strict XML parser rejects. CDATA sections are left
+  // untouched — their contents are literal, so re-escaping would corrupt them.
+  const sanitize = (s) => s
+    .split(/(<!\[CDATA\[[\s\S]*?\]\]>)/)
+    .map((p, i) => (i % 2 === 1 ? p : p.replace(/&(?!#[0-9]+;|#x[0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;')))
+    .join('');
+  // Exported fragments (e.g. a subtree of a Google Shopping feed) use namespaced
+  // tags like <g:brand> but carry no xmlns:g declaration, so a namespace-aware
+  // parser rejects the unbound prefix. Collect the prefixes actually used and
+  // bind each to a placeholder namespace on the wrapper so the fragment parses.
+  const wrapWithNs = (s) => {
+    const prefixes = new Set();
+    let m;
+    const elRe = /<\/?([A-Za-z_][\w.-]*):/g;
+    while ((m = elRe.exec(s))) if (m[1] !== 'xml') prefixes.add(m[1]);
+    const attrRe = /\s([A-Za-z_][\w.-]*):[\w.-]+\s*=/g;
+    while ((m = attrRe.exec(s))) if (m[1] !== 'xml' && m[1] !== 'xmlns') prefixes.add(m[1]);
+    const decls = [...prefixes].map((p) => ' xmlns:' + p + '="urn:x-prefix:' + p + '"').join('');
+    return '<root' + decls + '>' + s + '</root>';
   };
   let doc = parse(text);
   if (!doc) doc = parse('<root>' + text + '</root>');
-  if (!doc) throw new Error('could not parse XML fragment');
+  if (!doc) doc = parse(wrapWithNs(text));
+  if (!doc) doc = parse(wrapWithNs(sanitize(text)));
+  if (!doc) doc = parse(sanitize(text));
+  if (!doc) throw new Error('could not parse XML fragment' + (lastErr ? ': ' + lastErr : ''));
   function walk(el) {
     const out = {};
-    for (const a of el.attributes) out['@' + a.name] = a.value;
+    for (const a of el.attributes) {
+      if (a.name === 'xmlns' || a.name.indexOf('xmlns:') === 0) continue;
+      out['@' + a.name] = a.value;
+    }
     let textContent = '';
     for (const ch of el.childNodes) {
       if (ch.nodeType === 1) {

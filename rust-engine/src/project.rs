@@ -5,7 +5,10 @@
 //
 // See docs/PROJECT_SUBCOMMAND.md for the full contract.
 
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::reader::Reader;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 
@@ -498,6 +501,265 @@ fn emit_record<W: Write>(w: &mut W, to: &str, v: &Value, st: &mut ConvState) -> 
     Ok(())
 }
 
+// ---- XML source (streaming) ------------------------------------------------
+// XML has no streaming array like JSON; the records are the repeating child
+// element (e.g. <item> in an RSS/Shopping feed). We find that element in a cheap
+// first pass, then a second pass materialises one record at a time — so a feed
+// of any size converts in constant memory, with no node cap.
+
+// Merge a child into an element object, turning repeats into arrays. Mirrors the
+// renderer's xmlTextToObj so JSON/CSV output matches the in-memory path.
+fn xml_insert(obj: &mut Map<String, Value>, name: String, val: Value) {
+    match obj.get_mut(&name) {
+        Some(Value::Array(a)) => a.push(val),
+        Some(slot) => {
+            let old = slot.take();
+            *slot = Value::Array(vec![old, val]);
+        }
+        None => {
+            obj.insert(name, val);
+        }
+    }
+}
+
+// Attributes become "@name" keys. Escaping is decoded; malformed entities degrade
+// to the raw bytes rather than failing the whole conversion.
+fn xml_attrs(start: &BytesStart, obj: &mut Map<String, Value>) -> Result<(), String> {
+    for a in start.attributes().with_checks(false) {
+        let a = a.map_err(|e| e.to_string())?;
+        let k = format!("@{}", String::from_utf8_lossy(a.key.as_ref()));
+        let v = a
+            .unescape_value()
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+        xml_insert(obj, k, Value::String(v));
+    }
+    Ok(())
+}
+
+// Read one element's subtree into a Value. `start` is the already-read opening
+// tag; consumes events up to and including its matching End. All leaf values are
+// strings (XML is untyped), matching xmlTextToObj.
+fn xml_read_element<R: BufRead>(reader: &mut Reader<R>, start: &BytesStart) -> Result<Value, String> {
+    let mut obj = Map::new();
+    xml_attrs(start, &mut obj)?;
+    let mut text = String::new();
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+            Event::Start(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let child = xml_read_element(reader, &e)?;
+                xml_insert(&mut obj, name, child);
+            }
+            Event::Empty(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let mut cobj = Map::new();
+                xml_attrs(&e, &mut cobj)?;
+                let cv = if cobj.is_empty() {
+                    Value::String(String::new())
+                } else {
+                    Value::Object(cobj)
+                };
+                xml_insert(&mut obj, name, cv);
+            }
+            Event::Text(e) => {
+                let t = e
+                    .unescape()
+                    .map(|c| c.into_owned())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&e).into_owned());
+                if !t.trim().is_empty() {
+                    text.push_str(&t);
+                }
+            }
+            Event::CData(e) => {
+                text.push_str(&String::from_utf8_lossy(&e));
+            }
+            Event::End(_) => break,
+            Event::Eof => return Err(String::from("unexpected end of file in element")),
+            _ => {}
+        }
+        buf.clear();
+    }
+    let txt = text.trim().to_string();
+    if obj.is_empty() {
+        return Ok(Value::String(txt));
+    }
+    if !txt.is_empty() {
+        obj.insert(String::from("#text"), Value::String(txt));
+    }
+    Ok(Value::Object(obj))
+}
+
+// Append a name to an ordered, de-duplicated column list.
+fn push_unique(v: &mut Vec<String>, name: &str) {
+    if !v.iter().any(|x| x == name) {
+        v.push(name.to_string());
+    }
+}
+
+// Pass 1: the record element is the shallowest element name that occurs more than
+// once (ties broken by highest count). If nothing repeats, the whole document is
+// a single record (its root element). Also collects, per element name, the ordered
+// union of its attribute (@name) and direct-child columns — used to seed a
+// complete CSV header so optional fields present on only some records aren't lost.
+fn xml_scan(file: &str) -> Result<(usize, String, Vec<String>), String> {
+    let f = File::open(file).map_err(|e| format!("cannot open source: {e}"))?;
+    let mut r = BufReader::new(f);
+    skip_bom(&mut r);
+    let mut reader = Reader::from_reader(r);
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut counts: HashMap<(usize, String), u64> = HashMap::new();
+    let mut cols: HashMap<String, Vec<String>> = HashMap::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut first_root: Option<String> = None;
+    // Record a child element / the element's attributes against their owners.
+    fn note_element(
+        name: &str,
+        e: &BytesStart,
+        stack: &[String],
+        cols: &mut HashMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        if let Some(parent) = stack.last() {
+            push_unique(cols.entry(parent.clone()).or_default(), name);
+        }
+        for a in e.attributes().with_checks(false) {
+            let a = a.map_err(|x| x.to_string())?;
+            let k = format!("@{}", String::from_utf8_lossy(a.key.as_ref()));
+            push_unique(cols.entry(name.to_string()).or_default(), &k);
+        }
+        Ok(())
+    }
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+            Event::Start(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                if depth == 0 && first_root.is_none() {
+                    first_root = Some(name.clone());
+                }
+                note_element(&name, &e, &stack, &mut cols)?;
+                *counts.entry((depth, name.clone())).or_insert(0) += 1;
+                stack.push(name);
+                depth += 1;
+            }
+            Event::Empty(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                if depth == 0 && first_root.is_none() {
+                    first_root = Some(name.clone());
+                }
+                note_element(&name, &e, &stack, &mut cols)?;
+                *counts.entry((depth, name)).or_insert(0) += 1;
+            }
+            Event::End(_) => {
+                stack.pop();
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    let mut best: Option<(usize, String, u64)> = None;
+    for ((d, name), c) in counts.into_iter() {
+        if c <= 1 {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some((bd, _, bc)) => d < *bd || (d == *bd && c > *bc),
+        };
+        if better {
+            best = Some((d, name, c));
+        }
+    }
+    let (depth, name) = match best {
+        Some((d, name, _)) => (d, name),
+        None => (0, first_root.unwrap_or_else(|| String::from("root"))),
+    };
+    let columns = cols.remove(&name).unwrap_or_default();
+    Ok((depth, name, columns))
+}
+
+// Pass 2: stream the file and emit each record element in the target format.
+fn convert_xml_stream<W: Write>(file: &str, to: &str, outf: &mut W) -> Result<u64, String> {
+    let (rec_depth, rec_name, columns) = xml_scan(file)?;
+    match to {
+        "json" | "rawjson" => outf.write_all(b"[\n").map_err(ys)?,
+        "xml" => outf.write_all(b"<root>\n").map_err(ys)?,
+        _ => {}
+    }
+    let mut st = ConvState {
+        first: true,
+        header: Vec::new(),
+        header_done: false,
+    };
+    // Seed CSV with the complete, ordered column set so records missing an optional
+    // field still line up (emit_record derives the header from the first record
+    // only when we leave it empty here, e.g. scalar records).
+    if to == "csv" && !columns.is_empty() {
+        st.header = columns;
+        st.header_done = true;
+        let hs: Vec<String> = st
+            .header
+            .iter()
+            .map(|h| csv_cell(&Value::String(h.clone())))
+            .collect();
+        outf.write_all(hs.join(",").as_bytes()).map_err(ys)?;
+        outf.write_all(b"\n").map_err(ys)?;
+    }
+    let mut records: u64 = 0;
+    let f = File::open(file).map_err(|e| format!("cannot open source: {e}"))?;
+    let mut r = BufReader::new(f);
+    skip_bom(&mut r);
+    let mut reader = Reader::from_reader(r);
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+            Event::Start(e) => {
+                let qn = e.name();
+                let nm = String::from_utf8_lossy(qn.as_ref());
+                if depth == rec_depth && &*nm == rec_name.as_str() {
+                    let v = xml_read_element(&mut reader, &e)?;
+                    emit_record(outf, to, &v, &mut st)?;
+                    records += 1;
+                    if records % 5000 == 0 {
+                        emit(&json!({"event": "progress", "done": records, "total": Value::Null}));
+                    }
+                } else {
+                    depth += 1;
+                }
+            }
+            Event::Empty(e) => {
+                let qn = e.name();
+                let nm = String::from_utf8_lossy(qn.as_ref());
+                if depth == rec_depth && &*nm == rec_name.as_str() {
+                    let mut obj = Map::new();
+                    xml_attrs(&e, &mut obj)?;
+                    let v = if obj.is_empty() {
+                        Value::String(String::new())
+                    } else {
+                        Value::Object(obj)
+                    };
+                    emit_record(outf, to, &v, &mut st)?;
+                    records += 1;
+                }
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    match to {
+        "json" | "rawjson" => outf.write_all(b"\n]\n").map_err(ys)?,
+        "xml" => outf.write_all(b"</root>\n").map_err(ys)?,
+        _ => {}
+    }
+    Ok(records)
+}
+
 pub fn run_convert(file: &str, format: &str, to: &str, out: &str) -> Result<(), String> {
     if !matches!(to, "json" | "rawjson" | "xml" | "yaml" | "csv") {
         return Err(format!("unsupported target format: {}", to));
@@ -505,6 +767,28 @@ pub fn run_convert(file: &str, format: &str, to: &str, out: &str) -> Result<(), 
     let f = File::open(file).map_err(|e| format!("cannot open source: {e}"))?;
     let mut reader = BufReader::new(f);
     skip_bom(&mut reader);
+    // XML source → dedicated streaming path (records = the repeating element).
+    let is_xml = format.eq_ignore_ascii_case("xml") || {
+        let b = reader.fill_buf().map_err(|e| e.to_string())?;
+        let mut i = 0;
+        while i < b.len() && (b[i] as char).is_whitespace() {
+            i += 1;
+        }
+        b.get(i).copied() == Some(b'<')
+    };
+    if is_xml {
+        let mut outf =
+            BufWriter::new(File::create(out).map_err(|e| format!("cannot create output: {e}"))?);
+        emit(&json!({"event": "start", "total": Value::Null}));
+        match convert_xml_stream(file, to, &mut outf) {
+            Ok(records) => {
+                outf.flush().map_err(ys)?;
+                emit(&json!({"event": "done", "records": records}));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let fmt = detect_format(format, &mut reader)?;
     let mut outf =
         BufWriter::new(File::create(out).map_err(|e| format!("cannot create output: {e}"))?);
