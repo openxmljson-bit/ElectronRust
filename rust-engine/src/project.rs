@@ -718,7 +718,8 @@ fn convert_xml_stream<W: Write>(file: &str, to: &str, outf: &mut W) -> Result<u6
     loop {
         match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
             Event::Start(e) => {
-                let nm = String::from_utf8_lossy(e.name().as_ref());
+                let qn = e.name();
+                let nm = String::from_utf8_lossy(qn.as_ref());
                 if depth == rec_depth && &*nm == rec_name.as_str() {
                     let v = xml_read_element(&mut reader, &e)?;
                     emit_record(outf, to, &v, &mut st)?;
@@ -731,7 +732,8 @@ fn convert_xml_stream<W: Write>(file: &str, to: &str, outf: &mut W) -> Result<u6
                 }
             }
             Event::Empty(e) => {
-                let nm = String::from_utf8_lossy(e.name().as_ref());
+                let qn = e.name();
+                let nm = String::from_utf8_lossy(qn.as_ref());
                 if depth == rec_depth && &*nm == rec_name.as_str() {
                     let mut obj = Map::new();
                     xml_attrs(&e, &mut obj)?;
