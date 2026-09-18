@@ -4521,11 +4521,11 @@ function exportDocName(t, ext) {
 async function exportDocAs(t, fmt) {
   if (!t || t.phase !== 'ready' || t.plain) { toast('Open a document first'); return; }
   const ext = fmt === 'rawjson' ? 'json' : fmt;
-  // JSON/NDJSON/YAML sources stream through the engine straight to a file, so a
-  // multi-GB document converts without the whole-document node budget. (XML
-  // sources and small docs fall back to the in-memory reconstruction below.)
+  // JSON/NDJSON/YAML/XML sources stream through the engine straight to a file, so
+  // a multi-GB document converts without the whole-document node budget. (Only
+  // small/unsaved docs fall back to the in-memory reconstruction below.)
   const src = t.file || '';
-  const streamable = /\.(json|ndjson|jsonl|ya?ml)$/i.test(src);
+  const streamable = /\.(json|ndjson|jsonl|ya?ml|xml)$/i.test(src);
   if (streamable && window.oxj.convertDoc) {
     const target = await window.oxj.pickSavePath(exportDocName(t, ext), [{ name: ext.toUpperCase(), extensions: [ext] }]);
     if (!target) return;

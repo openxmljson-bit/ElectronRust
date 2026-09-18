@@ -2279,7 +2279,8 @@ app.whenReady().then(() => {
       if (!out) throw new Error('no output path chosen');
       let src = file;
       if (isYamlFile(file)) src = yamlToTempJson(file);
-      else if (/\.xml$/i.test(file)) throw new Error('XML sources are converted in-app, not streamed');
+      // XML is streamed by the engine's convert subcommand (records = the
+      // repeating element), so it goes straight through like JSON/NDJSON.
       const result = await runConvertToFile(src, to, out, e.sender);
       return ok({ out, records: result.records });
     } catch (err) {
