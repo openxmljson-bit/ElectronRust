@@ -4836,12 +4836,30 @@ function xmlTextToObj(text) {
     const doc = new DOMParser().parseFromString(s, 'application/xml');
     return doc.querySelector('parsererror') ? null : doc;
   };
+  // Exported fragments (e.g. a subtree of a Google Shopping feed) use namespaced
+  // tags like <g:brand> but carry no xmlns:g declaration, so a namespace-aware
+  // parser rejects the unbound prefix. Collect the prefixes actually used and
+  // bind each to a placeholder namespace on the wrapper so the fragment parses.
+  const wrapWithNs = (s) => {
+    const prefixes = new Set();
+    let m;
+    const elRe = /<\/?([A-Za-z_][\w.-]*):/g;
+    while ((m = elRe.exec(s))) if (m[1] !== 'xml') prefixes.add(m[1]);
+    const attrRe = /\s([A-Za-z_][\w.-]*):[\w.-]+\s*=/g;
+    while ((m = attrRe.exec(s))) if (m[1] !== 'xml' && m[1] !== 'xmlns') prefixes.add(m[1]);
+    const decls = [...prefixes].map((p) => ' xmlns:' + p + '="urn:x-prefix:' + p + '"').join('');
+    return '<root' + decls + '>' + s + '</root>';
+  };
   let doc = parse(text);
   if (!doc) doc = parse('<root>' + text + '</root>');
+  if (!doc) doc = parse(wrapWithNs(text));
   if (!doc) throw new Error('could not parse XML fragment');
   function walk(el) {
     const out = {};
-    for (const a of el.attributes) out['@' + a.name] = a.value;
+    for (const a of el.attributes) {
+      if (a.name === 'xmlns' || a.name.indexOf('xmlns:') === 0) continue;
+      out['@' + a.name] = a.value;
+    }
     let textContent = '';
     for (const ch of el.childNodes) {
       if (ch.nodeType === 1) {
