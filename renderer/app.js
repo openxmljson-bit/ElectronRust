@@ -4832,10 +4832,20 @@ function toCsvStr(v) {
 }
 
 function xmlTextToObj(text) {
+  let lastErr = '';
   const parse = (s) => {
     const doc = new DOMParser().parseFromString(s, 'application/xml');
-    return doc.querySelector('parsererror') ? null : doc;
+    const pe = doc.querySelector('parsererror');
+    if (pe) { lastErr = (pe.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200); return null; }
+    return doc;
   };
+  // Escape bare "&" that isn't a real entity (common in feed URLs like ?a=1&b=2
+  // and in titles), which a strict XML parser rejects. CDATA sections are left
+  // untouched — their contents are literal, so re-escaping would corrupt them.
+  const sanitize = (s) => s
+    .split(/(<!\[CDATA\[[\s\S]*?\]\]>)/)
+    .map((p, i) => (i % 2 === 1 ? p : p.replace(/&(?!#[0-9]+;|#x[0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;')))
+    .join('');
   // Exported fragments (e.g. a subtree of a Google Shopping feed) use namespaced
   // tags like <g:brand> but carry no xmlns:g declaration, so a namespace-aware
   // parser rejects the unbound prefix. Collect the prefixes actually used and
@@ -4853,7 +4863,9 @@ function xmlTextToObj(text) {
   let doc = parse(text);
   if (!doc) doc = parse('<root>' + text + '</root>');
   if (!doc) doc = parse(wrapWithNs(text));
-  if (!doc) throw new Error('could not parse XML fragment');
+  if (!doc) doc = parse(wrapWithNs(sanitize(text)));
+  if (!doc) doc = parse(sanitize(text));
+  if (!doc) throw new Error('could not parse XML fragment' + (lastErr ? ': ' + lastErr : ''));
   function walk(el) {
     const out = {};
     for (const a of el.attributes) {
