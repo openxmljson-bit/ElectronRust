@@ -28,7 +28,7 @@ import type {
 // correctly as one tab-delimited record per row). v5: Pass 0 no longer inherits
 // the line-based preamble skip, so a CSV with newlines inside quoted fields
 // keeps its real header instead of skipping it and showing column00.. names.
-export const MANIFEST_VERSION = 5;
+export const MANIFEST_VERSION = 6;
 
 export interface CachePaths {
   root: string;
