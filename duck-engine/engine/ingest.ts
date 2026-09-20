@@ -45,6 +45,9 @@ export type ProgressSink = (p: IngestProgress) => void;
 
 const ROW_GROUP_SIZE = 122_880;
 
+/** Records DuckDB samples to infer the JSON column set (keeps huge files fast). */
+const JSON_SAMPLE_ROWS = 131072;
+
 interface ReaderPlan {
   strategy: IngestStrategy;
   /** Table function expression, e.g. read_csv('/x.csv', ...). */
@@ -72,7 +75,12 @@ interface ReaderPlan {
 }
 
 interface CsvVariant {
+  /** ignore_errors + strict_mode=false: also tolerates unpaired quotes and
+   * newlines inside fields, but can merge many lines when quoting is off-balance. */
   lenient?: boolean;
+  /** ignore_errors only, keeping strict RFC-4180 quoting. Skips just the rows that
+   * don't fit the structure, without the row-merging that strict_mode=false causes. */
+  skipBadRows?: boolean;
   allVarchar?: boolean;
   delimiter?: string | null;
   skipRows?: number;
@@ -143,7 +151,18 @@ function csvArgs(o: OpenOptions, opts: CsvVariant): string[] {
     // the parser's state machine bail on the correct (tab) delimiter entirely,
     // and the ladder falls through to a wrong delimiter (space), shredding every
     // row into dozens of auto-named columns. Other editors are lenient here too.
+    //
+    // The catch: on a well-formed RFC-4180 file that has a few stray quotes,
+    // strict_mode=false turns each stray quote into the start of a quoted field
+    // and swallows every line until the next stray quote — collapsing millions of
+    // good rows into a handful of merged blobs. csv-skip below avoids that by
+    // keeping strict quoting and only skipping the genuinely bad rows.
     args.push(`strict_mode=false`);
+  } else if (opts.skipBadRows) {
+    // Skip rows that don't fit the structure while keeping strict RFC-4180 quoting
+    // (doubled "" escaping intact, no row-merging). Recovers all the good rows from
+    // a mostly-clean file that has a small number of malformed rows.
+    args.push(`ignore_errors=true`);
   }
   if (o.columnTypes && Object.keys(o.columnTypes).length > 0) {
     const entries = Object.entries(o.columnTypes)
@@ -211,6 +230,37 @@ function buildPlans(
     return plans;
   }
 
+  if (format === 'json' || format === 'ndjson') {
+    // Row-oriented JSON read straight to a table: each object becomes a row, its
+    // keys become columns (nested objects/arrays stay as STRUCT/LIST, shown as
+    // JSON in the grid). Streams to Parquet like CSV — no whole-file index in RAM,
+    // so multi-GB NDJSON loads and pages lazily.
+    const jfmt = format === 'ndjson' ? 'newline_delimited' : 'array';
+    // 128 MB per object (default 16 MB is too small for some records); tolerate the
+    // occasional bad line rather than failing the whole file; infer the column set
+    // from a generous sample (columns are keyed off object keys, so this covers
+    // homogeneous feeds fully while staying fast — no whole-file schema scan). The
+    // "columns from a sample" caveat is added later, only when the file actually has
+    // more records than the sample window (JSON_SAMPLE_ROWS), so small/complete
+    // files don't get a spurious warning.
+    const common = `ignore_errors=true, maximum_object_size=134217728, sample_size=${JSON_SAMPLE_ROWS}`;
+    // Plan 1: the structure the extension/sniff indicated (newline-delimited or array).
+    plans.push({
+      strategy: 'json-auto',
+      reader: `read_json(${p}, format='${jfmt}', ${common})`,
+      notes: [],
+      minColumns: 1,
+    });
+    // Plan 2: let DuckDB auto-detect array vs newline-delimited if the guess was wrong.
+    plans.push({
+      strategy: 'json-auto',
+      reader: `read_json(${p}, format='auto', ${common})`,
+      notes: [],
+      minColumns: 1,
+    });
+    return plans;
+  }
+
   {
     const skip = o.skipRows ?? 0;
     const probeSample = 20_000;
@@ -255,6 +305,11 @@ function buildPlans(
     if (o.delimiterExplicit && o.delimiter) {
       for (const q of quoteOrder) {
         plans.push(csvPlan('csv-auto', { delimiter: o.delimiter, quoteChar: q }, 1, quoteNote(q)));
+      }
+      for (const q of quoteOrder) {
+        plans.push(
+          csvPlan('csv-skip', { delimiter: o.delimiter, quoteChar: q, skipBadRows: true }, 1, quoteNote(q)),
+        );
       }
       for (const q of quoteOrder) {
         plans.push(
@@ -372,7 +427,18 @@ function buildPlans(
         }
       }
 
-      // Pass 3: give up on strictness — skip bad rows, then read everything as text.
+      // Pass 3a: keep strict RFC-4180 quoting but skip the rows that don't fit —
+      // recovers all the good rows from a mostly-clean file with a few bad ones,
+      // without strict_mode=false's row-merging. Tried before the looser tier.
+      for (const d of delimiters.slice(0, 4)) {
+        for (const q of quoteOrder) {
+          plans.push(
+            csvPlan('csv-skip', { delimiter: d, quoteChar: q, skipBadRows: true }, 2, quoteNote(q)),
+          );
+        }
+      }
+
+      // Pass 3b: give up on strictness — skip bad rows, then read everything as text.
       for (const d of delimiters.slice(0, 4)) {
         for (const q of quoteOrder) {
           plans.push(
@@ -398,6 +464,9 @@ function buildPlans(
       for (const q of quoteOrder) {
         plans.push(csvPlan('csv-auto', { delimiter: null, quoteChar: q }, 1, quoteNote(q)));
       }
+      plans.push(
+        csvPlan('csv-skip', { delimiter: null, quoteChar: '"', skipBadRows: true }, 1, []),
+      );
       plans.push(
         csvPlan('csv-lenient', { delimiter: null, quoteChar: null, lenient: true }, 1, [
           'Rows the parser rejected were skipped.',
@@ -772,10 +841,45 @@ export interface IngestRequest {
 }
 
 export class Ingestor {
+  private readonly lineCounts = new Map<string, number>();
+
   constructor(
     private readonly db: EngineDb,
     private readonly cache: DatasetCache,
   ) {}
+
+  // Count physical newlines in the source — used only as a sanity signal for a
+  // lenient (strict_mode=false) read that may have merged rows. Streams the file
+  // and decompresses gzip; returns -1 when it can't count (unknown compression or
+  // a read error), which disables the check rather than blocking the ingest.
+  private async approxLineCount(path: string, compression?: string): Promise<number> {
+    const cached = this.lineCounts.get(path);
+    if (cached !== undefined) return cached;
+    let result = -1;
+    try {
+      if (compression && compression !== 'none' && compression !== 'gzip') {
+        this.lineCounts.set(path, -1);
+        return -1;
+      }
+      let count = 0;
+      const base = createReadStream(path);
+      const stream: NodeJS.ReadableStream = compression === 'gzip' ? base.pipe(createGunzip()) : base;
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer) => {
+          for (let i = 0; i < chunk.length; i++) {
+            if (chunk[i] === 0x0a) count++;
+          }
+        });
+        stream.on('end', () => resolve());
+        stream.on('error', reject);
+      });
+      result = count;
+    } catch {
+      result = -1;
+    }
+    this.lineCounts.set(path, result);
+    return result;
+  }
 
   async open(req: IngestRequest): Promise<DatasetManifest> {
     const { path, options, jobId, onProgress } = req;
@@ -999,6 +1103,42 @@ export class Ingestor {
     );
     const rowCount = Number(rowCountText ?? '0');
 
+    // A read with strict_mode=false can collapse huge spans into a few merged rows
+    // when quoting is off-balance (a stray " opens a "field" that swallows lines
+    // until the next stray "). If this lenient plan kept only a tiny fraction of
+    // the file's lines, that almost certainly happened — reject it so the ladder
+    // tries a better plan instead of silently showing a fraction of the data.
+    if (plan.strategy === 'csv-lenient') {
+      const lines = await this.approxLineCount(readPath, detected.compression);
+      if (lines > 1000 && rowCount * 20 < lines) {
+        throw new EngineError(
+          'parse-failed',
+          `Lenient read kept only ${rowCount} of ~${lines} lines — likely merged on unbalanced quotes.`,
+        );
+      }
+    }
+
+    // Non-silent notice: an error-tolerant strategy means some rows didn't fit the
+    // file's structure and were skipped. Surface the loaded count so a partial load
+    // is never silent.
+    if (
+      plan.strategy === 'csv-skip' ||
+      plan.strategy === 'csv-lenient' ||
+      plan.strategy === 'csv-all-varchar'
+    ) {
+      extraWarnings.push(
+        `Some rows didn't match the file's structure and were skipped — ${rowCount.toLocaleString()} rows loaded.`,
+      );
+    }
+
+    // JSON column set comes from a sample; only worth flagging when the file has
+    // more records than the sample window (otherwise the sample covered everything).
+    if (plan.strategy === 'json-auto' && rowCount > JSON_SAMPLE_ROWS) {
+      extraWarnings.push(
+        `Columns were inferred from the first ${JSON_SAMPLE_ROWS.toLocaleString()} records; a field that appears only in rarer records later in the file may not have a column.`,
+      );
+    }
+
     const finalSchema = await this.db.queryRows(
       `DESCRIBE SELECT * FROM read_parquet(${quotePath(outPath)}) LIMIT 0`,
       'reading the loaded schema',
@@ -1013,7 +1153,11 @@ export class Ingestor {
     const parquetBytes = await fileSize(outPath);
     // Report the options that were actually used, not the ones guessed up front.
     let resolvedDelimiter = plan.delimiter ?? null;
-    if (resolvedDelimiter === null && plan.strategy !== 'raw-lines') {
+    if (
+      resolvedDelimiter === null &&
+      plan.strategy !== 'raw-lines' &&
+      plan.strategy !== 'json-auto'
+    ) {
       resolvedDelimiter = await sniffDelimiter(this.db, readPath, effective);
     }
     const usedOptions: OpenOptions =
