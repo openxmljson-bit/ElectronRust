@@ -45,6 +45,9 @@ export type ProgressSink = (p: IngestProgress) => void;
 
 const ROW_GROUP_SIZE = 122_880;
 
+/** Records DuckDB samples to infer the JSON column set (keeps huge files fast). */
+const JSON_SAMPLE_ROWS = 131072;
+
 interface ReaderPlan {
   strategy: IngestStrategy;
   /** Table function expression, e.g. read_csv('/x.csv', ...). */
@@ -236,22 +239,23 @@ function buildPlans(
     // 128 MB per object (default 16 MB is too small for some records); tolerate the
     // occasional bad line rather than failing the whole file; infer the column set
     // from a generous sample (columns are keyed off object keys, so this covers
-    // homogeneous feeds fully while staying fast — no whole-file schema scan).
-    const sampleNote =
-      'Columns were inferred from a sample of the file; fields that appear only in rarely-seen records may be omitted.';
-    const common = `ignore_errors=true, maximum_object_size=134217728, sample_size=131072`;
+    // homogeneous feeds fully while staying fast — no whole-file schema scan). The
+    // "columns from a sample" caveat is added later, only when the file actually has
+    // more records than the sample window (JSON_SAMPLE_ROWS), so small/complete
+    // files don't get a spurious warning.
+    const common = `ignore_errors=true, maximum_object_size=134217728, sample_size=${JSON_SAMPLE_ROWS}`;
     // Plan 1: the structure the extension/sniff indicated (newline-delimited or array).
     plans.push({
       strategy: 'json-auto',
       reader: `read_json(${p}, format='${jfmt}', ${common})`,
-      notes: [sampleNote],
+      notes: [],
       minColumns: 1,
     });
     // Plan 2: let DuckDB auto-detect array vs newline-delimited if the guess was wrong.
     plans.push({
       strategy: 'json-auto',
       reader: `read_json(${p}, format='auto', ${common})`,
-      notes: [sampleNote],
+      notes: [],
       minColumns: 1,
     });
     return plans;
@@ -1124,6 +1128,14 @@ export class Ingestor {
     ) {
       extraWarnings.push(
         `Some rows didn't match the file's structure and were skipped — ${rowCount.toLocaleString()} rows loaded.`,
+      );
+    }
+
+    // JSON column set comes from a sample; only worth flagging when the file has
+    // more records than the sample window (otherwise the sample covered everything).
+    if (plan.strategy === 'json-auto' && rowCount > JSON_SAMPLE_ROWS) {
+      extraWarnings.push(
+        `Columns were inferred from the first ${JSON_SAMPLE_ROWS.toLocaleString()} records; a field that appears only in rarer records later in the file may not have a column.`,
       );
     }
 
