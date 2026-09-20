@@ -1158,7 +1158,12 @@ async function openDuck(t, path) {
   // Surface ingest warnings (e.g. rows skipped because they didn't match the file
   // structure) so a partial load is never silent. Shown as a separate, sticky
   // toast after the success one; deduped by the engine already.
-  const warns = Array.isArray(man.warnings) ? man.warnings.filter(Boolean) : [];
+  const warns = (Array.isArray(man.warnings) ? man.warnings : [])
+    .filter(Boolean)
+    // Drop internal parsing details (e.g. how quoting was handled) — they read as
+    // alarming to users even when the load succeeded. Keep the actionable notices
+    // (rows skipped, delimiter used, etc.).
+    .filter((w) => !/ordinary text|treated as off/i.test(w));
   if (warns.length) setTimeout(() => toast('⚠ ' + warns.join(' '), true), 400);
 }
 function isDuck(t) { return t && t.engine === 'duck'; }
