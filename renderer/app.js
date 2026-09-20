@@ -2638,17 +2638,40 @@ function isHttpUrl(v) {
   try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
 }
 
+// Browsers clamp an element's height to ~16.78M px (2^24). At ROW_H=26 that caps a
+// 1:1 spacer at ~645k rows, so past that the scrollbar can't reach the data even
+// though it's all loaded. For bigger tables we clamp the spacer and map scroll
+// position → row range by ratio (scaled virtual scrolling), so every row is
+// reachable. Small tables keep exact 1:1 pixel scrolling.
+const TABLE_MAX_SPACER = 16_000_000;
+function tableScaled(total, h) {
+  if (total * ROW_H <= TABLE_MAX_SPACER) return null;
+  return {
+    spacerH: TABLE_MAX_SPACER,
+    maxScroll: Math.max(1, TABLE_MAX_SPACER - h),
+    maxRowStart: Math.max(1, total - Math.floor(h / ROW_H)),
+  };
+}
+function rowToScroll(nr, total, h) {
+  const sc = tableScaled(total, h);
+  return sc ? Math.round((nr / sc.maxRowStart) * sc.maxScroll) : nr * ROW_H;
+}
+
 function renderTable() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
   ensureColState(t);
   const cols = visCols(t);
   const total = tableRows(t);
-  tableSpacer.style.height = total * ROW_H + 'px';
   const scrollTop = tableScroll.scrollTop;
   const h = tableScroll.clientHeight;
-  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 5);
-  const last = Math.min(total, Math.ceil((scrollTop + h) / ROW_H) + 5);
+  const sc = tableScaled(total, h);
+  tableSpacer.style.height = (sc ? sc.spacerH : total * ROW_H) + 'px';
+  const anchor = sc
+    ? Math.round((scrollTop / sc.maxScroll) * sc.maxRowStart)
+    : Math.floor(scrollTop / ROW_H);
+  const first = Math.max(0, anchor - 5);
+  const last = Math.min(total, anchor + Math.ceil(h / ROW_H) + 6);
   tableRowsEl.textContent = '';
   const frag = document.createDocumentFragment();
   const needed = new Set();
@@ -2665,7 +2688,9 @@ function renderTable() {
     const rowData = page ? page[i % 100] : null;
     const row = document.createElement('div');
     row.className = 'table-row' + (i % 2 ? ' zebra' : '');
-    row.style.top = i * ROW_H + 'px';
+    // Scaled mode: position rows around the current scroll offset (the spacer is
+    // compressed, so absolute i*ROW_H would fall outside it). 1:1 mode: exact.
+    row.style.top = (sc ? scrollTop + (i - anchor) * ROW_H : i * ROW_H) + 'px';
     const rowInSet = !!(t.tableRowSet && t.tableRowSet.has(i));
     const idxCell = document.createElement('div');
     idxCell.className = 'td idx';
@@ -2820,9 +2845,15 @@ document.addEventListener('keydown', (e) => {
   const nv = Math.max(0, Math.min(cols.length - 1, s.fVis + dv));
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
-  const y = nr * ROW_H;
-  if (y < tableScroll.scrollTop) tableScroll.scrollTop = y;
-  else if (y > tableScroll.scrollTop + tableScroll.clientHeight - ROW_H) tableScroll.scrollTop = y - tableScroll.clientHeight + ROW_H;
+  const totalR = tableRows(t);
+  const vh = tableScroll.clientHeight;
+  const sc = tableScaled(totalR, vh);
+  const visN = Math.max(1, Math.floor(vh / ROW_H));
+  const cur0 = sc
+    ? Math.round((tableScroll.scrollTop / sc.maxScroll) * sc.maxRowStart)
+    : Math.floor(tableScroll.scrollTop / ROW_H);
+  if (nr < cur0) tableScroll.scrollTop = rowToScroll(nr, totalR, vh);
+  else if (nr >= cur0 + visN) tableScroll.scrollTop = rowToScroll(Math.max(0, nr - visN + 1), totalR, vh);
   renderTable();
 });
 
