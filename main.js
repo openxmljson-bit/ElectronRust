@@ -982,6 +982,13 @@ async function decideMode(filePath) {
   const pref = getSettings().engineMode || 'auto'; // auto | db | memory
   if (pref === 'db') return 'db';
   if (pref === 'memory') return 'memory';
+  // Auto: prefer an existing cache. dbPathFor() hashes the file's path + size +
+  // mtime, so a cache file existing means the ingest is both already done AND
+  // still fresh (a changed file hashes differently and misses). Reusing it beats
+  // re-parsing into memory, so a cache hit wins over the size heuristic below.
+  try {
+    if (fs.existsSync(dbPathFor(filePath))) return 'db';
+  } catch {}
   try {
     const size = fs.statSync(filePath).size;
     const avail = await availableMemBytes();
