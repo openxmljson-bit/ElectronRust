@@ -227,6 +227,36 @@ function buildPlans(
     return plans;
   }
 
+  if (format === 'json' || format === 'ndjson') {
+    // Row-oriented JSON read straight to a table: each object becomes a row, its
+    // keys become columns (nested objects/arrays stay as STRUCT/LIST, shown as
+    // JSON in the grid). Streams to Parquet like CSV — no whole-file index in RAM,
+    // so multi-GB NDJSON loads and pages lazily.
+    const jfmt = format === 'ndjson' ? 'newline_delimited' : 'array';
+    // 128 MB per object (default 16 MB is too small for some records); tolerate the
+    // occasional bad line rather than failing the whole file; infer the column set
+    // from a generous sample (columns are keyed off object keys, so this covers
+    // homogeneous feeds fully while staying fast — no whole-file schema scan).
+    const sampleNote =
+      'Columns were inferred from a sample of the file; fields that appear only in rarely-seen records may be omitted.';
+    const common = `ignore_errors=true, maximum_object_size=134217728, sample_size=131072`;
+    // Plan 1: the structure the extension/sniff indicated (newline-delimited or array).
+    plans.push({
+      strategy: 'json-auto',
+      reader: `read_json(${p}, format='${jfmt}', ${common})`,
+      notes: [sampleNote],
+      minColumns: 1,
+    });
+    // Plan 2: let DuckDB auto-detect array vs newline-delimited if the guess was wrong.
+    plans.push({
+      strategy: 'json-auto',
+      reader: `read_json(${p}, format='auto', ${common})`,
+      notes: [sampleNote],
+      minColumns: 1,
+    });
+    return plans;
+  }
+
   {
     const skip = o.skipRows ?? 0;
     const probeSample = 20_000;
@@ -1111,7 +1141,11 @@ export class Ingestor {
     const parquetBytes = await fileSize(outPath);
     // Report the options that were actually used, not the ones guessed up front.
     let resolvedDelimiter = plan.delimiter ?? null;
-    if (resolvedDelimiter === null && plan.strategy !== 'raw-lines') {
+    if (
+      resolvedDelimiter === null &&
+      plan.strategy !== 'raw-lines' &&
+      plan.strategy !== 'json-auto'
+    ) {
       resolvedDelimiter = await sniffDelimiter(this.db, readPath, effective);
     }
     const usedOptions: OpenOptions =

@@ -1119,9 +1119,12 @@ const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 
 // ---------- DuckDB engine (delimited/tabular files) ----------
 // Extensions routed straight to DuckDB; .txt/.dat/.tab arrive via format:'csv'.
-const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet'];
+// JSONL/NDJSON are row-oriented, so they load through DuckDB as a lazily-paged
+// table (fast on multi-GB files) rather than the Rust tree engine, which indexes
+// the whole file in memory. Plain .json stays on the tree engine.
+const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet', 'ndjson', 'jsonl'];
 const EMPTY_VIEW = { filters: [], combine: 'and', search: null, sort: [], select: null };
-const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet' };
+const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet', ndjson: 'JSONL', json: 'JSON' };
 let duckJobSeq = 1;
 const duckJob = () => 'job-' + (duckJobSeq++);
 

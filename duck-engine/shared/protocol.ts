@@ -10,7 +10,16 @@ export const PROTOCOL_VERSION = 1;
 
 /* ------------------------------------------------------------------ formats */
 
-export type SourceFormat = 'csv' | 'tsv' | 'psv' | 'delimited' | 'parquet' | 'unsupported' | 'unknown';
+export type SourceFormat =
+  | 'csv'
+  | 'tsv'
+  | 'psv'
+  | 'delimited'
+  | 'parquet'
+  | 'json'
+  | 'ndjson'
+  | 'unsupported'
+  | 'unknown';
 
 export type Compression = 'none' | 'gzip' | 'zstd';
 
@@ -113,6 +122,7 @@ export type IngestStrategy =
   | 'csv-skip'
   | 'csv-lenient'
   | 'csv-all-varchar'
+  | 'json-auto'
   | 'raw-lines';
 
 export interface DatasetManifest {

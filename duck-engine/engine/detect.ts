@@ -363,10 +363,11 @@ function formatFromExtension(path: string): SourceFormat | null {
   const ext = extname(path).toLowerCase().replace(/\.(gz|zst|zstd)$/, '');
   switch (ext) {
     case '.json':
+      return 'json';
     case '.ndjson':
     case '.jsonl':
     case '.jsonlines':
-      return 'unsupported';
+      return 'ndjson';
     case '.csv':
       return 'csv';
     case '.tsv':
@@ -467,14 +468,17 @@ export async function detectFile(path: string): Promise<DetectResult> {
   const firstChar = trimmedStart[0] ?? '';
 
   if (firstChar === '[' || firstChar === '{') {
-    // JSON is deliberately out of scope: a document format does not belong in a
-    // table view. Say so plainly rather than half-parsing it into columns.
-    format = 'unsupported';
-    confidence = 0.95;
-    warnings.push(
-      'This looks like JSON. GigaTables reads tabular files only — CSV, TSV, ' +
-        'pipe- or otherwise-delimited text, and Parquet.',
-    );
+    // JSON / NDJSON. Row-oriented JSON (newline-delimited objects) reads as a table
+    // one object per row; a top-level array reads one element per row. Prefer the
+    // extension to distinguish; otherwise sniff (many top-level {…} lines => NDJSON).
+    if (extHint === 'ndjson' || extHint === 'json') {
+      format = extHint;
+      confidence = 0.9;
+    } else {
+      const objLines = lines.filter((l) => l.trim().startsWith('{')).length;
+      format = firstChar === '{' && objLines >= 2 ? 'ndjson' : 'json';
+      confidence = 0.75;
+    }
   } else if (firstChar === '') {
     format = extHint ?? 'unknown';
     confidence = 0.1;
