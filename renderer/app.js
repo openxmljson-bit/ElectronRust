@@ -6372,7 +6372,7 @@ async function initLicense() {
     if (Number.isFinite(d) && d > 0 && d <= EXPIRY_NUDGE_DAYS) {
       const days = d + ' day' + (d === 1 ? '' : 's');
       toast(isFreeTier(s.tier)
-        ? 'Your free NARIK plan ends in ' + days + ' — upgrade from Manage / Renew to keep going.'
+        ? 'Your free NARIK plan ends in ' + days + ' — upgrade to keep going.'
         : 'Your NARIK EDITION license expires in ' + days + ' — renew to avoid interruption.', true);
     }
   } else {
