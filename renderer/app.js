@@ -280,6 +280,12 @@ function renderScreen() {
     $('match-prev').classList.toggle('hidden', plain || duck);     // asFilter search: no stepping
     $('match-next').classList.toggle('hidden', plain || duck);
     $('text-wrap').classList.toggle('hidden', !plain);
+    // "Tree View" button: table view only, JSONL/NDJSON under the size cap. Opens
+    // the tree in a new tab. Hidden by default; shown in the DuckDB branch below.
+    $('btn-tree-view').classList.toggle(
+      'hidden',
+      !(duck && t.file && isJsonlFile(t.file) && srcBytes <= JSONL_TREE_MAX),
+    );
     if (plain) {
       $('view-toggle').classList.add('hidden');
       $('tree-wrap').classList.add('hidden');
@@ -1123,6 +1129,11 @@ const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 // table (fast on multi-GB files) rather than the Rust tree engine, which indexes
 // the whole file in memory. Plain .json stays on the tree engine.
 const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet', 'ndjson', 'jsonl'];
+// JSONL/NDJSON open as a DuckDB table by default. Below this size a "Tree View"
+// button (table view only) can open the same file in the Rust tree explorer; above
+// it the whole-file tree index would exhaust memory, so the button is hidden.
+const JSONL_TREE_MAX = 2 * 1024 * 1024 * 1024; // 2 GB
+function isJsonlFile(p) { const e = String(p || '').split('.').pop().toLowerCase(); return e === 'jsonl' || e === 'ndjson'; }
 const EMPTY_VIEW = { filters: [], combine: 'and', search: null, sort: [], select: null };
 const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet', ndjson: 'JSONL', json: 'JSON' };
 let duckJobSeq = 1;
@@ -1173,6 +1184,7 @@ function isDuck(t) { return t && t.engine === 'duck'; }
 
 async function openPath(p, tab, force, opts) {
   const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table
+  const viewPref = opts && opts.view; // 'tree' forces the Rust tree engine for JSONL
   const ext = String(p).split('.').pop().toLowerCase();
   if (BLOCKED_EXTS.includes(ext)) {
     toast('Excel files are not supported — export to CSV or JSON first');
@@ -1191,14 +1203,16 @@ async function openPath(p, tab, force, opts) {
   t.plainText = null;
   t.file = p;
   t.forcedFormat = fmt || null; // remembered so reload keeps the table view
+  t.viewPref = viewPref || null; // 'tree' → keep the Rust tree view across reloads
   t.title = baseName(p);
   t.phase = 'loading';
   t.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false };
   t.engine = null; t.duck = null;
   if (t !== cur) setCurrent(t);
   else { renderTabs(); renderScreen(); }
-  // Delimited/tabular files go to the DuckDB engine; everything else to Rust.
-  const wantDuck = fmt === 'csv' || DUCK_EXTS.includes(ext);
+  // Delimited/tabular files go to the DuckDB engine; everything else to Rust. A
+  // 'tree' view override forces JSONL/NDJSON to the Rust tree engine instead.
+  const wantDuck = viewPref === 'tree' ? false : (fmt === 'csv' || DUCK_EXTS.includes(ext));
   if (wantDuck) { t.progress.duck = true; if (t === cur) renderScreen(); }
   try {
     if (wantDuck) await openDuck(t, p);
@@ -3606,6 +3620,12 @@ function showProfileReport(t, res) {
   page.appendChild(wrap);
 }
 
+$('btn-tree-view').addEventListener('click', () => {
+  const t = cur;
+  if (!t || !t.file) return;
+  const nt = newTab(true); // open the tree view in a new tab, leaving the table open
+  if (nt) openPath(t.file, nt, false, { view: 'tree' });
+});
 $('btn-cols').addEventListener('click', toggleColumnsPanel);
 $('btn-cols-close').addEventListener('click', toggleColumnsPanel);
 $('cols-search').addEventListener('input', () => { if (cur) renderColumnsPanel(cur); });
@@ -4309,7 +4329,7 @@ window.oxj.onMenu(async ({ action, arg }) => {
       }
       break;
     case 'reload-tab':
-      if (cur && cur.file) openPath(cur.file, cur, true, cur.forcedFormat ? { format: cur.forcedFormat } : undefined);
+      if (cur && cur.file) openPath(cur.file, cur, true, { format: cur.forcedFormat || undefined, view: cur.viewPref || undefined });
       break;
     case 'duplicate-tab': {
       // Capture the source file BEFORE creating the tab — newTab() switches
