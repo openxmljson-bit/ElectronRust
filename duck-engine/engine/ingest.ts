@@ -72,7 +72,12 @@ interface ReaderPlan {
 }
 
 interface CsvVariant {
+  /** ignore_errors + strict_mode=false: also tolerates unpaired quotes and
+   * newlines inside fields, but can merge many lines when quoting is off-balance. */
   lenient?: boolean;
+  /** ignore_errors only, keeping strict RFC-4180 quoting. Skips just the rows that
+   * don't fit the structure, without the row-merging that strict_mode=false causes. */
+  skipBadRows?: boolean;
   allVarchar?: boolean;
   delimiter?: string | null;
   skipRows?: number;
@@ -143,7 +148,18 @@ function csvArgs(o: OpenOptions, opts: CsvVariant): string[] {
     // the parser's state machine bail on the correct (tab) delimiter entirely,
     // and the ladder falls through to a wrong delimiter (space), shredding every
     // row into dozens of auto-named columns. Other editors are lenient here too.
+    //
+    // The catch: on a well-formed RFC-4180 file that has a few stray quotes,
+    // strict_mode=false turns each stray quote into the start of a quoted field
+    // and swallows every line until the next stray quote — collapsing millions of
+    // good rows into a handful of merged blobs. csv-skip below avoids that by
+    // keeping strict quoting and only skipping the genuinely bad rows.
     args.push(`strict_mode=false`);
+  } else if (opts.skipBadRows) {
+    // Skip rows that don't fit the structure while keeping strict RFC-4180 quoting
+    // (doubled "" escaping intact, no row-merging). Recovers all the good rows from
+    // a mostly-clean file that has a small number of malformed rows.
+    args.push(`ignore_errors=true`);
   }
   if (o.columnTypes && Object.keys(o.columnTypes).length > 0) {
     const entries = Object.entries(o.columnTypes)
@@ -255,6 +271,11 @@ function buildPlans(
     if (o.delimiterExplicit && o.delimiter) {
       for (const q of quoteOrder) {
         plans.push(csvPlan('csv-auto', { delimiter: o.delimiter, quoteChar: q }, 1, quoteNote(q)));
+      }
+      for (const q of quoteOrder) {
+        plans.push(
+          csvPlan('csv-skip', { delimiter: o.delimiter, quoteChar: q, skipBadRows: true }, 1, quoteNote(q)),
+        );
       }
       for (const q of quoteOrder) {
         plans.push(
@@ -372,7 +393,18 @@ function buildPlans(
         }
       }
 
-      // Pass 3: give up on strictness — skip bad rows, then read everything as text.
+      // Pass 3a: keep strict RFC-4180 quoting but skip the rows that don't fit —
+      // recovers all the good rows from a mostly-clean file with a few bad ones,
+      // without strict_mode=false's row-merging. Tried before the looser tier.
+      for (const d of delimiters.slice(0, 4)) {
+        for (const q of quoteOrder) {
+          plans.push(
+            csvPlan('csv-skip', { delimiter: d, quoteChar: q, skipBadRows: true }, 2, quoteNote(q)),
+          );
+        }
+      }
+
+      // Pass 3b: give up on strictness — skip bad rows, then read everything as text.
       for (const d of delimiters.slice(0, 4)) {
         for (const q of quoteOrder) {
           plans.push(
@@ -398,6 +430,9 @@ function buildPlans(
       for (const q of quoteOrder) {
         plans.push(csvPlan('csv-auto', { delimiter: null, quoteChar: q }, 1, quoteNote(q)));
       }
+      plans.push(
+        csvPlan('csv-skip', { delimiter: null, quoteChar: '"', skipBadRows: true }, 1, []),
+      );
       plans.push(
         csvPlan('csv-lenient', { delimiter: null, quoteChar: null, lenient: true }, 1, [
           'Rows the parser rejected were skipped.',
@@ -772,10 +807,45 @@ export interface IngestRequest {
 }
 
 export class Ingestor {
+  private readonly lineCounts = new Map<string, number>();
+
   constructor(
     private readonly db: EngineDb,
     private readonly cache: DatasetCache,
   ) {}
+
+  // Count physical newlines in the source — used only as a sanity signal for a
+  // lenient (strict_mode=false) read that may have merged rows. Streams the file
+  // and decompresses gzip; returns -1 when it can't count (unknown compression or
+  // a read error), which disables the check rather than blocking the ingest.
+  private async approxLineCount(path: string, compression?: string): Promise<number> {
+    const cached = this.lineCounts.get(path);
+    if (cached !== undefined) return cached;
+    let result = -1;
+    try {
+      if (compression && compression !== 'none' && compression !== 'gzip') {
+        this.lineCounts.set(path, -1);
+        return -1;
+      }
+      let count = 0;
+      const base = createReadStream(path);
+      const stream: NodeJS.ReadableStream = compression === 'gzip' ? base.pipe(createGunzip()) : base;
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer) => {
+          for (let i = 0; i < chunk.length; i++) {
+            if (chunk[i] === 0x0a) count++;
+          }
+        });
+        stream.on('end', () => resolve());
+        stream.on('error', reject);
+      });
+      result = count;
+    } catch {
+      result = -1;
+    }
+    this.lineCounts.set(path, result);
+    return result;
+  }
 
   async open(req: IngestRequest): Promise<DatasetManifest> {
     const { path, options, jobId, onProgress } = req;
@@ -998,6 +1068,34 @@ export class Ingestor {
       'counting rows',
     );
     const rowCount = Number(rowCountText ?? '0');
+
+    // A read with strict_mode=false can collapse huge spans into a few merged rows
+    // when quoting is off-balance (a stray " opens a "field" that swallows lines
+    // until the next stray "). If this lenient plan kept only a tiny fraction of
+    // the file's lines, that almost certainly happened — reject it so the ladder
+    // tries a better plan instead of silently showing a fraction of the data.
+    if (plan.strategy === 'csv-lenient') {
+      const lines = await this.approxLineCount(readPath, detected.compression);
+      if (lines > 1000 && rowCount * 20 < lines) {
+        throw new EngineError(
+          'parse-failed',
+          `Lenient read kept only ${rowCount} of ~${lines} lines — likely merged on unbalanced quotes.`,
+        );
+      }
+    }
+
+    // Non-silent notice: an error-tolerant strategy means some rows didn't fit the
+    // file's structure and were skipped. Surface the loaded count so a partial load
+    // is never silent.
+    if (
+      plan.strategy === 'csv-skip' ||
+      plan.strategy === 'csv-lenient' ||
+      plan.strategy === 'csv-all-varchar'
+    ) {
+      extraWarnings.push(
+        `Some rows didn't match the file's structure and were skipped — ${rowCount.toLocaleString()} rows loaded.`,
+      );
+    }
 
     const finalSchema = await this.db.queryRows(
       `DESCRIBE SELECT * FROM read_parquet(${quotePath(outPath)}) LIMIT 0`,

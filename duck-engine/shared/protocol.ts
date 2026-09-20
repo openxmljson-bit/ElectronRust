@@ -110,6 +110,7 @@ export type IngestStrategy =
   | 'cache-hit'
   | 'parquet-passthrough'
   | 'csv-auto'
+  | 'csv-skip'
   | 'csv-lenient'
   | 'csv-all-varchar'
   | 'raw-lines';

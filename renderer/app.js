@@ -1155,6 +1155,11 @@ async function openDuck(t, path) {
   renderTabs();
   if (t === cur) { renderScreen(); if (recentPanelOpen) renderRecentDock(); }
   toast('Loaded ' + fmtInt(vi.rowCount) + ' rows · ' + t.tableFormatLabel, true);
+  // Surface ingest warnings (e.g. rows skipped because they didn't match the file
+  // structure) so a partial load is never silent. Shown as a separate, sticky
+  // toast after the success one; deduped by the engine already.
+  const warns = Array.isArray(man.warnings) ? man.warnings.filter(Boolean) : [];
+  if (warns.length) setTimeout(() => toast('⚠ ' + warns.join(' '), true), 400);
 }
 function isDuck(t) { return t && t.engine === 'duck'; }
 
