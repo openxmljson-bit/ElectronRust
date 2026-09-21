@@ -241,8 +241,11 @@ function renderTabs() {
   add.textContent = '+';
   add.title = 'New tab';
   add.addEventListener('click', () => {
-    // Open a new tab on the slim start card (Open File / URL / Clipboard + recents)
-    // rather than jumping straight into the OS file dialog.
+    // Reuse an existing empty tab instead of stacking duplicates — one start card
+    // at a time. Otherwise open a new tab on the slim start card (Open File / URL /
+    // Clipboard + recents) rather than the OS file dialog.
+    const empty = tabs.find((x) => x.phase === 'empty');
+    if (empty) { setCurrent(empty); return; }
     const nt = newTab(false);
     if (nt) { nt.slim = true; setCurrent(nt); }
   });
