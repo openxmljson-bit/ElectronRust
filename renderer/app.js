@@ -239,10 +239,12 @@ function renderTabs() {
   const add = document.createElement('button');
   add.className = 'tab-add';
   add.textContent = '+';
-  add.title = 'Open a file in a new tab';
-  add.addEventListener('click', async () => {
-    const p = await window.oxj.pickFile();
-    if (p) openFileWithPrompt(p); // targetTabForOpen() makes a new tab when the current one is busy
+  add.title = 'New tab';
+  add.addEventListener('click', () => {
+    // Open a new tab on the slim start card (Open File / URL / Clipboard + recents)
+    // rather than jumping straight into the OS file dialog.
+    const nt = newTab(false);
+    if (nt) { nt.slim = true; setCurrent(nt); }
   });
   host.appendChild(add);
 }
@@ -253,7 +255,13 @@ function renderScreen() {
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
-  if (t.phase === 'empty') { refreshRecents(); refreshStats(); refreshCacheInfo(); }
+  if (t.phase === 'empty') {
+    // A "+" tab shows a slimmed start card (center + recents only); the app-launch
+    // home shows the full dashboard with its side panels.
+    $('screen-welcome').classList.toggle('slim', !!t.slim);
+    refreshRecents();
+    if (!t.slim) { refreshStats(); refreshCacheInfo(); }
+  }
   else if (t.phase === 'loading') updateProgressDom(t);
   else if (t.phase === 'ready') {
     const plain = !!t.plain;
