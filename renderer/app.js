@@ -3,7 +3,7 @@
 
 const PAGE = 200;
 const ROW_H = 26;
-const MAX_TABS = 12;
+const MAX_TABS = 20;
 const K = { OBJ: 0, ARR: 1, STR: 2, NUM: 3, BOOL: 4, NULL: 5, ELEM: 6, ATTR: 7, TEXT: 8 };
 
 const $ = (id) => document.getElementById(id);
