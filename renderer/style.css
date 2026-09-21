@@ -402,6 +402,12 @@ body.resizing .recent-panel { transition: none; } /* no lag while dragging */
 @media (max-width: 1120px) {
   .welcome-row { grid-template-columns: minmax(0, 560px); }
 }
+/* Slim start card for a "+" tab: just the center card + recents, no side panels
+   or bottom branding. */
+#screen-welcome.slim .side-col-left,
+#screen-welcome.slim .side-col,
+#screen-welcome.slim .center-bottom-row { display: none; }
+#screen-welcome.slim .welcome-row { grid-template-columns: minmax(0, 560px); }
 .stats {
   text-align: left;
   background: var(--bg2);
