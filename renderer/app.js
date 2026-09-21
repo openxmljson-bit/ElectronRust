@@ -1178,7 +1178,7 @@ async function openDuck(t, path) {
     // alarming to users even when the load succeeded. Keep the actionable notices
     // (rows skipped, delimiter used, etc.).
     .filter((w) => !/ordinary text|treated as off/i.test(w));
-  if (warns.length) setTimeout(() => toast('⚠ ' + warns.join(' '), true), 400);
+  if (warns.length) setTimeout(() => toast('⚠ ' + warns.join('  ·  '), true), 400);
 }
 function isDuck(t) { return t && t.engine === 'duck'; }
 

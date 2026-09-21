@@ -150,7 +150,7 @@ function detectEncoding(buf: Buffer): EncodingGuess {
     warnings.push('File looks like UTF-16 without a byte-order mark.');
     return { encoding: 'utf-16', bomBytes: 0, warnings };
   }
-  warnings.push('File is not valid UTF-8; reading it as Latin-1. Override in Advanced options if wrong.');
+  warnings.push('Read as Latin-1 (not valid UTF-8).');
   return { encoding: 'latin-1', bomBytes: 0, warnings };
 }
 
@@ -498,7 +498,7 @@ export async function detectFile(path: string): Promise<DetectResult> {
     }
     if (skipRows > 0) {
       warnings.push(
-        `The first ${skipRows} line(s) look like a preamble rather than data, so they are skipped.`,
+        `Skipped ${skipRows} preamble line(s) before the data.`,
       );
     }
     if (delimiter === '\t') format = 'tsv';
@@ -507,10 +507,7 @@ export async function detectFile(path: string): Promise<DetectResult> {
     else if (delimiter) format = 'delimited';
     else {
       format = extHint ?? 'delimited';
-      warnings.push(
-        'No delimiter was found in the sample. The file will be loaded as single-column text — ' +
-          'set the delimiter by hand if that is wrong.',
-      );
+      warnings.push('No delimiter found — loaded as single-column text.');
     }
   }
 

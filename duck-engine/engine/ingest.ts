@@ -315,7 +315,7 @@ function buildPlans(
         plans.push(
           csvPlan('csv-lenient', { delimiter: o.delimiter, quoteChar: q, lenient: true }, 1, [
             ...quoteNote(q),
-            'Rows the parser rejected were skipped.',
+            'A few unreadable rows were skipped.',
           ]),
         );
       }
@@ -324,7 +324,7 @@ function buildPlans(
           'csv-all-varchar',
           { delimiter: o.delimiter, quoteChar: quoteOrder[0]!, lenient: true, allVarchar: true },
           1,
-          ['Every column was read as text because the column types conflicted.'],
+          ['All columns read as text (mixed types).'],
         ),
       );
     } else {
@@ -419,7 +419,7 @@ function buildPlans(
           for (const q of quoteOrder) {
             plans.push(
               csvPlan('csv-auto', { delimiter: d, quoteChar: q, encoding: 'latin-1' }, 2, [
-                'Read as Latin-1 because the file is not valid UTF-8 throughout.',
+                'Read as Latin-1 (not valid UTF-8).',
                 ...quoteNote(q),
               ]),
             );
@@ -444,7 +444,7 @@ function buildPlans(
           plans.push(
             csvPlan('csv-lenient', { delimiter: d, quoteChar: q, lenient: true }, 2, [
               ...quoteNote(q),
-              'Rows the parser rejected were skipped.',
+              'A few unreadable rows were skipped.',
             ]),
           );
         }
@@ -455,7 +455,7 @@ function buildPlans(
             'csv-all-varchar',
             { delimiter: d, quoteChar: quoteOrder[0]!, lenient: true, allVarchar: true },
             2,
-            ['Every column was read as text because the column types conflicted.'],
+            ['All columns read as text (mixed types).'],
           ),
         );
       }
@@ -469,7 +469,7 @@ function buildPlans(
       );
       plans.push(
         csvPlan('csv-lenient', { delimiter: null, quoteChar: null, lenient: true }, 1, [
-          'Rows the parser rejected were skipped.',
+          'A few unreadable rows were skipped.',
         ]),
       );
       plans.push(
@@ -477,7 +477,7 @@ function buildPlans(
           'csv-all-varchar',
           { delimiter: null, quoteChar: null, lenient: true, allVarchar: true },
           1,
-          ['Every column was read as text because the column types conflicted.'],
+          ['All columns read as text (mixed types).'],
         ),
       );
     }
@@ -1127,7 +1127,7 @@ export class Ingestor {
       plan.strategy === 'csv-all-varchar'
     ) {
       extraWarnings.push(
-        `Some rows didn't match the file's structure and were skipped — ${rowCount.toLocaleString()} rows loaded.`,
+        `${rowCount.toLocaleString()} rows loaded; a few malformed rows were skipped.`,
       );
     }
 
@@ -1135,7 +1135,7 @@ export class Ingestor {
     // more records than the sample window (otherwise the sample covered everything).
     if (plan.strategy === 'json-auto' && rowCount > JSON_SAMPLE_ROWS) {
       extraWarnings.push(
-        `Columns were inferred from the first ${JSON_SAMPLE_ROWS.toLocaleString()} records; a field that appears only in rarer records later in the file may not have a column.`,
+        'Some rarely-used fields may be missing (columns read from a sample).',
       );
     }
 
@@ -1205,7 +1205,7 @@ export class Ingestor {
 
     if (columns.some((c) => isNestedType(c.type))) {
       manifest.warnings.push(
-        'Some columns hold nested values. The grid shows them as JSON; use the row inspector to expand them.',
+        'Nested values show as JSON — open a row to expand.',
       );
     }
 
