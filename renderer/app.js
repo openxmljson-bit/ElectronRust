@@ -3884,6 +3884,25 @@ $('btn-copy-source').addEventListener('click', async () => {
   }
 });
 
+// Minify the source: proper JSON re-serialisation when it parses; otherwise strip
+// inter-tag whitespace for XML, or collapse indentation/newlines as a last resort.
+function minifySource(text) {
+  const s = String(text || '');
+  try { return JSON.stringify(JSON.parse(s)); } catch {}
+  const head = s.replace(/^﻿/, '').trimStart();
+  if (head.startsWith('<')) return s.replace(/>\s+</g, '><').trim();
+  return s.replace(/[ \t]*\r?\n[ \t]*/g, '').trim();
+}
+$('btn-copy-min-source').addEventListener('click', async () => {
+  const text = monacoReady && monacoEditor ? monacoEditor.getValue() : updateSource._text || '';
+  try {
+    await navigator.clipboard.writeText(minifySource(text));
+    toast('Copied minified', true);
+  } catch {
+    toast('Copy failed');
+  }
+});
+
 // ---------- Open URL modal ----------
 // ---------- Smart URL / request builder (Postman-style) ----------
 let builderParams = [];
