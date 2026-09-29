@@ -4590,17 +4590,40 @@ async function copyAsCurl() {
     toast('Copy as cURL only works for documents opened from a URL');
     return;
   }
-  const { url, auth } = t.origin;
+  // Mirror exactly what performRequest() sends: method, api-key placement,
+  // custom headers, auth, and the request body.
+  const o = t.origin;
   const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
-  let cmd = 'curl ' + q(url);
-  if (auth && auth.type === 'basic' && (auth.user || auth.pass)) {
-    cmd += ' -u ' + q((auth.user || '') + ':' + (auth.pass || ''));
-  } else if (auth && auth.type === 'bearer' && auth.token) {
-    cmd += ' -H ' + q('Authorization: Bearer ' + auth.token);
-  } else if (auth && auth.type === 'apikey' && auth.token) {
-    cmd += ' -H ' + q((auth.header || 'X-API-Key') + ': ' + auth.token);
+  const method = (o.method || 'GET').toUpperCase();
+  const auth = o.auth || { type: 'none' };
+  const hasBody = o.body != null && String(o.body).length > 0;
+
+  let url = o.url;
+  if (auth.type === 'apikey' && auth.addTo === 'query' && auth.header) {
+    url += (url.includes('?') ? '&' : '?') +
+      encodeURIComponent(auth.header) + '=' + encodeURIComponent(auth.value || auth.token || '');
   }
-  await copyText(cmd, 'cURL command');
+
+  const parts = ['curl ' + q(url)];
+  // -X only when it isn't a plain GET (a GET with a body still needs it pinned,
+  // otherwise --data would flip curl to POST).
+  if (method !== 'GET' || hasBody) parts.push('-X ' + method);
+
+  for (const h of (o.headers || [])) {
+    if (h && h.on !== false && h.key) parts.push('-H ' + q(h.key + ': ' + (h.val || '')));
+  }
+
+  if (auth.type === 'basic' && (auth.user || auth.pass)) {
+    parts.push('-u ' + q((auth.user || '') + ':' + (auth.pass || '')));
+  } else if (auth.type === 'bearer' && auth.token) {
+    parts.push('-H ' + q('Authorization: Bearer ' + auth.token));
+  } else if (auth.type === 'apikey' && auth.addTo !== 'query' && auth.header) {
+    parts.push('-H ' + q(auth.header + ': ' + (auth.value || auth.token || '')));
+  }
+
+  if (hasBody) parts.push('--data-raw ' + q(o.body));
+
+  await copyText(parts.join(' \\\n  '), 'cURL command');
 }
 
 // ---------- Export menu ----------
