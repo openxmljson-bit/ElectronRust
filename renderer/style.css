@@ -880,6 +880,10 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 .bm-open { border: 1px solid var(--border); border-radius: 6px; }
 .bm-open:hover { border-color: var(--accent); color: var(--accent); }
 .req-top { display: flex; gap: 8px; align-items: stretch; }
+.req-status { margin-top: 8px; font-size: 13px; line-height: 1.4; }
+.req-status.pending { color: var(--fg-dim); }
+.req-status.err { color: #e5534b; }
+.req-status .link-btn { margin-left: 2px; }
 .req-method {
   background: var(--bg3); color: var(--accent); border: 1px solid var(--border);
   border-radius: 8px; padding: 0 12px; font-size: 13px; font-weight: 800; min-width: 100px; letter-spacing: .3px;
