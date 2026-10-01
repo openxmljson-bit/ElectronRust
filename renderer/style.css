@@ -826,7 +826,7 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
   padding: 18px 20px 16px; gap: 12px;
 }
 /* Response popup: wider than a standard dialog so long URLs/headers read well. */
-.modal.resp-modal { width: min(900px, 94vw); }
+.modal.resp-modal { width: min(1280px, 95vw); }
 .req-titlebar { display: flex; align-items: center; justify-content: space-between; }
 .req-titlebar .modal-title { font-size: 15px; }
 .req-titlebar .link-btn { font-size: 15px; color: var(--fg-dim); }
