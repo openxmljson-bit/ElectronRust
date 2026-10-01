@@ -887,6 +887,7 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 .req-status.err { color: #e5534b; }
 .req-status .link-btn { margin-left: 2px; }
 /* Response info panel */
+.resp-line, .resp-meta, .resp-url, .resp-headers { user-select: text; -webkit-user-select: text; cursor: text; }
 .resp-line { font-weight: 700; font-size: 15px; }
 .resp-line.ok { color: #2e9e5b; }
 .resp-line.err { color: #e5534b; }

@@ -5437,7 +5437,12 @@ function showResponseInfo(t) {
       const row = document.createElement('div');
       row.className = 'resp-hrow';
       const kk = document.createElement('span'); kk.className = 'resp-hkey'; kk.textContent = k;
-      const vv = document.createElement('span'); vv.className = 'resp-hval'; vv.textContent = Array.isArray(v) ? v.join(', ') : String(v);
+      let valStr = Array.isArray(v) ? v.join(', ') : String(v);
+      // A proxy/CDN + origin can both stamp the same header (e.g. request-id), which
+      // Node joins as "X, X". Collapse a value that's just one token repeated.
+      const parts = valStr.split(', ');
+      if (parts.length > 1 && parts.every((p) => p === parts[0])) valStr = parts[0];
+      const vv = document.createElement('span'); vv.className = 'resp-hval'; vv.textContent = valStr;
       row.append(kk, vv);
       hwrap.appendChild(row);
     }
