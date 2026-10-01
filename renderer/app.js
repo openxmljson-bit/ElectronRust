@@ -4439,10 +4439,14 @@ async function performRequest(reqState, target) {
             setReqStatus('', '');
           } },
       );
+      // Also toast, so the error is visible when triggered from the Bookmarks/Recents
+      // tab (where the inline status line is hidden).
+      toast('HTTP ' + res.status + ' ' + (res.statusText || '').trim(), false);
     }
   } catch (e) {
     // Transport-level failure (bad URL, DNS, timeout…): keep everything in place.
     setReqStatus('Request failed: ' + cleanErr(e) + ' — check the URL and resend.', 'err');
+    toast('Request failed: ' + cleanErr(e));
   } finally {
     if (sendBtn) sendBtn.disabled = false;
   }
