@@ -280,6 +280,7 @@ function renderScreen() {
     $('btn-full-file').classList.toggle('hidden', plain || isCsvDoc || srcBytes > FULL_FILE_MAX);
     $('btn-flow').classList.toggle('hidden', plain || duck || t.docFormat === 'xml');
     $('btn-edit-url').classList.toggle('hidden', !t.origin); // shown for URL-loaded docs
+    $('btn-response').classList.toggle('hidden', !t.responseMeta); // response status & headers
     const memMode = t.meta && t.meta.mode === 'memory';
     const jsonDoc = !plain && (t.docFormat === 'json' || t.docFormat === 'ndjson');
     $('btn-tools').classList.toggle('hidden', !jsonDoc);
@@ -4398,7 +4399,7 @@ async function performRequest(reqState, target) {
     const ok = res.status >= 200 && res.status < 400;
     if (ok) {
       const t = await openPath(res.file, target);
-      if (t) t.origin = reqState; // full request → Edit URL + Copy as cURL
+      if (t) { t.origin = reqState; t.responseMeta = responseMetaOf(method, canonUrl, res); } // Edit URL / Copy as cURL / Response
       hideUrlModal();
       setReqStatus('', '');
       toast(res.status + ' ' + (res.statusText || '').trim() + ' · ' + res.timeMs + ' ms · ' + humanSize(res.size), true);
@@ -4410,7 +4411,7 @@ async function performRequest(reqState, target) {
         'err',
         { label: 'view response', onClick: async () => {
             const t = await openPath(res.file, target);
-            if (t) t.origin = reqState;
+            if (t) { t.origin = reqState; t.responseMeta = responseMetaOf(method, sendUrl, res); }
             hideUrlModal();
             setReqStatus('', '');
           } },
@@ -5398,6 +5399,67 @@ function simpleModal(titleText) {
   document.body.appendChild(back);
   return { back, box };
 }
+
+// Snapshot the response line + headers for the Response panel.
+function responseMetaOf(method, url, res) {
+  return {
+    method, url,
+    status: res.status, statusText: res.statusText || '',
+    timeMs: res.timeMs, size: res.size,
+    headers: res.headers || {},
+  };
+}
+
+// Response panel: status line, timing/size, and the full response header list.
+function showResponseInfo(t) {
+  const m = t && t.responseMeta;
+  if (!m) { toast('No response info for this tab'); return; }
+  const { box } = simpleModal('Response');
+  const line = document.createElement('div');
+  line.className = 'resp-line ' + (m.status >= 200 && m.status < 400 ? 'ok' : 'err');
+  line.textContent = m.status + ' ' + (m.statusText || '').trim();
+  const meta = document.createElement('div');
+  meta.className = 'resp-meta';
+  meta.textContent = (m.method || 'GET') + ' · ' + m.timeMs + ' ms · ' + humanSize(m.size);
+  const urlEl = document.createElement('div');
+  urlEl.className = 'resp-url';
+  urlEl.textContent = m.url || '';
+  box.append(line, meta, urlEl);
+
+  const hwrap = document.createElement('div');
+  hwrap.className = 'resp-headers';
+  const entries = Object.entries(m.headers || {});
+  if (!entries.length) {
+    hwrap.textContent = 'No response headers.';
+  } else {
+    for (const [k, v] of entries) {
+      const row = document.createElement('div');
+      row.className = 'resp-hrow';
+      const kk = document.createElement('span'); kk.className = 'resp-hkey'; kk.textContent = k;
+      const vv = document.createElement('span'); vv.className = 'resp-hval'; vv.textContent = Array.isArray(v) ? v.join(', ') : String(v);
+      row.append(kk, vv);
+      hwrap.appendChild(row);
+    }
+  }
+  box.appendChild(hwrap);
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const copy = document.createElement('button');
+  copy.className = 'btn-secondary';
+  copy.textContent = 'Copy headers';
+  copy.addEventListener('click', () => {
+    const text = entries.map(([k, v]) => k + ': ' + (Array.isArray(v) ? v.join(', ') : v)).join('\n');
+    copyText(text, 'response headers');
+  });
+  const close = document.createElement('button');
+  close.className = 'btn-primary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => box.closest('.modal-backdrop').remove());
+  actions.append(copy, close);
+  box.appendChild(actions);
+}
+$('btn-response').addEventListener('click', () => showResponseInfo(cur));
 
 async function openTextAsTab(name, ext, text) {
   const file = await window.oxj.textToFile(name, ext, text);
