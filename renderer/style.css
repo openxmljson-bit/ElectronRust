@@ -822,9 +822,11 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 
 /* ---------- Smart URL / request builder ---------- */
 .req-modal {
-  width: min(960px, 96vw); height: min(86vh, 840px);
+  width: min(1280px, 96vw); height: min(86vh, 840px);
   padding: 18px 20px 16px; gap: 12px;
 }
+/* Response popup: wider than a standard dialog so long URLs/headers read well. */
+.modal.resp-modal { width: min(900px, 94vw); }
 .req-titlebar { display: flex; align-items: center; justify-content: space-between; }
 .req-titlebar .modal-title { font-size: 15px; }
 .req-titlebar .link-btn { font-size: 15px; color: var(--fg-dim); }

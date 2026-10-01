@@ -5415,6 +5415,7 @@ function showResponseInfo(t) {
   const m = t && t.responseMeta;
   if (!m) { toast('No response info for this tab'); return; }
   const { box } = simpleModal('Response');
+  box.classList.add('resp-modal');
   const line = document.createElement('div');
   line.className = 'resp-line ' + (m.status >= 200 && m.status < 400 ? 'ok' : 'err');
   line.textContent = m.status + ' ' + (m.statusText || '').trim();
