@@ -5414,7 +5414,7 @@ function responseMetaOf(method, url, res) {
 function showResponseInfo(t) {
   const m = t && t.responseMeta;
   if (!m) { toast('No response info for this tab'); return; }
-  const { box } = simpleModal('Response');
+  const { box } = simpleModal('Response Headers');
   box.classList.add('resp-modal');
   const line = document.createElement('div');
   line.className = 'resp-line ' + (m.status >= 200 && m.status < 400 ? 'ok' : 'err');
