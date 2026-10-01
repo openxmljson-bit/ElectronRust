@@ -181,6 +181,7 @@ function setCurrent(t) {
   }
   cur = t;
   closeSearch();
+  clearSource(); // blank the Source pane now; renderScreen refills it for the new tab
   renderTabs();
   renderScreen();
 }
@@ -2689,11 +2690,19 @@ function renderTable() {
   const cols = visCols(t);
   const total = tableRows(t);
   const scrollTop = tableScroll.scrollTop;
-  const h = tableScroll.clientHeight;
+  // The sticky column header sits inside the scroll area, so rows only fill the
+  // height below it — use that for all row-fitting math, or the last row ends up
+  // pushed below the fold (behind the status bar).
+  const headH = $('table-head').offsetHeight || 0;
+  const h = Math.max(1, tableScroll.clientHeight - headH);
   const sc = tableScaled(total, h);
   tableSpacer.style.height = (sc ? sc.spacerH : total * ROW_H) + 'px';
+  // The sticky header lives inside the scroll container, so the browser's real max
+  // scrollTop is a little past maxScroll; clamp the ratio to [0,1] (and the anchor to
+  // maxRowStart) so the overshoot doesn't push the last rows up and leave a blank
+  // page below them.
   const anchor = sc
-    ? Math.round((scrollTop / sc.maxScroll) * sc.maxRowStart)
+    ? Math.min(sc.maxRowStart, Math.round(Math.min(1, Math.max(0, scrollTop / sc.maxScroll)) * sc.maxRowStart))
     : Math.floor(scrollTop / ROW_H);
   const first = Math.max(0, anchor - 5);
   const last = Math.min(total, anchor + Math.ceil(h / ROW_H) + 6);
@@ -2871,7 +2880,7 @@ document.addEventListener('keydown', (e) => {
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
   const totalR = tableRows(t);
-  const vh = tableScroll.clientHeight;
+  const vh = Math.max(1, tableScroll.clientHeight - ($('table-head').offsetHeight || 0));
   const sc = tableScaled(totalR, vh);
   const visN = Math.max(1, Math.floor(vh / ROW_H));
   const cur0 = sc
@@ -3832,6 +3841,21 @@ async function updateSource() {
   });
 })();
 
+// Blank the Source panel immediately, so a tab switch doesn't flash the previous
+// tab's content while the new content is fetched (and nothing lingers when the new
+// tab has no selection).
+function clearSource() {
+  if (!sourceOpen) return;
+  $('source-title').textContent = 'Source';
+  updateSource._text = '';
+  if (monacoReady && monacoEditor && window.monaco) {
+    const old = monacoEditor.getModel();
+    monacoEditor.setModel(window.monaco.editor.createModel('', 'json'));
+    if (old) old.dispose();
+  } else {
+    const fb = $('source-fallback'); if (fb) fb.textContent = '';
+  }
+}
 function openSource() {
   sourceOpen = true;
   $('source-panel').classList.remove('hidden');
