@@ -4273,6 +4273,87 @@ function currentRequestState() {
   };
 }
 
+// ---- Paste-a-cURL importer (Postman-style) ----------------------------------
+// Split a shell command into tokens, honouring single/double quotes, backslash
+// escapes, and backslash-newline line continuations.
+function tokenizeShell(str) {
+  const s = String(str).replace(/\\\r?\n/g, ' ');
+  const out = [];
+  let cur = '', q = '', started = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q === "'") { if (c === "'") q = ''; else cur += c; continue; }
+    if (q === '"') {
+      if (c === '\\' && i + 1 < s.length && '"\\$`'.includes(s[i + 1])) { cur += s[++i]; continue; }
+      if (c === '"') q = ''; else cur += c; continue;
+    }
+    if (c === "'" || c === '"') { q = c; started = true; continue; }
+    if (c === '\\') { if (i + 1 < s.length) cur += s[++i]; started = true; continue; }
+    if (/\s/.test(c)) { if (started || cur) { out.push(cur); cur = ''; started = false; } continue; }
+    cur += c; started = true;
+  }
+  if (started || cur) out.push(cur);
+  return out;
+}
+
+// Parse a `curl …` command into the request shape the modal uses.
+function parseCurl(text) {
+  const toks = tokenizeShell(text.trim());
+  if (!toks.length) return null;
+  let i = /^curl$/i.test(toks[0]) ? 1 : 0;
+  const req = { method: null, url: '', headers: [], body: '', auth: { type: 'none' } };
+  const data = [];
+  // Flags we recognise but don't model → consume their value and drop it.
+  const skipVal = new Set(['-o', '--output', '-m', '--max-time', '--connect-timeout', '-x', '--proxy',
+    '-T', '--upload-file', '-w', '--write-out', '--retry', '--cacert', '--cert', '--key', '-F', '--form', '-E']);
+  for (; i < toks.length; i++) {
+    const t = toks[i];
+    const eq = t.startsWith('--') ? t.indexOf('=') : -1;
+    const flag = eq > -1 ? t.slice(0, eq) : t;
+    let inline = eq > -1 ? t.slice(eq + 1) : null;
+    const next = () => (inline != null ? inline : (toks[++i] ?? ''));
+    switch (flag) {
+      case '-X': case '--request': req.method = (next() || '').toUpperCase(); break;
+      case '-H': case '--header': {
+        const h = next(); const ci = h.indexOf(':');
+        if (ci > -1) req.headers.push({ key: h.slice(0, ci).trim(), val: h.slice(ci + 1).trim() });
+        break;
+      }
+      case '-u': case '--user': {
+        const u = next(); const ci = u.indexOf(':');
+        req.auth = { type: 'basic', user: ci > -1 ? u.slice(0, ci) : u, pass: ci > -1 ? u.slice(ci + 1) : '' };
+        break;
+      }
+      case '-d': case '--data': case '--data-raw': case '--data-ascii':
+      case '--data-binary': case '--data-urlencode': data.push(next()); break;
+      case '-b': case '--cookie': req.headers.push({ key: 'Cookie', val: next() }); break;
+      case '-A': case '--user-agent': req.headers.push({ key: 'User-Agent', val: next() }); break;
+      case '-e': case '--referer': req.headers.push({ key: 'Referer', val: next() }); break;
+      case '--url': req.url = next(); break;
+      case '-I': case '--head': req.method = 'HEAD'; break;
+      default:
+        if (skipVal.has(flag)) { next(); break; }
+        if (!t.startsWith('-') && !req.url) req.url = t; // a bare argument is the URL
+        break; // other boolean flags (-L, --compressed, -k, -s, …) are ignored
+    }
+  }
+  req.body = data.join('&');
+  if (!req.method) req.method = req.body ? 'POST' : 'GET';
+  return req.url ? req : null;
+}
+
+// If the URL box holds a cURL command, parse it into the form. Returns true if so.
+function importCurlFromInput() {
+  const raw = $('url-input').value || '';
+  if (!/^\s*curl\b/i.test(raw)) return false;
+  const req = parseCurl(raw);
+  if (!req) { setReqStatus('Could not parse that cURL command.', 'err'); return false; }
+  showUrlModal(req, builderEditTab);
+  showReqTab(req.headers.length ? 'headers' : (req.body ? 'body' : 'params'));
+  setReqStatus('Imported from cURL — review and Send.', 'pending');
+  return true;
+}
+
 // Send a stored/snapshotted request (shared by Send and by opening a bookmark).
 // Inline status/error line in the URL modal. `link` = optional { label, onClick }.
 function setReqStatus(msg, kind, link) {
@@ -4344,8 +4425,11 @@ async function performRequest(reqState, target) {
 }
 
 async function sendRequest() {
+  // A cURL command typed/pasted into the URL box is imported into the form first,
+  // rather than sent as a (broken) URL.
+  if (importCurlFromInput()) return;
   const reqState = currentRequestState();
-  if (!reqState.url) { toast('Enter a URL'); return; }
+  if (!reqState.url) { setReqStatus('Enter a URL', 'err'); return; }
   // When editing an existing URL doc, reload into its tab; otherwise a new tab.
   const target = (builderEditTab && tabAlive(builderEditTab)) ? builderEditTab : undefined;
   builderEditTab = null;
@@ -4366,6 +4450,17 @@ $('url-input').addEventListener('input', () => {
 });
 $('url-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); sendRequest(); } });
 $('req-send').addEventListener('click', sendRequest);
+// Paste a cURL command into the URL box → auto-fill the whole request (Postman-style).
+$('url-input').addEventListener('paste', (e) => {
+  const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+  if (!/^\s*curl\b/i.test(text)) return; // normal paste
+  e.preventDefault();
+  const req = parseCurl(text);
+  if (!req) { setReqStatus('Could not parse that cURL command.', 'err'); return; }
+  showUrlModal(req, builderEditTab);
+  showReqTab(req.headers.length ? 'headers' : (req.body ? 'body' : 'params'));
+  setReqStatus('Imported from cURL — review and Send.', 'pending');
+});
 $('url-cancel').addEventListener('click', hideUrlModal);
 $('url-modal').addEventListener('click', (ev) => { if (ev.target === $('url-modal')) hideUrlModal(); });
 $('btn-edit-url').addEventListener('click', () => { if (cur && cur.origin) showUrlModal(cur.origin, cur); });
