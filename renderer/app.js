@@ -2693,8 +2693,12 @@ function renderTable() {
   const h = tableScroll.clientHeight;
   const sc = tableScaled(total, h);
   tableSpacer.style.height = (sc ? sc.spacerH : total * ROW_H) + 'px';
+  // The sticky header lives inside the scroll container, so the browser's real max
+  // scrollTop is a little past maxScroll; clamp the ratio to [0,1] (and the anchor to
+  // maxRowStart) so the overshoot doesn't push the last rows up and leave a blank
+  // page below them.
   const anchor = sc
-    ? Math.round((scrollTop / sc.maxScroll) * sc.maxRowStart)
+    ? Math.min(sc.maxRowStart, Math.round(Math.min(1, Math.max(0, scrollTop / sc.maxScroll)) * sc.maxRowStart))
     : Math.floor(scrollTop / ROW_H);
   const first = Math.max(0, anchor - 5);
   const last = Math.min(total, anchor + Math.ceil(h / ROW_H) + 6);
