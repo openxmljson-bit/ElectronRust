@@ -3934,6 +3934,7 @@ function showUrlModal(prefill, editTab) {
   showReqTab('params');
   $('req-bookmark').classList.remove('saved');
   if (!prefill) bmEditingId = null;
+  setReqStatus('', '');
   $('url-modal').classList.remove('hidden');
   setUModalTab('request');
   setTimeout(() => $('url-input').focus(), 20);
@@ -4273,9 +4274,27 @@ function currentRequestState() {
 }
 
 // Send a stored/snapshotted request (shared by Send and by opening a bookmark).
+// Inline status/error line in the URL modal. `link` = optional { label, onClick }.
+function setReqStatus(msg, kind, link) {
+  const el = $('req-status');
+  if (!el) return;
+  el.className = 'req-status' + (kind ? ' ' + kind : '');
+  el.textContent = '';
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.append(document.createTextNode(msg));
+  if (link && link.label) {
+    const a = document.createElement('button');
+    a.className = 'link-btn';
+    a.textContent = link.label;
+    a.addEventListener('click', link.onClick);
+    el.append(a);
+  }
+}
+
 async function performRequest(reqState, target) {
   const canonUrl = reqState.url;
-  if (!canonUrl) { toast('Enter a URL'); return; }
+  if (!canonUrl) { setReqStatus('Enter a URL', 'err'); return; }
   const method = reqState.method || 'GET';
   const auth = reqState.auth || { type: 'none' };
   const body = reqState.body || '';
@@ -4288,15 +4307,39 @@ async function performRequest(reqState, target) {
     sendAuth = { type: 'apikey', header: auth.header, token: auth.value };
   }
   const sendHeaders = (reqState.headers || []).filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
-  hideUrlModal();
-  toast(method + ' ' + canonUrl + ' …', true);
+  // Keep the modal open until we actually succeed, so a failed request never
+  // throws away everything the user typed. Only a 2xx/3xx closes it.
+  const sendBtn = $('req-send');
+  if (sendBtn) sendBtn.disabled = true;
+  setReqStatus('Sending ' + method + ' …', 'pending');
   try {
     const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body });
-    const t = await openPath(res.file, target);
-    if (t) t.origin = reqState; // full request → Edit URL + Copy as cURL
-    toast(res.status + ' ' + (res.statusText || '').trim() + ' · ' + res.timeMs + ' ms · ' + humanSize(res.size), res.status >= 200 && res.status < 300);
+    const ok = res.status >= 200 && res.status < 400;
+    if (ok) {
+      const t = await openPath(res.file, target);
+      if (t) t.origin = reqState; // full request → Edit URL + Copy as cURL
+      hideUrlModal();
+      setReqStatus('', '');
+      toast(res.status + ' ' + (res.statusText || '').trim() + ' · ' + res.timeMs + ' ms · ' + humanSize(res.size), true);
+    } else {
+      // Server responded with an error status: stay on the modal so the request
+      // can be edited and resent, but let the user open the error body if useful.
+      setReqStatus(
+        'HTTP ' + res.status + ' ' + (res.statusText || '').trim() + ' — edit and resend, or ',
+        'err',
+        { label: 'view response', onClick: async () => {
+            const t = await openPath(res.file, target);
+            if (t) t.origin = reqState;
+            hideUrlModal();
+            setReqStatus('', '');
+          } },
+      );
+    }
   } catch (e) {
-    toast('Request failed: ' + cleanErr(e));
+    // Transport-level failure (bad URL, DNS, timeout…): keep everything in place.
+    setReqStatus('Request failed: ' + cleanErr(e) + ' — check the URL and resend.', 'err');
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
