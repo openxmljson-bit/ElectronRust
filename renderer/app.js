@@ -181,6 +181,7 @@ function setCurrent(t) {
   }
   cur = t;
   closeSearch();
+  clearSource(); // blank the Source pane now; renderScreen refills it for the new tab
   renderTabs();
   renderScreen();
 }
@@ -3832,6 +3833,21 @@ async function updateSource() {
   });
 })();
 
+// Blank the Source panel immediately, so a tab switch doesn't flash the previous
+// tab's content while the new content is fetched (and nothing lingers when the new
+// tab has no selection).
+function clearSource() {
+  if (!sourceOpen) return;
+  $('source-title').textContent = 'Source';
+  updateSource._text = '';
+  if (monacoReady && monacoEditor && window.monaco) {
+    const old = monacoEditor.getModel();
+    monacoEditor.setModel(window.monaco.editor.createModel('', 'json'));
+    if (old) old.dispose();
+  } else {
+    const fb = $('source-fallback'); if (fb) fb.textContent = '';
+  }
+}
 function openSource() {
   sourceOpen = true;
   $('source-panel').classList.remove('hidden');
