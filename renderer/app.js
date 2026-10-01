@@ -4450,6 +4450,8 @@ $('url-input').addEventListener('input', () => {
 });
 $('url-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); sendRequest(); } });
 $('req-send').addEventListener('click', sendRequest);
+// Clear every field back to a fresh, empty request (no prefill = defaults).
+$('req-clear').addEventListener('click', () => showUrlModal());
 // Paste a cURL command into the URL box → auto-fill the whole request (Postman-style).
 $('url-input').addEventListener('paste', (e) => {
   const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
