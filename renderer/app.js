@@ -2690,7 +2690,11 @@ function renderTable() {
   const cols = visCols(t);
   const total = tableRows(t);
   const scrollTop = tableScroll.scrollTop;
-  const h = tableScroll.clientHeight;
+  // The sticky column header sits inside the scroll area, so rows only fill the
+  // height below it — use that for all row-fitting math, or the last row ends up
+  // pushed below the fold (behind the status bar).
+  const headH = $('table-head').offsetHeight || 0;
+  const h = Math.max(1, tableScroll.clientHeight - headH);
   const sc = tableScaled(total, h);
   tableSpacer.style.height = (sc ? sc.spacerH : total * ROW_H) + 'px';
   // The sticky header lives inside the scroll container, so the browser's real max
@@ -2876,7 +2880,7 @@ document.addEventListener('keydown', (e) => {
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
   const totalR = tableRows(t);
-  const vh = tableScroll.clientHeight;
+  const vh = Math.max(1, tableScroll.clientHeight - ($('table-head').offsetHeight || 0));
   const sc = tableScaled(totalR, vh);
   const visN = Math.max(1, Math.floor(vh / ROW_H));
   const cur0 = sc
