@@ -822,9 +822,11 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 
 /* ---------- Smart URL / request builder ---------- */
 .req-modal {
-  width: min(960px, 96vw); height: min(86vh, 840px);
+  width: min(1280px, 96vw); height: min(86vh, 840px);
   padding: 18px 20px 16px; gap: 12px;
 }
+/* Response popup: wider than a standard dialog so long URLs/headers read well. */
+.modal.resp-modal { width: min(1280px, 95vw); }
 .req-titlebar { display: flex; align-items: center; justify-content: space-between; }
 .req-titlebar .modal-title { font-size: 15px; }
 .req-titlebar .link-btn { font-size: 15px; color: var(--fg-dim); }
@@ -884,6 +886,19 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 .req-status.pending { color: var(--fg-dim); }
 .req-status.err { color: #e5534b; }
 .req-status .link-btn { margin-left: 2px; }
+/* Response info panel */
+.resp-line, .resp-meta, .resp-url, .resp-headers { user-select: text; -webkit-user-select: text; cursor: text; }
+.resp-line { font-weight: 700; font-size: 15px; }
+.resp-line.ok { color: #2e9e5b; }
+.resp-line.err { color: #e5534b; }
+.resp-meta { color: var(--fg-dim); font-size: 12px; margin-top: 2px; }
+.resp-url { font-family: var(--mono); font-size: 12px; color: var(--fg); margin: 4px 0 10px; word-break: break-all; }
+.resp-headers { max-height: 55vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 12px; }
+.resp-hrow { display: grid; grid-template-columns: minmax(180px, 300px) 1fr; border-bottom: 1px solid var(--border); }
+.resp-hrow:last-child { border-bottom: none; }
+.resp-hrow:nth-child(even) { background: var(--bg3); }
+.resp-hkey { color: var(--accent); padding: 6px 14px 6px 10px; border-right: 1px solid var(--border); word-break: break-word; }
+.resp-hval { color: var(--fg); padding: 6px 10px 6px 14px; word-break: break-word; }
 .req-method {
   background: var(--bg3); color: var(--accent); border: 1px solid var(--border);
   border-radius: 8px; padding: 0 12px; font-size: 13px; font-weight: 800; min-width: 100px; letter-spacing: .3px;
