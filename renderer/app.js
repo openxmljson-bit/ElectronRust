@@ -2351,6 +2351,7 @@ function visCols(t) {
 
 function buildTableHead(t) {
   ensureColState(t);
+  tableHeadH = 0; // header is being rebuilt; recompute its height lazily next render
   const head = $('table-head');
   head.textContent = '';
   const iw = idxWidth(t);
@@ -2494,7 +2495,7 @@ async function fetchTablePage(t, page) {
         cells: cols.map((c, ci) => ({ name: c.name, value: r[ci] })),
       }));
       t.tablePages.set(page, rows);
-      if (t === cur && t.view === 'table') renderTable();
+      if (t === cur && t.view === 'table') scheduleTableRender();
       return;
     }
     const q = { op: 'table', node: 1, offset: page * 100, limit: 100 };
@@ -2506,9 +2507,9 @@ async function fetchTablePage(t, page) {
     // Filtered/full row count from the engine drives the virtual scroll height.
     if (res.total != null && res.total !== t.tableViewTotal) {
       t.tableViewTotal = res.total;
-      if (t === cur && t.view === 'table') { renderTable(); return; }
+      if (t === cur && t.view === 'table') { scheduleTableRender(); return; }
     }
-    if (t === cur && t.view === 'table') renderTable();
+    if (t === cur && t.view === 'table') scheduleTableRender();
   } catch {} finally {
     t.tableInflight.delete(page);
   }
@@ -2671,6 +2672,13 @@ function isHttpUrl(v) {
 // position → row range by ratio (scaled virtual scrolling), so every row is
 // reachable. Small tables keep exact 1:1 pixel scrolling.
 const TABLE_MAX_SPACER = 16_000_000;
+// The sticky header's height is constant for a given table; cache it so we don't
+// read offsetHeight (a forced layout/reflow) on every scroll frame.
+let tableHeadH = 0;
+function headHeight() {
+  if (!tableHeadH) tableHeadH = $('table-head').offsetHeight || 0;
+  return tableHeadH;
+}
 function tableScaled(total, h) {
   if (total * ROW_H <= TABLE_MAX_SPACER) return null;
   return {
@@ -2693,9 +2701,8 @@ function renderTable() {
   const scrollTop = tableScroll.scrollTop;
   // The sticky column header sits inside the scroll area, so rows only fill the
   // height below it — use that for all row-fitting math, or the last row ends up
-  // pushed below the fold (behind the status bar).
-  const headH = $('table-head').offsetHeight || 0;
-  const h = Math.max(1, tableScroll.clientHeight - headH);
+  // pushed below the fold (behind the status bar). Cached to avoid a reflow per scroll.
+  const h = Math.max(1, tableScroll.clientHeight - headHeight());
   const sc = tableScaled(total, h);
   tableSpacer.style.height = (sc ? sc.spacerH : total * ROW_H) + 'px';
   // The sticky header lives inside the scroll container, so the browser's real max
@@ -2705,12 +2712,23 @@ function renderTable() {
   const anchor = sc
     ? Math.min(sc.maxRowStart, Math.round(Math.min(1, Math.max(0, scrollTop / sc.maxScroll)) * sc.maxRowStart))
     : Math.floor(scrollTop / ROW_H);
-  const first = Math.max(0, anchor - 5);
-  const last = Math.min(total, anchor + Math.ceil(h / ROW_H) + 6);
+  // Render a generous buffer of rows above and below the viewport so fast scrolling
+  // never reveals un-rendered whitespace at the leading edge before the next frame.
+  const OVERSCAN = 24;
+  const first = Math.max(0, anchor - OVERSCAN);
+  const last = Math.min(total, anchor + Math.ceil(h / ROW_H) + OVERSCAN);
   tableRowsEl.textContent = '';
   const frag = document.createDocumentFragment();
   const needed = new Set();
   for (let i = first; i < last; i++) needed.add(Math.floor(i / 100));
+  // Prefetch a generous window of pages around the viewport so continuous scrolling
+  // lands on already-loaded data instead of empty row shells that fill a moment
+  // later. (fetchTablePage de-dupes cached/in-flight pages, so this is bounded.)
+  const pMin = Math.floor(first / 100), pMax = Math.floor(Math.max(first, last - 1) / 100);
+  const PREFETCH_PAGES = 8; // ~800 rows of buffer on each side
+  for (let p = pMin - PREFETCH_PAGES; p <= pMax + PREFETCH_PAGES; p++) {
+    if (p >= 0 && p * 100 < total) needed.add(p);
+  }
   for (const p of needed) fetchTablePage(t, p);
   const sel = selRect(t);
   const iw = idxWidth(t);
@@ -2732,8 +2750,7 @@ function renderTable() {
     if (rowInSet || (sel && i >= sel.r0 && i <= sel.r1)) idxCell.classList.add('row-sel'); // whole-row selection cue
     idxCell.style.width = iw + 'px';
     idxCell.textContent = fmtInt(i);
-    idxCell.addEventListener('mousedown', (e) => startRowSelect(e, t, i));
-    idxCell.addEventListener('mouseenter', (e) => extendRowSelect(e, t, i));
+    idxCell.dataset.r = i; idxCell.dataset.idx = '1'; // selection via delegation (see below)
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
     cols.forEach((c, vi) => {
@@ -2758,15 +2775,37 @@ function renderTable() {
         td.textContent = val;
       }
       if (val) td.title = val;
-      td.addEventListener('mousedown', (e) => startCellSelect(e, t, i, vi));
-      td.addEventListener('mouseenter', (e) => extendCellSelect(e, t, i, vi));
+      td.dataset.r = i; td.dataset.v = vi; // selection via delegation (see below)
       row.appendChild(td);
     });
     frag.appendChild(row);
   }
   tableRowsEl.appendChild(frag);
 }
+// Render synchronously on scroll (the browser already coalesces scroll to ~one
+// event per frame) so rows extend in the same frame the viewport moves — deferring
+// this to rAF left a frame of whitespace at the leading edge during fast scroll.
 tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
+// Row/cell selection via event delegation — one pair of listeners on the container
+// instead of two per cell, so re-rendering rows on scroll stays cheap and smooth.
+tableRowsEl.addEventListener('mousedown', (e) => {
+  const cell = e.target.closest('.td'); if (!cell || cell.dataset.r == null || !cur) return;
+  const i = +cell.dataset.r;
+  if (cell.dataset.idx) startRowSelect(e, cur, i);
+  else startCellSelect(e, cur, i, +cell.dataset.v);
+});
+tableRowsEl.addEventListener('mouseover', (e) => {
+  const cell = e.target.closest('.td'); if (!cell || cell.dataset.r == null || !cur) return;
+  const i = +cell.dataset.r;
+  if (cell.dataset.idx) extendRowSelect(e, cur, i);
+  else extendCellSelect(e, cur, i, +cell.dataset.v);
+});
+// Page loads that arrive async are coalesced to one render per frame.
+let tableRenderRaf = 0;
+function scheduleTableRender() {
+  if (tableRenderRaf) return;
+  tableRenderRaf = requestAnimationFrame(() => { tableRenderRaf = 0; renderTable(); });
+}
 
 // ---------- cell selection + copy block ----------
 let cellDragging = false;
@@ -2881,7 +2920,7 @@ document.addEventListener('keydown', (e) => {
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
   const totalR = tableRows(t);
-  const vh = Math.max(1, tableScroll.clientHeight - ($('table-head').offsetHeight || 0));
+  const vh = Math.max(1, tableScroll.clientHeight - headHeight());
   const sc = tableScaled(totalR, vh);
   const visN = Math.max(1, Math.floor(vh / ROW_H));
   const cur0 = sc
