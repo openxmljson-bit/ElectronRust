@@ -2742,6 +2742,7 @@ function renderTable() {
     idxCell.textContent = fmtInt(i);
     idxCell.addEventListener('mousedown', (e) => startRowSelect(e, t, i));
     idxCell.addEventListener('mouseenter', (e) => extendRowSelect(e, t, i));
+    idxCell.addEventListener('contextmenu', (e) => showRowMenu(e, t, i));
     row.appendChild(idxCell);
     const cells = rowData ? rowData.cells : [];
     cols.forEach((c, vi) => {
@@ -2768,6 +2769,7 @@ function renderTable() {
       if (val) td.title = val;
       td.addEventListener('mousedown', (e) => startCellSelect(e, t, i, vi));
       td.addEventListener('mouseenter', (e) => extendCellSelect(e, t, i, vi));
+      td.addEventListener('contextmenu', (e) => showCellMenu(e, t, i, vi));
       row.appendChild(td);
     });
     frag.appendChild(row);
@@ -2778,6 +2780,44 @@ function renderTable() {
 tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
 
 // ---------- cell selection + copy block ----------
+// Right-click menu on a cell. If the cell is outside the current selection it
+// becomes a single-cell selection first, so Copy always copies what was clicked.
+// Copy routes through copyTableSelection, which writes the clipboard reliably.
+function showCellMenu(e, t, row, vis) {
+  e.preventDefault();
+  if (!t || t.view !== 'table' || t.plain) return;
+  const cols = visCols(t);
+  const inSel = (() => {
+    if (t.tableColSet && t.tableColSet.size) return t.tableColSet.has(cols[vis]);
+    if (t.tableRowSet && t.tableRowSet.size) return t.tableRowSet.has(row);
+    const s = selRect(t);
+    return !!(s && row >= s.r0 && row <= s.r1 && vis >= s.v0 && vis <= s.v1);
+  })();
+  if (!inSel) {
+    t.tableRowSet = null; t.tableColSet = null;
+    t.tableSel = { aRow: row, aVis: vis, fRow: row, fVis: vis };
+    renderTable();
+  }
+  showContextMenu(e.clientX, e.clientY, [
+    { label: 'Copy', action: () => copyTableSelection(t) },
+    { sep: true },
+    { label: 'Copy Row', action: () => { t.tableSel = null; t.tableColSet = null; t.tableRowSet = new Set([row]); renderTable(); copyTableSelection(t); } },
+    { label: 'Copy Column', action: () => { selectColumn(t, cols[vis]); copyTableSelection(t); } },
+  ]);
+}
+
+// Right-click menu on the row-number gutter: selects the whole row, then copy.
+function showRowMenu(e, t, row) {
+  e.preventDefault();
+  if (!t || t.view !== 'table' || t.plain) return;
+  if (!(t.tableRowSet && t.tableRowSet.has(row))) {
+    t.tableSel = null; t.tableColSet = null; t.tableRowSet = new Set([row]); renderTable();
+  }
+  showContextMenu(e.clientX, e.clientY, [
+    { label: 'Copy Row', action: () => copyTableSelection(t) },
+  ]);
+}
+
 let cellDragging = false;
 function startCellSelect(e, t, row, vis) {
   if (e.button !== 0) return;
