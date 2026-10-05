@@ -16,6 +16,8 @@
   --elem: #6bb3f0;
   --attr: #d7ba7d;
   --sel: #2b4a75;
+  --cell-sel: #f4c430;     /* golden yellow — selected-cell highlight */
+  --cell-sel-fg: #201a10;  /* dark text for readability on the highlight */
   --row-h: 26px;
   --mono: "SF Mono", Menlo, Consolas, "Courier New", monospace;
 }
@@ -38,6 +40,8 @@ body.light {
   --elem: #0b6fc2;
   --attr: #955800;
   --sel: #cfe3ff;
+  --cell-sel: #f5c518;
+  --cell-sel-fg: #1a1403;
 }
 body.light .tabbar { background: #e4e6ea; }
 body.light .btn-primary { color: #fff; }
@@ -756,8 +760,11 @@ body.light .narik-brand {
 .td.pinned { position: sticky; z-index: 1; background: var(--bg); box-shadow: 1px 0 0 var(--border); }
 .table-row.zebra .td.pinned { background: var(--bg2); }
 .th.drop-target { box-shadow: inset 2px 0 0 var(--accent); }
-/* cell selection */
-.td.cell-sel { background: var(--sel); }
+/* cell selection — golden-yellow with dark text so the cell content stays
+   clearly readable against the highlight (beats pinned + table-theme backgrounds). */
+.td.cell-sel,
+.td.pinned.cell-sel { background: var(--cell-sel); color: var(--cell-sel-fg); }
+.td.cell-sel .cell-link { color: #1a3b8a; }
 /* Row-number gutter is a clickable row selector. */
 .td.idx { cursor: pointer; user-select: none; }
 .td.idx:hover { color: var(--fg); }
@@ -804,6 +811,11 @@ body[class*="tbl-"] .table-row .td.idx.row-sel,
 body[class*="tbl-"] .table-row.zebra .td.idx.row-sel { background: var(--sel); color: var(--fg); font-weight: 600; }
 /* Selected column header (⌘/Ctrl-click) must beat the themed header background. */
 body[class*="tbl-"] .th.col-sel { background: var(--sel); color: var(--fg); }
+/* Selected cell must beat the themed pinned/gutter backgrounds. */
+body[class*="tbl-"] .td.cell-sel,
+body[class*="tbl-"] .table-row.zebra .td.cell-sel,
+body[class*="tbl-"] .td.pinned.cell-sel,
+body[class*="tbl-"] .table-row.zebra .td.pinned.cell-sel { background: var(--cell-sel); color: var(--cell-sel-fg); }
 body[class*="tbl-"] .th.sorted,
 body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 
