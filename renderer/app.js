@@ -3,6 +3,21 @@
 
 const PAGE = 200;
 const ROW_H = 26;
+// Browsers clamp an element's height to ~2^24 (16,777,216) px, so a single 1:1
+// virtual-scroll spacer can only address ~645K rows. To reach every row of a
+// huge table we split it into pages whose size stays safely under that cap;
+// each page then scrolls with the exact smooth 1:1 feel.
+const PAGE_ROWS = 500_000;
+// 0-based range of rows shown on the current page of table t (given its total).
+function tablePageInfo(t, total) {
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_ROWS));
+  let idx = t.pageIdx || 0;
+  if (idx < 0) idx = 0; else if (idx >= pageCount) idx = pageCount - 1;
+  t.pageIdx = idx;
+  const start = idx * PAGE_ROWS;
+  const rows = Math.min(PAGE_ROWS, total - start);
+  return { pageCount, idx, start, rows };
+}
 const MAX_TABS = 20;
 const K = { OBJ: 0, ARR: 1, STR: 2, NUM: 3, BOOL: 4, NULL: 5, ELEM: 6, ATTR: 7, TEXT: 8 };
 
@@ -256,6 +271,7 @@ function renderTabs() {
 // ---------- screen switching ----------
 function renderScreen() {
   const t = cur;
+  $('table-pager').classList.add('hidden'); // table paths re-show it via updatePager()
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
@@ -1175,6 +1191,7 @@ async function openDuck(t, path) {
   t.tableInflight = new Set();
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
   t.tableSel = null; t.tableRowSet = null; t.tableColSet = null; t.tableSort = null; t.tableFilters = [];
+  t.pageIdx = 0;
   t.view = 'table';
   t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
   t.phase = 'ready';
@@ -2312,6 +2329,7 @@ function setView(name) {
   if (table) { closeSource(); buildTableHead(t); renderTable(); renderColumnsPanel(t); }
   else { $('cols-panel').classList.remove('open'); $('btn-cols').classList.remove('active-tool'); }
   updateTableToolbar(t);
+  updatePager();
   updateTopBtn();
 }
 $('btn-view-tree').addEventListener('click', () => setView('tree'));
@@ -2544,6 +2562,7 @@ async function applyTableViewDuck(t) {
   t.tableSel = null;
   t.tableRowSet = null; // row indices shift when the view changes
   t.tableColSet = null;
+  t.pageIdx = 0; // filter/sort/search changes which rows exist — back to page 1
   tableScroll.scrollTop = 0;
   try {
     const vi = await window.oxj.duckInvoke('buildView', { datasetId: t.duck.datasetId, view: t.duck.view, jobId: duckJob() });
@@ -2563,6 +2582,7 @@ function applyTableView(t) {
   t.tableInflight = new Set();
   t.tableViewTotal = null;
   t.tableSel = null;
+  t.pageIdx = 0;
   tableScroll.scrollTop = 0;
   buildTableHead(t);
   renderTable();
@@ -2665,17 +2685,37 @@ function isHttpUrl(v) {
   try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
 }
 
+// Switch the table to a given 0-based page (clamped) and scroll to its top.
+// This is the ONLY thing that changes the page, so ordinary scrolling within a
+// page is never disturbed.
+function setPage(t, idx) {
+  if (!t || t.view !== 'table') return;
+  const total = tableRows(t);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_ROWS));
+  idx = Math.max(0, Math.min(pageCount - 1, idx));
+  if (idx === (t.pageIdx || 0)) { tableScroll.scrollTop = 0; return; }
+  t.pageIdx = idx;
+  t.tableSel = null;
+  tableScroll.scrollTop = 0;
+  renderTable();
+  updateTableToolbar(t);
+}
+
 function renderTable() {
   const t = cur;
   if (!t || t.phase !== 'ready' || t.plain) return;
   ensureColState(t);
   const cols = visCols(t);
   const total = tableRows(t);
-  tableSpacer.style.height = total * ROW_H + 'px';
+  // Render only the current page. For tables that fit in one page (the common
+  // case) start=0 and pgRows=total, so this is identical to plain 1:1 scrolling.
+  const pg = tablePageInfo(t, total);
+  const pgStart = pg.start, pgRows = pg.rows;
+  tableSpacer.style.height = pgRows * ROW_H + 'px';
   const scrollTop = tableScroll.scrollTop;
   const h = tableScroll.clientHeight;
-  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 5);
-  const last = Math.min(total, Math.ceil((scrollTop + h) / ROW_H) + 5);
+  const first = pgStart + Math.max(0, Math.floor(scrollTop / ROW_H) - 5);
+  const last = pgStart + Math.min(pgRows, Math.ceil((scrollTop + h) / ROW_H) + 5);
   tableRowsEl.textContent = '';
   const frag = document.createDocumentFragment();
   const needed = new Set();
@@ -2692,7 +2732,7 @@ function renderTable() {
     const rowData = page ? page[i % 100] : null;
     const row = document.createElement('div');
     row.className = 'table-row' + (i % 2 ? ' zebra' : '');
-    row.style.top = i * ROW_H + 'px';
+    row.style.top = (i - pgStart) * ROW_H + 'px';
     const rowInSet = !!(t.tableRowSet && t.tableRowSet.has(i));
     const idxCell = document.createElement('div');
     idxCell.className = 'td idx';
@@ -2732,6 +2772,7 @@ function renderTable() {
     frag.appendChild(row);
   }
   tableRowsEl.appendChild(frag);
+  updatePager();
 }
 tableScroll.addEventListener('scroll', () => { renderTable(); updateTopBtn(); });
 
@@ -2847,7 +2888,10 @@ document.addEventListener('keydown', (e) => {
   const nv = Math.max(0, Math.min(cols.length - 1, s.fVis + dv));
   s.fRow = nr; s.fVis = nv;
   if (!e.shiftKey) { s.aRow = nr; s.aVis = nv; }
-  const y = nr * ROW_H;
+  const pgStart = (t.pageIdx || 0) * PAGE_ROWS;
+  // If the cursor steps off the current page, cross to the neighbouring page.
+  if (nr < pgStart || nr >= pgStart + PAGE_ROWS) { goToRowGlobal(t, nr); return; }
+  const y = (nr - pgStart) * ROW_H;
   if (y < tableScroll.scrollTop) tableScroll.scrollTop = y;
   else if (y > tableScroll.scrollTop + tableScroll.clientHeight - ROW_H) tableScroll.scrollTop = y - tableScroll.clientHeight + ROW_H;
   renderTable();
@@ -3020,6 +3064,64 @@ function updateTableToolbar(t) {
   if ((view.filterActive || (isDuck(t) && t.duck.searchQuery) || narrowed) && t.tableViewTotal != null) {
     info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';
   } else info.textContent = '';
+}
+
+// Pager visibility/label. Independent of the CSV-only table-tools gate so it
+// works for any large table view (CSV, JSONL, JSON-as-table). Hidden unless the
+// current view has more rows than a single page can hold.
+function updatePager() {
+  const pager = $('table-pager');
+  const t = cur;
+  if (!t || t.phase !== 'ready' || t.plain || t.view !== 'table') { pager.classList.add('hidden'); return; }
+  const pg = tablePageInfo(t, tableRows(t));
+  if (pg.pageCount <= 1) { pager.classList.add('hidden'); return; }
+  pager.classList.remove('hidden');
+  $('btn-page-prev').disabled = pg.idx === 0;
+  $('btn-page-next').disabled = pg.idx === pg.pageCount - 1;
+  const lbl = $('btn-page-label');
+  lbl.textContent = 'Page ' + fmtInt(pg.idx + 1) + ' of ' + fmtInt(pg.pageCount);
+  lbl.title = 'Rows ' + fmtInt(pg.start + 1) + '–' + fmtInt(pg.start + pg.rows) + ' · click to jump to a page or row';
+}
+
+// Pager controls. Each only ever calls setPage / goToRowGlobal — never touched
+// by ordinary scrolling, so the in-page scroll feel is untouched.
+$('btn-page-prev').addEventListener('click', () => { if (cur) setPage(cur, (cur.pageIdx || 0) - 1); });
+$('btn-page-next').addEventListener('click', () => { if (cur) setPage(cur, (cur.pageIdx || 0) + 1); });
+$('btn-page-label').addEventListener('click', async () => {
+  const t = cur;
+  if (!t || t.view !== 'table') return;
+  const total = tableRows(t);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_ROWS));
+  const ans = await askText('Jump to row (1–' + fmtInt(total) + ') or page p1–p' + fmtInt(pageCount),
+    'e.g. 1000000  or  p12');
+  if (ans == null) return;
+  const s = ans.trim().toLowerCase();
+  const pm = s.match(/^p\s*([0-9,]+)$/); // "p12" → page 12
+  if (pm) {
+    const p = parseInt(pm[1].replace(/,/g, ''), 10);
+    if (!Number.isFinite(p) || p < 1 || p > pageCount) { toast('Enter a page between 1 and ' + fmtInt(pageCount) + '.'); return; }
+    setPage(t, p - 1);
+    return;
+  }
+  const n = parseInt(s.replace(/[^0-9]/g, ''), 10); // plain number → row
+  if (!Number.isFinite(n) || n < 1 || n > total) { toast('Enter a row between 1 and ' + fmtInt(total) + '.'); return; }
+  goToRowGlobal(t, n - 1);
+});
+
+// Jump to an absolute 0-based row: switch to its page, scroll to it, select it.
+function goToRowGlobal(t, r) {
+  const total = tableRows(t);
+  if (!total) return;
+  r = Math.max(0, Math.min(total - 1, Math.floor(r)));
+  const page = Math.floor(r / PAGE_ROWS);
+  t.pageIdx = page;
+  const vis = t.tableSel ? t.tableSel.fVis : 0;
+  t.tableSel = { aRow: r, aVis: vis, fRow: r, fVis: vis };
+  renderTable();
+  updateTableToolbar(t);
+  tableScroll.scrollTop = (r - page * PAGE_ROWS) * ROW_H;
+  renderTable();
+  updateTopBtn();
 }
 
 // ---------- sort / filter dialogs ----------

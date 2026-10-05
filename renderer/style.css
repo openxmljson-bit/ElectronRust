@@ -812,6 +812,9 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 .table-tools { display: inline-flex; align-items: center; gap: 8px; }
 .table-tools .btn-tool[disabled] { opacity: .4; cursor: default; }
 .table-viewinfo { color: var(--fg-dim); font-size: 12px; }
+.table-pager { display: inline-flex; align-items: center; gap: 2px; }
+.table-pager .btn-tool { padding-left: 8px; padding-right: 8px; }
+.table-pager #btn-page-label { min-width: 104px; cursor: pointer; }
 .filter-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .filter-row { display: flex; align-items: center; gap: 6px; }
 .filter-row select, .filter-row input { background: var(--bg3); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
