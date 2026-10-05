@@ -272,6 +272,7 @@ function renderTabs() {
 function renderScreen() {
   const t = cur;
   $('table-pager').classList.add('hidden'); // table paths re-show it via updatePager()
+  $('status-rows').textContent = ''; // table paths refill it via updateTableToolbar()
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
@@ -3049,7 +3050,7 @@ function updateTableToolbar(t) {
   const on = t && (t.docFormat === 'csv' || t.docFormat === 'tsv') && t.view === 'table';
   $('btn-cols').classList.toggle('hidden', !on);
   $('table-tools').classList.toggle('hidden', !on);
-  if (!on) return;
+  if (!on) { $('status-rows').textContent = ''; return; }
   ensureColState(t);
   const view = {
     hiddenCount: t.colHidden.size,
@@ -3059,7 +3060,8 @@ function updateTableToolbar(t) {
   };
   const enabled = isDuck(t) ? (view.rowCount > 0 && view.visibleCount > 0) : tableExportEnabled(view);
   $('btn-tbl-export').disabled = !enabled;
-  const info = $('table-viewinfo');
+  // The current view's row count lives in the status bar (not the toolbar).
+  const info = $('status-rows');
   const narrowed = t.tableViewTotal != null && t.tableTotal != null && t.tableViewTotal !== t.tableTotal;
   if ((view.filterActive || (isDuck(t) && t.duck.searchQuery) || narrowed) && t.tableViewTotal != null) {
     info.textContent = fmtInt(t.tableViewTotal) + ' of ' + fmtInt(t.tableTotal) + ' rows';

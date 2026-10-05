@@ -811,7 +811,7 @@ body[class*="tbl-"] .sort-arrow { color: var(--ta); }
 /* Table action buttons now live inline in the main toolbar. */
 .table-tools { display: inline-flex; align-items: center; gap: 8px; }
 .table-tools .btn-tool[disabled] { opacity: .4; cursor: default; }
-.table-viewinfo { color: var(--fg-dim); font-size: 12px; }
+.status-rows { color: var(--fg); white-space: nowrap; }
 .table-pager { display: inline-flex; align-items: center; gap: 2px; }
 .table-pager .btn-tool { padding-left: 8px; padding-right: 8px; }
 .table-pager #btn-page-label { min-width: 104px; cursor: pointer; }
