@@ -5014,6 +5014,14 @@ function closeCtxMenu() {
   if (ctxEl) { ctxEl.remove(); ctxEl = null; }
 }
 document.addEventListener('click', closeCtxMenu);
+// Dismiss on any mousedown outside the menu. Grid cells call preventDefault on
+// mousedown, which suppresses the 'click' event, so a click-only closer never
+// fires when dismissing by clicking the table — mousedown always fires.
+document.addEventListener('mousedown', (ev) => {
+  if (ctxEl && !ctxEl.contains(ev.target)) closeCtxMenu();
+});
+// Close when the window loses focus (e.g. clicking another app or window chrome).
+window.addEventListener('blur', closeCtxMenu);
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeCtxMenu(); });
 
 function buildMenuEl(items) {
