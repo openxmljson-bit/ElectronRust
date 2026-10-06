@@ -39,7 +39,7 @@
         <div id="formats-wrap" class="stats formats-card hidden">
           <div class="stats-head">Supported Files</div>
           <div class="format-chips">
-            <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">JSONL</span><span class="chip">XML</span><span class="chip">YAML</span><span class="chip">YML</span><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">TAB</span><span class="chip">PSV</span><span class="chip">PARQUET</span><span class="chip">TXT</span><span class="chip">DAT</span><span class="chip">MD</span><span class="chip">LOG</span><span class="chip">JS</span><span class="chip">MJS</span><span class="chip">HTML</span><span class="chip">HTM</span><span class="chip">PY</span>
+            <span class="chip">JSON</span><span class="chip">NDJSON</span><span class="chip">JSONL</span><span class="chip">XML</span><span class="chip">YAML</span><span class="chip">YML</span><span class="chip">CSV</span><span class="chip">TSV</span><span class="chip">TAB</span><span class="chip">PSV</span><span class="chip">PARQUET</span><span class="chip">DUCKDB</span><span class="chip">TXT</span><span class="chip">DAT</span><span class="chip">MD</span><span class="chip">LOG</span><span class="chip">JS</span><span class="chip">MJS</span><span class="chip">HTML</span><span class="chip">HTM</span><span class="chip">PY</span>
           </div>
         </div>
       </div>
@@ -156,6 +156,14 @@
       </div>
 
       <div class="main-area">
+        <div id="duckdb-sidebar" class="duckdb-sidebar hidden">
+          <div class="dbsb-head">
+            <span class="dbsb-dbicon">🗄</span>
+            <span id="dbsb-name" class="dbsb-name" title=""></span>
+          </div>
+          <input id="dbsb-search" type="search" class="dbsb-search" placeholder="Filter tables…" spellcheck="false" />
+          <div id="dbsb-list" class="dbsb-list"></div>
+        </div>
         <div id="tree-wrap" class="tree-wrap">
           <button id="btn-top" class="btn-top hidden" title="Back to top">▲ Top</button>
           <div id="tree-scroll" class="tree-scroll">

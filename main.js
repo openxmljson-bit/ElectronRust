@@ -1456,7 +1456,7 @@ function authHeaders(auth) {
 // ---------------- windows & menu ----------------
 // ---------------- OS file associations (double-click / "Open With") ----------------
 // Extensions we register as openable (mirror package.json build.fileAssociations).
-const OPENABLE_EXT = new Set(['json', 'ndjson', 'jsonl', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'psv', 'tab', 'parquet']);
+const OPENABLE_EXT = new Set(['json', 'ndjson', 'jsonl', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'psv', 'tab', 'parquet', 'duckdb', 'ddb']);
 let appIsReady = false;
 const pendingOpen = [];
 
@@ -1813,6 +1813,8 @@ app.whenReady().then(() => {
       properties: ['openFile'],
       filters: [
         { name: 'All files', extensions: ['*'] },
+        { name: 'Tabular & data', extensions: ['csv', 'tsv', 'psv', 'tab', 'txt', 'parquet', 'json', 'ndjson', 'jsonl', 'duckdb', 'ddb'] },
+        { name: 'DuckDB database', extensions: ['duckdb', 'ddb'] },
       ],
     });
     if (res.canceled || !res.filePaths.length) return null;

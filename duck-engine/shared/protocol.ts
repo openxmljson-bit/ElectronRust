@@ -18,6 +18,7 @@ export type SourceFormat =
   | 'parquet'
   | 'json'
   | 'ndjson'
+  | 'duckdb'
   | 'unsupported'
   | 'unknown';
 
@@ -29,12 +30,26 @@ export const FORMAT_LABEL: Record<SourceFormat, string> = {
   psv: 'Pipe-delimited',
   delimited: 'Delimited text',
   parquet: 'Parquet',
+  duckdb: 'DuckDB database',
   unsupported: 'Unsupported format',
   unknown: 'Unknown',
 };
 
 /** Extensions the open dialog and file associations offer. */
-export const SUPPORTED_EXTENSIONS = ['csv', 'tsv', 'psv', 'txt', 'tab', 'dat', 'parquet'] as const;
+export const SUPPORTED_EXTENSIONS = ['csv', 'tsv', 'psv', 'txt', 'tab', 'dat', 'parquet', 'duckdb', 'ddb'] as const;
+
+/** A table or view inside a DuckDB database file. */
+export interface DuckdbObject {
+  schema: string;
+  name: string;
+  type: 'table' | 'view';
+  /** Estimated row count (tables only); null for views. */
+  rowCount: number | null;
+}
+
+export interface ListTablesResult {
+  tables: DuckdbObject[];
+}
 
 /** Everything sniffing could work out about a file before we commit to reading it. */
 export interface DetectResult {
@@ -102,6 +117,8 @@ export interface OpenOptions {
   forceReingest?: boolean;
   /** Explicit column types, name -> DuckDB type. Overrides inference. */
   columnTypes?: Record<string, string> | null;
+  /** When opening a DuckDB database file, which table/view to ingest. */
+  duckdbTable?: { schema: string; name: string } | null;
 }
 
 export interface ColumnInfo {
@@ -123,6 +140,7 @@ export type IngestStrategy =
   | 'csv-lenient'
   | 'csv-all-varchar'
   | 'json-auto'
+  | 'duckdb-table'
   | 'raw-lines';
 
 export interface DatasetManifest {

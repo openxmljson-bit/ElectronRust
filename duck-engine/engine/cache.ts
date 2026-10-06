@@ -95,6 +95,11 @@ export class DatasetCache {
       sampleSize: options.sampleSize ?? null,
       flatten: !!options.flatten,
       columnTypes: options.columnTypes ?? null,
+      // Each table/view in a DuckDB database is its own dataset — without this,
+      // every table of one file would collide on the first one's cached Parquet.
+      duckdbTable: options.duckdbTable
+        ? `${options.duckdbTable.schema || 'main'}.${options.duckdbTable.name}`
+        : null,
     });
     return createHash('sha1')
       .update(path)

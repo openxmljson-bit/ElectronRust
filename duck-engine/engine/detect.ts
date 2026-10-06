@@ -394,6 +394,36 @@ export async function detectFile(path: string): Promise<DetectResult> {
   const rawHead = await readHead(path, 4096);
   const compression = detectCompression(rawHead);
 
+  // DuckDB database files carry the magic bytes "DUCK" at offset 8 of their
+  // 4096-byte main header (after an 8-byte checksum). Recognise by that magic,
+  // or by the .duckdb/.ddb extension, so they open as a database rather than
+  // being sniffed as text. ATTACH later validates and reports version issues.
+  const extLower = extname(path).toLowerCase();
+  const duckMagic =
+    rawHead.length >= 12 && rawHead.subarray(8, 12).toString('latin1') === 'DUCK';
+  if (duckMagic || extLower === '.duckdb' || extLower === '.ddb') {
+    return {
+      path,
+      name: basename(path),
+      sizeBytes: st.size,
+      mtimeMs: st.mtimeMs,
+      format: 'duckdb',
+      compression: 'none',
+      encoding: 'binary',
+      delimiter: null,
+      quote: null,
+      escape: null,
+      hasHeader: null,
+      confidence: 1,
+      skipRows: 0,
+      delimiterCandidates: [],
+      suggestQuote: null,
+      sampleText: '(DuckDB database — contains one or more tables)',
+      warnings: [],
+      cached: false,
+    };
+  }
+
   const warnings: string[] = [];
   let head: Buffer;
   if (compression === 'gzip') {

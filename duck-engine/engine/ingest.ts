@@ -8,7 +8,8 @@
  */
 
 import { createReadStream, createWriteStream } from 'node:fs';
-import { rename, rm, stat } from 'node:fs/promises';
+import { copyFile, rename, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
@@ -16,7 +17,9 @@ import { createGunzip } from 'node:zlib';
 import type {
   ColumnInfo,
   DatasetManifest,
+  DuckdbObject,
   IngestStrategy,
+  ListTablesResult,
   OpenOptions,
   PreviewResult,
   SourceFormat,
@@ -840,6 +843,135 @@ export interface IngestRequest {
   onProgress: ProgressSink;
 }
 
+/** A short, unique attach alias so concurrent opens never collide. */
+let attachSeq = 0;
+function newAttachAlias(prefix: string): string {
+  attachSeq = (attachSeq + 1) % 1_000_000;
+  return `${prefix}_${Date.now().toString(36)}_${attachSeq.toString(36)}`;
+}
+
+function isLockError(msg: string): boolean {
+  return /could not set lock|conflicting lock|being used by another|is locked/i.test(msg);
+}
+
+/**
+ * Turn an ATTACH failure into a clear, actionable message. Classifies by the
+ * message text even when the error is already an EngineError (db.exec wraps
+ * DuckDB errors), and checks the lock case first because a lock error can carry
+ * an "IO Error" prefix that the generic check would otherwise claim.
+ */
+function mapAttachError(err: unknown): EngineError {
+  const msg =
+    err instanceof EngineError
+      ? err.detail || err.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  if (isLockError(msg)) {
+    return new EngineError(
+      'parse-failed',
+      'This database is open in another program, so it is locked.',
+      'DuckDB can’t open a database another program (Tad, DBeaver, a DuckDB CLI…) holds open. Close it there and try again.',
+      msg,
+    );
+  }
+  if (/newer|incompatible|storage version|different version|version number/i.test(msg)) {
+    return new EngineError(
+      'unsupported',
+      'This DuckDB database was created by a different (likely newer) DuckDB version.',
+      'Re-save it from that DuckDB version to a compatible format, or export the tables to CSV/Parquet.',
+      msg,
+    );
+  }
+  if (/is not a valid DuckDB database|not a database|could not be opened/i.test(msg)) {
+    return new EngineError('parse-failed', 'This file is not a readable DuckDB database.', undefined, msg);
+  }
+  return new EngineError('parse-failed', 'Could not open the DuckDB database.', undefined, msg);
+}
+
+/**
+ * Attach a DuckDB file read-only. If it is locked by another program, fall back
+ * to attaching a temporary read-only snapshot copy of the main file, so the
+ * database can still be browsed. Returns the temp copy path (for cleanup) or null.
+ */
+async function attachDuckdbReadOnly(
+  db: EngineDb,
+  sourcePath: string,
+  alias: string,
+): Promise<{ tempCopy: string | null; snapshot: boolean }> {
+  try {
+    await db.exec(
+      `ATTACH ${quotePath(sourcePath)} AS ${quoteIdent(alias)} (READ_ONLY)`,
+      'attaching the database',
+    );
+    return { tempCopy: null, snapshot: false };
+  } catch (err) {
+    const msg = err instanceof EngineError ? err.detail || err.message : String((err as Error)?.message || err);
+    if (!isLockError(msg)) throw mapAttachError(err);
+    // Locked elsewhere: copy the main database file and attach the copy. The
+    // copy reflects the last checkpoint (committed data); another program's
+    // unsaved changes in its WAL are not included — fine for a read-only view.
+    const tmp = join(
+      tmpdir(),
+      `narik_duck_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}.duckdb`,
+    );
+    try {
+      await copyFile(sourcePath, tmp);
+      await db.exec(
+        `ATTACH ${quotePath(tmp)} AS ${quoteIdent(alias)} (READ_ONLY)`,
+        'attaching the database snapshot',
+      );
+      return { tempCopy: tmp, snapshot: true };
+    } catch (err2) {
+      await rm(tmp, { force: true }).catch(() => {});
+      // If the snapshot also failed, report the original lock problem.
+      throw mapAttachError(err);
+    }
+  }
+}
+
+/**
+ * Attach a DuckDB database read-only and list its base tables and views across
+ * all user schemas (system catalogs are excluded automatically). Always detaches.
+ */
+export async function listDuckdbObjects(db: EngineDb, path: string): Promise<ListTablesResult> {
+  const st = await stat(path).catch(() => null);
+  if (!st || !st.isFile()) throw new EngineError('not-found', `File not found: ${path}`);
+  const alias = newAttachAlias('_probe');
+  const { tempCopy } = await attachDuckdbReadOnly(db, path, alias);
+  try {
+    const litAlias = quoteLit(alias);
+    const tableRows = await db.queryRows(
+      `SELECT schema_name, table_name, estimated_size FROM duckdb_tables() ` +
+        `WHERE database_name = ${litAlias} ORDER BY schema_name, table_name`,
+      'listing tables',
+    );
+    const viewRows = await db
+      .queryRows(
+        `SELECT schema_name, view_name FROM duckdb_views() ` +
+          `WHERE database_name = ${litAlias} AND internal = false ORDER BY schema_name, view_name`,
+        'listing views',
+      )
+      .catch(() => [] as (string | null)[][]);
+    const tables: DuckdbObject[] = [];
+    for (const r of tableRows) {
+      tables.push({
+        schema: r[0] ?? 'main',
+        name: r[1] ?? '',
+        type: 'table',
+        rowCount: r[2] != null && r[2] !== '' ? Number(r[2]) : null,
+      });
+    }
+    for (const r of viewRows) {
+      tables.push({ schema: r[0] ?? 'main', name: r[1] ?? '', type: 'view', rowCount: null });
+    }
+    return { tables };
+  } finally {
+    await db.exec(`DETACH ${quoteIdent(alias)}`, 'detaching the database').catch(() => {});
+    if (tempCopy) await rm(tempCopy, { force: true }).catch(() => {});
+  }
+}
+
 export class Ingestor {
   private readonly lineCounts = new Map<string, number>();
 
@@ -910,6 +1042,7 @@ export class Ingestor {
       unorderedFast: options.unorderedFast ?? false,
       forceReingest: options.forceReingest ?? false,
       columnTypes: options.columnTypes ?? null,
+      duckdbTable: options.duckdbTable ?? null,
     };
 
     const reusable = await this.cache.findReusable(path, st.size, st.mtimeMs, effective);
@@ -929,6 +1062,25 @@ export class Ingestor {
     const readPath = path;
 
     const started = Date.now();
+
+    // A DuckDB database file is attached read-only and the chosen table/view is
+    // copied into the cached Parquet, exactly like any other source — so all the
+    // downstream view/filter/sort/export machinery works unchanged.
+    if (format === 'duckdb') {
+      return await this.openDuckdbTable({
+        id,
+        outPath,
+        tmpOut,
+        jobId,
+        onProgress,
+        effective,
+        detected: { size: st.size, mtimeMs: st.mtimeMs, compression: detected.compression },
+        sourcePath: path,
+        warnings,
+        startedAt: started,
+      });
+    }
+
     const plans = buildPlans(readPath, format, effective, detected.delimiterCandidates ?? []);
     const attempts: { strategy: IngestStrategy; error: string }[] = [];
 
@@ -971,6 +1123,66 @@ export class Ingestor {
       }
     }
     throw new EngineError('internal', 'No ingest strategy ran.');
+  }
+
+  /**
+   * Ingest one table/view from a DuckDB database: attach it read-only, copy the
+   * chosen object into the cached Parquet via the normal runPlan path, detach.
+   */
+  private async openDuckdbTable(args: {
+    id: string;
+    outPath: string;
+    tmpOut: string;
+    jobId: string;
+    onProgress: ProgressSink;
+    effective: OpenOptions;
+    detected: { size: number; mtimeMs: number; compression: DatasetManifest['compression'] };
+    sourcePath: string;
+    warnings: string[];
+    startedAt: number;
+  }): Promise<DatasetManifest> {
+    const tbl = args.effective.duckdbTable;
+    if (!tbl || !tbl.name) {
+      throw new EngineError('invalid-request', 'No table was chosen from the DuckDB database.');
+    }
+    args.onProgress({
+      phase: 'Opening database',
+      percent: null,
+      rowsDone: null,
+      bytesDone: null,
+      bytesTotal: args.detected.size,
+    });
+    const alias = newAttachAlias('_src');
+    const { tempCopy, snapshot } = await attachDuckdbReadOnly(this.db, args.sourcePath, alias);
+    try {
+      const reader = `${quoteIdent(alias)}.${quoteIdent(tbl.schema || 'main')}.${quoteIdent(tbl.name)}`;
+      const plan: ReaderPlan = { strategy: 'duckdb-table', reader, notes: [], minColumns: 1 };
+      const warnings = [...args.warnings];
+      if (snapshot) {
+        warnings.push(
+          'The database was open in another program, so a read-only snapshot was loaded — unsaved changes there are not included.',
+        );
+      }
+      return await this.runPlan({
+        id: args.id,
+        plan,
+        outPath: args.outPath,
+        tmpOut: args.tmpOut,
+        jobId: args.jobId,
+        onProgress: args.onProgress,
+        effective: args.effective,
+        detected: args.detected,
+        sourcePath: args.sourcePath,
+        readPath: args.sourcePath,
+        format: 'duckdb',
+        warnings,
+        attempts: [],
+        startedAt: args.startedAt,
+      });
+    } finally {
+      await this.db.exec(`DETACH ${quoteIdent(alias)}`, 'detaching the database').catch(() => {});
+      if (tempCopy) await rm(tempCopy, { force: true }).catch(() => {});
+    }
   }
 
   private async runPlan(args: {
@@ -1156,7 +1368,8 @@ export class Ingestor {
     if (
       resolvedDelimiter === null &&
       plan.strategy !== 'raw-lines' &&
-      plan.strategy !== 'json-auto'
+      plan.strategy !== 'json-auto' &&
+      plan.strategy !== 'duckdb-table'
     ) {
       resolvedDelimiter = await sniffDelimiter(this.db, readPath, effective);
     }

@@ -273,6 +273,7 @@ function renderScreen() {
   const t = cur;
   $('table-pager').classList.add('hidden'); // table paths re-show it via updatePager()
   $('status-rows').textContent = ''; // table paths refill it via updateTableToolbar()
+  renderDuckdbSidebar(); // show the DuckDB table list when the current tab has one
   $('screen-welcome').classList.toggle('hidden', t.phase !== 'empty');
   $('screen-progress').classList.toggle('hidden', t.phase !== 'loading');
   $('screen-viewer').classList.toggle('hidden', t.phase !== 'ready');
@@ -1158,22 +1159,49 @@ const BLOCKED_EXTS = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb'];
 // JSONL/NDJSON are row-oriented, so they load through DuckDB as a lazily-paged
 // table (fast on multi-GB files) rather than the Rust tree engine, which indexes
 // the whole file in memory. Plain .json stays on the tree engine.
-const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet', 'ndjson', 'jsonl'];
+const DUCK_EXTS = ['csv', 'tsv', 'psv', 'parquet', 'ndjson', 'jsonl', 'duckdb', 'ddb'];
+const DUCKDB_EXTS = ['duckdb', 'ddb'];
+function isDuckdbFile(p) { return DUCKDB_EXTS.includes(String(p || '').split('.').pop().toLowerCase()); }
 // JSONL/NDJSON open as a DuckDB table by default. Below this size a "Tree View"
 // button (table view only) can open the same file in the Rust tree explorer; above
 // it the whole-file tree index would exhaust memory, so the button is hidden.
 const JSONL_TREE_MAX = 2 * 1024 * 1024 * 1024; // 2 GB
 function isJsonlFile(p) { const e = String(p || '').split('.').pop().toLowerCase(); return e === 'jsonl' || e === 'ndjson'; }
 const EMPTY_VIEW = { filters: [], combine: 'and', search: null, sort: [], select: null };
-const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet', ndjson: 'JSONL', json: 'JSON' };
+const DUCK_FORMAT_LABEL = { csv: 'CSV', tsv: 'TSV', psv: 'Pipe-delimited', delimited: 'Delimited', parquet: 'Parquet', ndjson: 'JSONL', json: 'JSON', duckdb: 'DuckDB' };
 let duckJobSeq = 1;
 const duckJob = () => 'job-' + (duckJobSeq++);
 
 // Open a delimited/tabular file through DuckDB and set the tab up as a table.
 async function openDuck(t, path) {
+  // A DuckDB database holds many tables/views: open the first and let the user
+  // switch between them from the left sidebar.
+  if (isDuckdbFile(path)) return openDuckdbFile(t, path);
+  return openDuckTable(t, path, null);
+}
+
+// Open a DuckDB database: list its tables, open the first one, and show the
+// sidebar from which any other table can be opened.
+async function openDuckdbFile(t, path) {
+  const list = await window.oxj.duckInvoke('listTables', { path });
+  const tables = (list && list.tables) || [];
+  if (!tables.length) throw new Error('No tables or views found in this DuckDB database.');
+  await openDuckTable(t, path, tables[0], tables);
+}
+
+async function openDuckTable(t, path, tableInfo, allTables) {
   const openJobId = duckJob();
   t.duckOpenJobId = openJobId; // so progress events can find this tab
-  const man = await window.oxj.duckInvoke('openDataset', { path, options: {}, jobId: openJobId });
+  const options = tableInfo ? { duckdbTable: { schema: tableInfo.schema, name: tableInfo.name } } : {};
+  if (tableInfo) t.title = tableInfo.name;
+  // Remember the source database + its table list so the sidebar can switch
+  // tables without reopening the file.
+  if (tableInfo && isDuckdbFile(path)) {
+    t.duckdbPath = path;
+    t.duckdbActive = { schema: tableInfo.schema, name: tableInfo.name };
+    if (allTables) t.duckdbTables = allTables;
+  }
+  const man = await window.oxj.duckInvoke('openDataset', { path, options, jobId: openJobId });
   if (!tabAlive(t)) return;
   const datasetId = man.id; // manifest keys the dataset by `id`
   const view = { ...EMPTY_VIEW };
@@ -1205,13 +1233,68 @@ async function openDuck(t, path) {
   // toast after the success one; deduped by the engine already.
   const warns = (Array.isArray(man.warnings) ? man.warnings : [])
     .filter(Boolean)
-    // Drop internal parsing details (e.g. how quoting was handled) — they read as
-    // alarming to users even when the load succeeded. Keep the actionable notices
-    // (rows skipped, delimiter used, etc.).
-    .filter((w) => !/ordinary text|treated as off/i.test(w));
+    // Drop internal parsing details (how quoting/the delimiter was handled) —
+    // they read as alarming noise even on a clean load. Keep the actionable
+    // notices (rows skipped, snapshot used, missing fields, nested values).
+    .filter((w) => !/ordinary text|treated as off|honouring quotes|^Read with .+ as the delimiter/i.test(w));
   if (warns.length) setTimeout(() => toast('⚠ ' + warns.join('  ·  '), true), 400);
 }
 function isDuck(t) { return t && t.engine === 'duck'; }
+
+// ---------- DuckDB database sidebar (tables of the current .duckdb) ----------
+function sameDuckTable(tab, path, tb) {
+  return !!(tab && tab.duckdbPath === path && tab.duckdbActive &&
+    tab.duckdbActive.name === tb.name &&
+    (tab.duckdbActive.schema || 'main') === (tb.schema || 'main'));
+}
+
+// Open a table chosen from the sidebar: focus its tab if already open, else a new one.
+function openDuckdbSidebarTable(path, tb, tables) {
+  const existing = tabs.find((x) => sameDuckTable(x, path, tb));
+  if (existing) { setCurrent(existing); return; }
+  const nt = newTab(true);
+  if (!nt) { toast('Tab limit reached.'); return; }
+  nt.file = path; nt.title = tb.name; nt.phase = 'loading';
+  nt.progress = { startedAt: Date.now(), lastBytes: 0, lastTime: Date.now(), speed: 0, total: 0, bytes: 0, nodes: 0, indexing: false, duck: true };
+  nt.engine = null; nt.duck = null;
+  setCurrent(nt);
+  openDuckTable(nt, path, tb, tables).catch((e) => {
+    if (!tabAlive(nt)) return;
+    nt.phase = 'empty'; nt.title = 'New Tab';
+    if (nt === cur) { renderTabs(); renderScreen(); }
+    toast('Load failed: ' + cleanErr(e));
+  });
+}
+
+// Render (or hide) the database sidebar for the current tab.
+function renderDuckdbSidebar() {
+  const sb = $('duckdb-sidebar');
+  const t = cur;
+  const tables = t && isDuck(t) && t.duckdbTables;
+  if (!tables || !tables.length) { sb.classList.add('hidden'); return; }
+  sb.classList.remove('hidden');
+  $('dbsb-name').textContent = baseName(t.duckdbPath || '');
+  $('dbsb-name').title = t.duckdbPath || '';
+  const list = $('dbsb-list');
+  list.textContent = '';
+  const q = ($('dbsb-search').value || '').trim().toLowerCase();
+  const active = t.duckdbActive || {};
+  for (const tb of tables) {
+    const label = (tb.schema && tb.schema !== 'main' ? tb.schema + '.' : '') + tb.name;
+    if (q && !label.toLowerCase().includes(q)) continue;
+    const item = document.createElement('div');
+    const isActive = tb.name === active.name && (tb.schema || 'main') === (active.schema || 'main');
+    item.className = 'dbsb-item' + (isActive ? ' active' : '');
+    const icon = document.createElement('span'); icon.className = 'dbsb-ticon'; icon.textContent = tb.type === 'view' ? '◫' : '▦';
+    const name = document.createElement('span'); name.className = 'dbsb-tname'; name.textContent = label;
+    item.append(icon, name);
+    if (tb.type === 'view') { const vt = document.createElement('span'); vt.className = 'dbsb-vtag'; vt.textContent = 'view'; item.append(vt); }
+    item.title = label + (tb.rowCount != null ? ' · ~' + fmtInt(tb.rowCount) + ' rows' : '');
+    item.addEventListener('click', () => openDuckdbSidebarTable(t.duckdbPath, tb, tables));
+    list.appendChild(item);
+  }
+}
+$('dbsb-search').addEventListener('input', renderDuckdbSidebar);
 
 async function openPath(p, tab, force, opts) {
   const fmt = opts && opts.format; // e.g. 'csv' to open a delimited .txt as a table

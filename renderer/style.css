@@ -661,6 +661,42 @@ body.light .narik-brand {
 
 .main-area { flex: 1; display: flex; min-height: 0; position: relative; }
 
+/* DuckDB database table sidebar — kept open while a .duckdb tab is active. */
+.duckdb-sidebar {
+  width: 240px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--bg2);
+  min-height: 0;
+}
+.duckdb-sidebar.hidden { display: none; }
+.dbsb-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 10px; border-bottom: 1px solid var(--border);
+}
+.dbsb-dbicon { font-size: 14px; opacity: .8; }
+.dbsb-name {
+  flex: 1; font-size: 12px; font-weight: 600; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dbsb-search {
+  margin: 8px 10px 6px; padding: 6px 9px; font-size: 12px;
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; outline: none;
+}
+.dbsb-search:focus { border-color: var(--accent); }
+.dbsb-list { flex: 1; overflow-y: auto; padding: 2px 6px 8px; }
+.dbsb-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 12.5px; color: var(--fg); user-select: none;
+}
+.dbsb-item:hover { background: var(--bg3); }
+.dbsb-item.active { background: var(--accent); color: #fff; }
+.dbsb-item .dbsb-ticon { opacity: .7; font-size: 12px; }
+.dbsb-item.active .dbsb-ticon { opacity: 1; }
+.dbsb-item .dbsb-tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbsb-item .dbsb-vtag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .3px; opacity: .6; }
+
 /* Back to top */
 .btn-top {
   position: absolute;

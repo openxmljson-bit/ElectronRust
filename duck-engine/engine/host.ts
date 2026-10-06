@@ -24,7 +24,7 @@ import { PROTOCOL_VERSION } from '../shared/protocol.js';
 import { DatasetCache, dirSize } from './cache.js';
 import { EngineDb, EngineError, mapDuckError } from './db.js';
 import { detectFile } from './detect.js';
-import { Ingestor, previewRows } from './ingest.js';
+import { Ingestor, listDuckdbObjects, previewRows } from './ingest.js';
 import { Profiler } from './profile.js';
 import { rawSlice } from './raw.js';
 import { Differ, Exporter, SqlConsole } from './tools.js';
@@ -280,6 +280,12 @@ const handlers: Record<string, Handler> = {
   async previewRows(params: { path: string; options: any; limit: number }) {
     const { db: d } = requireReady();
     return await previewRows(d, params.path, params.options ?? {}, params.limit ?? 30);
+  },
+
+  // List the tables/views inside a DuckDB database file so the UI can offer a picker.
+  async listTables(params: { path: string }) {
+    const { db: d } = requireReady();
+    return await listDuckdbObjects(d, params.path);
   },
 
   async openDataset(params: { path: string; options: any; jobId: string }) {
