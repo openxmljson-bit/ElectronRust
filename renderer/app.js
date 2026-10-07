@@ -555,6 +555,7 @@ function toast(msg, info, ms) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.add('hidden'), ms || (info ? 3500 : 6000));
 }
+function hideToast() { $('toast').classList.add('hidden'); clearTimeout(toast._t); }
 // Styled, roomy replacement for window.confirm(). Returns a Promise<boolean>.
 function confirmDialog(opts) {
   const { title = 'Are you sure?', body = '', okLabel = 'OK', cancelLabel = 'Cancel' } = opts || {};
@@ -5028,9 +5029,10 @@ async function exportDocAs(t, fmt) {
   const root = t.visible && t.visible[0];
   if (!root) { toast('Nothing to export'); return; }
   try {
-    const text = await convertNode(t, root, fmt, EXPORT_BUDGET);
+    const text = await convertNode(t, root, fmt, EXPORT_BUDGET, { n: 0, label: 'Exporting' });
     const saved = await window.oxj.saveText(exportDocName(t, ext), text);
     if (saved) toast('Saved ' + baseName(saved), true);
+    else hideToast();
   } catch (err) {
     toast('Export failed: ' + cleanErr(err).replace(/\s*\(raise the budget[^)]*\)/, ' (document too large to export whole)'));
   }
@@ -5187,7 +5189,7 @@ async function getSubtree(t, e, budget) {
   return window.oxj.query(t.id, { op: 'subtree', node: e.id, budget: budget || 100000 });
 }
 
-async function getNodeObj(t, e, budget) {
+async function getNodeObj(t, e, budget, prog) {
   if (isScalarKind(e.kind)) {
     const v = await getScalarValue(t, e);
     if (e.kind === K.NUM) { const n = Number(v); return Number.isFinite(n) ? n : v; }
@@ -5195,9 +5197,14 @@ async function getNodeObj(t, e, budget) {
     if (e.kind === K.NULL) return null;
     return v;
   }
-  const r = await getSubtree(t, e, budget);
-  if (r.language === 'json') return JSON.parse(r.text);
-  return xmlTextToObj(r.text);
+  // XML uses the engine reconstruction (XML subtrees are small). JSON is rebuilt
+  // by paging children so a large value is never truncated before export.
+  if (t.docFormat === 'xml') {
+    const r = await getSubtree(t, e, budget);
+    return r.language === 'json' ? JSON.parse(r.text) : xmlTextToObj(r.text);
+  }
+  const text = await reconstructJsonSubtree(t, e, prog || { n: 0, label: 'Working' });
+  return JSON.parse(text);
 }
 
 // ---------- converters ----------
@@ -5386,8 +5393,8 @@ function xmlTextToObj(text) {
   return { [doc.documentElement.tagName]: walk(doc.documentElement) };
 }
 
-async function convertNode(t, e, fmt, budget) {
-  const obj = await getNodeObj(t, e, budget);
+async function convertNode(t, e, fmt, budget, prog) {
+  const obj = await getNodeObj(t, e, budget, prog);
   if (fmt === 'json') return JSON.stringify(obj, null, 2);
   if (fmt === 'rawjson') return JSON.stringify(obj);
   if (fmt === 'yaml') return toYaml(obj);
@@ -5413,15 +5420,17 @@ function defaultExportName(e, ext) {
 }
 
 async function copyNodeAs(t, e, fmt) {
-  try { await copyText(await convertNode(t, e, fmt), fmt === 'rawjson' ? 'raw JSON' : fmt.toUpperCase()); }
+  try { await copyText(await convertNode(t, e, fmt, undefined, { n: 0, label: 'Copying' }), fmt === 'rawjson' ? 'raw JSON' : fmt.toUpperCase()); }
   catch (err) { toast('Convert failed: ' + cleanErr(err)); }
 }
 
 async function exportNodeAs(t, e, fmt) {
   try {
-    const text = await convertNode(t, e, fmt);
+    if (!isScalarKind(e.kind)) toast('Exporting…', true, 60000);
+    const text = await convertNode(t, e, fmt, undefined, { n: 0, label: 'Exporting' });
     const saved = await window.oxj.saveText(defaultExportName(e, fmt === 'rawjson' ? 'json' : fmt), text);
     if (saved) toast('Saved ' + baseName(saved), true);
+    else hideToast(); // cancelled the save dialog — clear the "Exporting…" toast
   } catch (err) { toast('Export failed: ' + cleanErr(err)); }
 }
 
@@ -5433,11 +5442,51 @@ async function copyCsvRow(t, e) {
   } catch (err) { toast(cleanErr(err)); }
 }
 
+// Reconstruct a node's JSON by paging its children (op:'children'), so the whole
+// value is rebuilt from many small responses — no node budget and no single huge
+// response that could be truncated. Memory holds only the growing text.
+async function reconstructJsonSubtree(t, node, prog) {
+  const k = node.kind;
+  if (k === K.OBJ || k === K.ARR || k === K.ELEM) {
+    const isObj = k === K.OBJ || k === K.ELEM;
+    const parts = [];
+    let off = 0;
+    const PAGE = 1000; // op:'children' caps limit at 1000
+    for (;;) {
+      const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: off, limit: PAGE });
+      const items = res.items || [];
+      for (const c of items) {
+        const childText = await reconstructJsonSubtree(t, c, prog);
+        parts.push(isObj ? JSON.stringify(c.name == null ? '' : c.name) + ': ' + childText : childText);
+        if (prog) { prog.n++; if (prog.n % 20000 === 0) toast((prog.label || 'Working') + '… ' + fmtInt(prog.n) + ' values', true, 60000); }
+      }
+      if (items.length < PAGE) break;
+      off += PAGE;
+    }
+    return isObj ? '{' + parts.join(',') + '}' : '[' + parts.join(',') + ']';
+  }
+  if (k === K.NULL) return 'null';
+  if (k === K.BOOL) return node.value === 'true' || node.value === true ? 'true' : 'false';
+  if (k === K.NUM) return node.value == null || node.value === '' ? '0' : String(node.value);
+  // string-like (STR / TEXT / ATTR); fetch the full value if it was truncated
+  let v = node.value == null ? '' : String(node.value);
+  if (node.vlen != null && node.vlen > 4096) { try { v = await getScalarValue(t, node); } catch {} }
+  return JSON.stringify(v);
+}
+
 async function copyToNewTab(t, e) {
   try {
-    const r = await getSubtree(t, e);
-    const ext = r.language === 'xml' ? 'xml' : 'json';
-    const file = await window.oxj.textToFile(e.label || 'fragment', ext, r.text);
+    let text, ext;
+    if (t.docFormat === 'xml') {
+      // XML keeps the engine reconstruction (XML subtrees are small).
+      const r = await getSubtree(t, e, 100000000);
+      text = r.text; ext = r.language === 'xml' ? 'xml' : 'json';
+    } else {
+      toast('Building new tab…', true, 60000);
+      text = await reconstructJsonSubtree(t, e, { n: 0, label: 'Building new tab' });
+      ext = 'json';
+    }
+    const file = await window.oxj.textToFile(e.label || 'fragment', ext, text);
     const nt = newTab(true);
     if (nt) openPath(file, nt);
   } catch (err) { toast(cleanErr(err)); }
@@ -5790,10 +5839,13 @@ async function jsonDeepDive() {
     toast('JSON DeepDive supports JSON and NDJSON documents'); return;
   }
   let schemaRes;
-  try { toast('Scanning fields…', true); schemaRes = await getDocSchema(t); }
+  // Keep the toast up for the whole scan (a full-coverage scan on a big document
+  // can take a while), then clear it the moment the picker is ready to show.
+  try { toast('Scanning fields…', true, 600000); schemaRes = await getDocSchema(t); }
   catch (err) { toast('Could not read fields: ' + cleanErr(err)); return; }
   const tree = schemaToFieldTree(schemaRes.schema);
-  if (!tree.length) { toast('No object fields found to extract'); return; }
+  if (!tree.length) { hideToast(); toast('No object fields found to extract'); return; }
+  hideToast();
   const paths = await showFieldPicker(tree, schemaRes.sampled);
   if (!paths || !paths.length) return;
   await runProjection(t, paths);
@@ -6342,7 +6394,9 @@ async function getDocSchema(t) {
   } catch (err) {
     if (!isMemoryModeErr(cleanErr(err))) throw err;
     const root = t.visible[0];
-    const budget = { n: 200000 };
+    // High ceiling only as a runaway guard; the accumulator-merge walk keeps
+    // memory bounded by the schema, so this rarely matters for real documents.
+    const budget = { n: 20000000 };
     const inferred = await inferSchemaFromTree(t, { id: root.id, kind: root.kind, n: root.n, value: root.value }, budget);
     return { schema: { '$schema': 'http://json-schema.org/draft-07/schema#', ...inferred }, sampled: budget.n <= 0 };
   }
@@ -6379,10 +6433,13 @@ async function inferSchemaFromTree(t, node, budget) {
     return { type: /^[+-]?\d+$/.test(s) ? 'integer' : 'number' };
   }
   if (k === K.ARR) {
-    if (!node.n || budget.n <= 0) return { type: 'array' };
-    // Walk EVERY element (bounded by the shared budget), not just the first N —
-    // so unique attributes that only appear in later records are still captured.
-    const subs = [];
+    if (!node.n) return { type: 'array' };
+    // Accumulator-merge model (like openxmljsoncsv): walk EVERY element but fold
+    // each into a single running item schema, so peak memory tracks the schema's
+    // size (distinct keys/types/depth), not the element count. No per-array cap,
+    // so a late array's nested fields are always discovered. The high global
+    // budget below is only a runaway safety ceiling.
+    let acc = null;
     let off = 0;
     const PAGE = 1000;
     for (;;) {
@@ -6392,12 +6449,13 @@ async function inferSchemaFromTree(t, node, budget) {
       for (const c of items) {
         if (budget.n <= 0) break;
         budget.n -= 1;
-        subs.push(await inferSchemaFromTree(t, c, budget));
+        const sub = await inferSchemaFromTree(t, c, budget);
+        acc = acc === null ? sub : mergeSchemas([acc, sub]);
       }
       if (items.length < PAGE) break;
       off += PAGE;
     }
-    return subs.length ? { type: 'array', items: mergeSchemas(subs) } : { type: 'array' };
+    return acc ? { type: 'array', items: acc } : { type: 'array' };
   }
   if (k === K.OBJ || k === K.ELEM) {
     const properties = {};
@@ -6405,14 +6463,15 @@ async function inferSchemaFromTree(t, node, budget) {
     let off = 0;
     const PAGE = 500;
     for (;;) {
-      if (budget.n <= 0) break;
       const res = await window.oxj.query(t.id, { op: 'children', node: node.id, offset: off, limit: PAGE });
       const items = res.items || [];
       for (const c of items) {
-        if (budget.n <= 0) break;
-        budget.n -= 1;
         if (c.name == null) continue;
-        properties[c.name] = await inferSchemaFromTree(t, c, budget);
+        // Always record the key. Only the VALUE's depth is budget-limited, so a
+        // later top-level field never goes missing just because an earlier huge
+        // array used up the budget (this is what hid numSkus/skus before).
+        budget.n -= 1;
+        properties[c.name] = budget.n <= 0 ? {} : await inferSchemaFromTree(t, c, budget);
         required.push(c.name);
       }
       if (items.length < PAGE) break;

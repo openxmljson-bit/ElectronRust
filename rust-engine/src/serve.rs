@@ -825,7 +825,11 @@ fn build_xml(
 
 fn op_subtree(conn: &Connection, req: &Value) -> Result<Value, String> {
     let id = geti(req, "node", 1);
-    let mut budget = geti(req, "budget", 50_000).clamp(100, 300_000);
+    // Allow large budgets so a big subtree (e.g. a 50k-element array) reconstructs
+    // as complete, valid JSON instead of being truncated mid-structure. The caller
+    // picks the budget (a small one for quick previews, a large one for exports /
+    // "Copy to New Tab"); the high ceiling is only a runaway guard.
+    let mut budget = geti(req, "budget", 50_000).clamp(100, 100_000_000);
     let format = meta_get(conn, "format").unwrap_or_else(|| "json".into());
     let node = fetch_node(conn, id)?;
     let mut out = String::new();
@@ -861,7 +865,9 @@ fn op_schema(conn: &Connection, req: &Value) -> Result<Value, String> {
         ));
     }
     let node = geti(req, "node", doc_root(conn));
-    let mut budget: i64 = geti(req, "budget", 200_000);
+    // High ceiling only as a runaway guard; the accumulator-merge walk keeps
+    // memory bounded by the schema, so every field is captured on real documents.
+    let mut budget: i64 = geti(req, "budget", 100_000_000);
     let info = fetch_node(conn, node)?;
     let mut schema = infer_schema(conn, &info, &mut budget)?;
     if let Value::Object(ref mut m) = schema {
@@ -898,9 +904,16 @@ fn infer_schema(conn: &Connection, n: &NodeRow, budget: &mut i64) -> Result<Valu
             Ok(json!({"type": "object", "properties": props, "required": required}))
         }
         1 => {
-            // Walk EVERY element (bounded by the shared budget), paging through
-            // the array, so unique attributes that first appear in later records
-            // are captured — not just the ones in the first N elements.
+            // Walk elements, paging through the array, so attributes that first
+            // appear in later records are still captured. A per-array cap stops
+            // one giant array (e.g. `products`) from spending the whole shared
+            // budget before its *sibling* fields (e.g. `skus`) are ever reached —
+            // which is how top-level fields went missing on very large documents.
+            // Accumulator-merge: walk EVERY element, folding each into one running
+            // item schema (merge_schema), so memory tracks the schema's size, not
+            // the element count. No per-array cap, so a late sibling array's
+            // nested fields are always reached; the shared budget is only a runaway
+            // safety ceiling.
             let mut items: Option<Value> = None;
             let mut off: i64 = 0;
             let page: i64 = 1000;
