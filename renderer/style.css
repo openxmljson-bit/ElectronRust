@@ -18,6 +18,8 @@
   --sel: #2b4a75;
   --cell-sel: #f4c430;     /* golden yellow — selected-cell highlight */
   --cell-sel-fg: #201a10;  /* dark text for readability on the highlight */
+  --tree-guide: rgba(255,255,255,.10); /* indent guide lines in the JSON tree */
+  --tree-box: rgba(255,255,255,.28);   /* +/− toggle box border */
   --row-h: 26px;
   --mono: "SF Mono", Menlo, Consolas, "Courier New", monospace;
 }
@@ -42,6 +44,8 @@ body.light {
   --sel: #cfe3ff;
   --cell-sel: #f5c518;
   --cell-sel-fg: #1a1403;
+  --tree-guide: rgba(0,0,0,.12);
+  --tree-box: rgba(0,0,0,.40);
 }
 body.light .tabbar { background: #e4e6ea; }
 body.light .btn-primary { color: #fff; }
@@ -731,15 +735,28 @@ body.light .narik-brand {
   width: max-content;
   min-width: 100%;
 }
+/* Indent guides: one full-height cell per nesting level with a faint left line. */
+.tw-pad { flex: 0 0 6px; }
+.tw-guide { flex: 0 0 18px; align-self: stretch; box-shadow: inset 1px 0 0 var(--tree-guide); }
+/* Deepest cell gets a horizontal connector (vertically centred) → ├─ / └─. */
+.tw-guide.last {
+  background: linear-gradient(var(--tree-guide), var(--tree-guide)) no-repeat;
+  background-size: calc(100% - 1px) 1px;
+  background-position: 1px center;
+}
 .trow:hover { background: rgba(255,255,255,.035); }
 .trow.selected { background: var(--sel); }
 .trow.zebra { background: rgba(255,255,255,.018); }
 .trow.zebra.selected { background: var(--sel); }
 .twisty {
-  width: 18px; text-align: center; color: var(--fg-dim); cursor: pointer;
-  flex-shrink: 0; font-size: 10px;
+  flex-shrink: 0; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; margin: 0 6px 0 1px;
+  border: 1px solid var(--tree-box); border-radius: 2px;
+  background: var(--bg2); color: var(--fg-dim);
+  font-size: 11px; line-height: 1; font-family: var(--mono);
 }
-.twisty.leaf { visibility: hidden; }
+.twisty.leaf { border: 0; background: transparent; cursor: default; }
 .tkey { color: var(--key); }
 .tkey.xml { color: var(--elem); }
 .tkey.attr { color: var(--attr); }

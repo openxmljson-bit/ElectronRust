@@ -1820,11 +1820,18 @@ function buildRow(t, e, idx) {
   row.style.top = idx * ROW_H + 'px';
   row.dataset.idx = idx;
 
-  const indent = document.createElement('span');
-  indent.style.display = 'inline-block';
-  indent.style.width = 6 + e.depth * 18 + 'px';
-  indent.style.flexShrink = '0';
-  row.appendChild(indent);
+  // Indent as per-level guide cells: a 6px lead pad, then one 18px cell per
+  // depth level carrying a faint vertical line, so nesting is easy to follow.
+  const pad = document.createElement('span');
+  pad.className = 'tw-pad';
+  row.appendChild(pad);
+  for (let i = 0; i < e.depth; i++) {
+    const g = document.createElement('span');
+    // The deepest cell also carries a horizontal connector to the node, forming
+    // the classic ├─ / └─ junction.
+    g.className = 'tw-guide' + (i === e.depth - 1 ? ' last' : '');
+    row.appendChild(g);
+  }
 
   if (e.pseudo) {
     const more = document.createElement('span');
@@ -1849,9 +1856,10 @@ function buildRow(t, e, idx) {
     return row;
   }
 
+  const container = isContainer(e.kind, e.n) && e.n > 0;
   const tw = document.createElement('span');
-  tw.className = 'twisty' + (isContainer(e.kind, e.n) && e.n > 0 ? '' : ' leaf');
-  tw.textContent = e.expanded ? '▼' : '▶';
+  tw.className = 'twisty' + (container ? '' : ' leaf');
+  if (container) tw.textContent = e.expanded ? '−' : '+'; // boxed +/− toggle
   row.appendChild(tw);
 
   const nav = matchNav && matchNav.tabId === t.id ? matchNav : null;
