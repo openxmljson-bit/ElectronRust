@@ -1252,16 +1252,61 @@ function downloadUrl(url, headers) {
 
 // A full HTTP request (any method/body/headers). Unlike downloadUrl it does not
 // reject on non-2xx — the builder shows the status and the response body.
-function httpRequest({ method, url, headers, body }) {
+// Build a multipart/form-data body from form fields. File fields ({name, filePath})
+// are read from disk; value fields ({name, value}) are inline. Returns the body
+// Buffer and the Content-Type (with boundary) to send.
+function buildMultipart(form) {
+  const CRLF = '\r\n';
+  const boundary = '----NarikFormBoundary' + Date.now().toString(16) + Math.random().toString(16).slice(2, 10);
+  const mimeByExt = { json: 'application/json', ndjson: 'application/x-ndjson', jsonl: 'application/x-ndjson', xml: 'application/xml', csv: 'text/csv', txt: 'text/plain', parquet: 'application/octet-stream' };
+  const chunks = [];
+  for (const f of form) {
+    if (!f || !f.name) continue;
+    if (f.filePath) {
+      if (!fs.existsSync(f.filePath)) throw new Error('File not found: ' + f.filePath + ' — use "Choose file…" to locate it.');
+      const data = fs.readFileSync(f.filePath);
+      const filename = f.filename || path.basename(f.filePath);
+      const ext = String(filename.split('.').pop() || '').toLowerCase();
+      const ctype = f.type || mimeByExt[ext] || 'application/octet-stream';
+      chunks.push(Buffer.from(
+        '--' + boundary + CRLF +
+        'Content-Disposition: form-data; name="' + f.name + '"; filename="' + filename + '"' + CRLF +
+        'Content-Type: ' + ctype + CRLF + CRLF));
+      chunks.push(data);
+      chunks.push(Buffer.from(CRLF));
+    } else {
+      chunks.push(Buffer.from(
+        '--' + boundary + CRLF +
+        'Content-Disposition: form-data; name="' + f.name + '"' + CRLF + CRLF +
+        (f.value != null ? String(f.value) : '') + CRLF));
+    }
+  }
+  chunks.push(Buffer.from('--' + boundary + '--' + CRLF));
+  return { body: Buffer.concat(chunks), contentType: 'multipart/form-data; boundary=' + boundary };
+}
+
+function httpRequest({ method, url, headers, body, form }) {
   return new Promise((resolve, reject) => {
     const meth = String(method || 'GET').toUpperCase();
     const started = Date.now();
     const tmp = path.join(downloadsDir(), 'url_' + Date.now());
     const out = fs.createWriteStream(tmp);
+    // Multipart file upload: build the body and override Content-Type/Length.
+    let sendBody = body;
+    const hdrs = { ...(headers || {}) };
+    if (Array.isArray(form) && form.length) {
+      let mp;
+      try { mp = buildMultipart(form); } catch (e) { return reject(e); }
+      sendBody = mp.body;
+      // Chromium's net manages Content-Length itself; setting it manually (or any
+      // forbidden header) triggers ERR_INVALID_ARGUMENT. Only set Content-Type.
+      for (const k of Object.keys(hdrs)) if (k.toLowerCase() === 'content-type' || k.toLowerCase() === 'content-length') delete hdrs[k];
+      hdrs['Content-Type'] = mp.contentType;
+    }
     let req;
     try { req = net.request({ method: meth, url, redirect: 'follow' }); }
     catch (e) { return reject(e); }
-    for (const [k, v] of Object.entries(headers || {})) { try { req.setHeader(k, v); } catch {} }
+    for (const [k, v] of Object.entries(hdrs)) { try { req.setHeader(k, v); } catch {} }
     let settled = false;
     const fail = (e) => { if (settled) return; settled = true; clearTimeout(timer); try { out.destroy(); } catch {} try { fs.unlinkSync(tmp); } catch {} reject(e); };
     const timer = setTimeout(() => { try { req.abort(); } catch {} fail(new Error('request timed out')); }, 60000);
@@ -1279,7 +1324,7 @@ function httpRequest({ method, url, headers, body }) {
       }));
     });
     req.on('error', fail);
-    if (body != null && body !== '' && meth !== 'GET' && meth !== 'HEAD') req.write(body);
+    if (sendBody != null && sendBody.length !== 0 && meth !== 'GET' && meth !== 'HEAD') req.write(sendBody);
     req.end();
   });
 }
@@ -1857,9 +1902,11 @@ app.whenReady().then(() => {
       if (!/^https?:\/\//i.test(String(req.url))) throw new Error('URL must start with http:// or https://');
       const headers = { ...authHeaders(req.auth) };
       for (const h of (req.headers || [])) if (h && h.key) headers[h.key] = h.value != null ? h.value : '';
+      const hasForm = Array.isArray(req.form) && req.form.length > 0;
       const hasBody = req.body != null && req.body !== '' && !['GET', 'HEAD'].includes(String(req.method || 'GET').toUpperCase());
-      if (hasBody && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/json';
-      const res = await httpRequest({ method: req.method, url: String(req.url), headers, body: req.body });
+      // Default JSON content-type only for a raw body; multipart sets its own.
+      if (!hasForm && hasBody && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/json';
+      const res = await httpRequest({ method: req.method, url: String(req.url), headers, body: req.body, form: req.form });
       return ok(res);
     } catch (err) { return fail(err); }
   });

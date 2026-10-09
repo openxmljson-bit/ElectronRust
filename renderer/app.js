@@ -4129,6 +4129,7 @@ $('btn-copy-min-source').addEventListener('click', async () => {
 // ---------- Smart URL / request builder (Postman-style) ----------
 let builderParams = [];
 let builderHeaders = [];
+let builderForm = []; // multipart form fields (-F), incl. file uploads
 let urlSyncing = false; // guard against URL<->params feedback loops
 let builderEditTab = null; // when editing an open URL doc, reuse its tab
 
@@ -4151,8 +4152,10 @@ function showUrlModal(prefill, editTab) {
     ? r.params.map((p) => ({ on: p.on !== false, key: p.key, val: p.val }))
     : parseParams(r.url || '');
   builderHeaders = (r.headers || []).map((h) => ({ on: h.on !== false, key: h.key, val: h.val }));
+  builderForm = (r.form || []).map((f) => ({ ...f }));
   renderKv('params-table', builderParams, onParamsChange);
   renderKv('headers-table', builderHeaders, () => {});
+  renderReqForm();
   showReqTab('params');
   $('req-bookmark').classList.remove('saved');
   if (!prefill) bmEditingId = null;
@@ -4492,7 +4495,58 @@ function currentRequestState() {
     auth: gatherAuth(),
     headers: builderHeaders.filter((h) => h.key),
     body: $('req-body').value,
+    form: builderForm.filter((f) => f.name),
   };
+}
+
+// Render the multipart (-F) form in the Body tab. When form fields are present
+// the raw-body textarea is hidden; file fields get a "Choose file…" button so a
+// relative path from a pasted cURL can be pointed at the real file.
+function renderReqForm() {
+  const wrap = $('req-form');
+  const body = $('req-body');
+  if (!wrap) return;
+  if (!builderForm || !builderForm.length) { wrap.classList.add('hidden'); wrap.innerHTML = ''; body.classList.remove('hidden'); return; }
+  wrap.classList.remove('hidden');
+  body.classList.add('hidden');
+  wrap.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'req-form-head';
+  head.textContent = 'Multipart form — sent as multipart/form-data';
+  wrap.appendChild(head);
+  builderForm.forEach((f) => {
+    const row = document.createElement('div');
+    row.className = 'req-form-row';
+    const name = document.createElement('span');
+    name.className = 'req-form-name';
+    name.textContent = f.name;
+    row.appendChild(name);
+    if (f.filePath != null || f.file) {
+      const badge = document.createElement('span');
+      badge.className = 'req-form-badge';
+      badge.textContent = 'file';
+      const pathEl = document.createElement('span');
+      pathEl.className = 'req-form-path';
+      pathEl.textContent = f.filePath || '(choose a file)';
+      pathEl.title = f.filePath || '';
+      const btn = document.createElement('button');
+      btn.className = 'btn-tool';
+      btn.textContent = 'Choose file…';
+      btn.addEventListener('click', async () => {
+        const p = await window.oxj.pickFile();
+        if (p) { f.filePath = p; f.filename = baseName(p); renderReqForm(); }
+      });
+      row.append(badge, pathEl, btn);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'req-form-val';
+      inp.value = f.value || '';
+      inp.addEventListener('input', () => { f.value = inp.value; });
+      row.appendChild(inp);
+    }
+    wrap.appendChild(row);
+  });
 }
 
 // ---- Paste-a-cURL importer (Postman-style) ----------------------------------
@@ -4523,11 +4577,11 @@ function parseCurl(text) {
   const toks = tokenizeShell(text.trim());
   if (!toks.length) return null;
   let i = /^curl$/i.test(toks[0]) ? 1 : 0;
-  const req = { method: null, url: '', headers: [], body: '', auth: { type: 'none' } };
+  const req = { method: null, url: '', headers: [], body: '', auth: { type: 'none' }, form: [] };
   const data = [];
   // Flags we recognise but don't model → consume their value and drop it.
   const skipVal = new Set(['-o', '--output', '-m', '--max-time', '--connect-timeout', '-x', '--proxy',
-    '-T', '--upload-file', '-w', '--write-out', '--retry', '--cacert', '--cert', '--key', '-F', '--form', '-E']);
+    '-T', '--upload-file', '-w', '--write-out', '--retry', '--cacert', '--cert', '--key', '-E']);
   for (; i < toks.length; i++) {
     const t = toks[i];
     const eq = t.startsWith('--') ? t.indexOf('=') : -1;
@@ -4548,6 +4602,27 @@ function parseCurl(text) {
       }
       case '-d': case '--data': case '--data-raw': case '--data-ascii':
       case '--data-binary': case '--data-urlencode': data.push(next()); break;
+      case '-F': case '--form': {
+        // name=value, or a file upload: name=@path  (optionally ;type=…;filename=…)
+        const f = next(); const ci = f.indexOf('=');
+        if (ci > -1) {
+          const name = f.slice(0, ci);
+          const content = f.slice(ci + 1);
+          if (content.startsWith('@') || content.startsWith('<')) {
+            const segs = content.slice(1).split(';');
+            const filePath = segs[0];
+            let filename = null, type = null;
+            for (let k = 1; k < segs.length; k++) {
+              const m = segs[k].trim().match(/^(type|filename)=(.*)$/i);
+              if (m) { if (m[1].toLowerCase() === 'type') type = m[2]; else filename = m[2]; }
+            }
+            req.form.push({ name, filePath, filename: filename || baseName(filePath), type });
+          } else {
+            req.form.push({ name, value: content });
+          }
+        }
+        break;
+      }
       case '-b': case '--cookie': req.headers.push({ key: 'Cookie', val: next() }); break;
       case '-A': case '--user-agent': req.headers.push({ key: 'User-Agent', val: next() }); break;
       case '-e': case '--referer': req.headers.push({ key: 'Referer', val: next() }); break;
@@ -4560,7 +4635,7 @@ function parseCurl(text) {
     }
   }
   req.body = data.join('&');
-  if (!req.method) req.method = req.body ? 'POST' : 'GET';
+  if (!req.method) req.method = (req.body || req.form.length) ? 'POST' : 'GET';
   return req.url ? req : null;
 }
 
@@ -4571,7 +4646,7 @@ function importCurlFromInput() {
   const req = parseCurl(raw);
   if (!req) { setReqStatus('Could not parse that cURL command.', 'err'); return false; }
   showUrlModal(req, builderEditTab);
-  showReqTab(req.headers.length ? 'headers' : (req.body ? 'body' : 'params'));
+  showReqTab(req.form && req.form.length ? "body" : (req.headers.length ? "headers" : (req.body ? "body" : "params")));
   setReqStatus('Imported from cURL — review and Send.', 'pending');
   return true;
 }
@@ -4610,13 +4685,14 @@ async function performRequest(reqState, target) {
     sendAuth = { type: 'apikey', header: auth.header, token: auth.value };
   }
   const sendHeaders = (reqState.headers || []).filter((h) => h.on !== false && h.key).map((h) => ({ key: h.key, value: h.val }));
+  const sendForm = (reqState.form || []).filter((f) => f.name);
   // Keep the modal open until we actually succeed, so a failed request never
   // throws away everything the user typed. Only a 2xx/3xx closes it.
   const sendBtn = $('req-send');
   if (sendBtn) sendBtn.disabled = true;
   setReqStatus('Sending ' + method + ' …', 'pending');
   try {
-    const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body });
+    const res = await window.oxj.httpRequest({ method, url: sendUrl, auth: sendAuth, headers: sendHeaders, body, form: sendForm });
     const ok = res.status >= 200 && res.status < 400;
     if (ok) {
       const t = await openPath(res.file, target);
@@ -4686,7 +4762,7 @@ $('url-input').addEventListener('paste', (e) => {
   const req = parseCurl(text);
   if (!req) { setReqStatus('Could not parse that cURL command.', 'err'); return; }
   showUrlModal(req, builderEditTab);
-  showReqTab(req.headers.length ? 'headers' : (req.body ? 'body' : 'params'));
+  showReqTab(req.form && req.form.length ? "body" : (req.headers.length ? "headers" : (req.body ? "body" : "params")));
   setReqStatus('Imported from cURL — review and Send.', 'pending');
 });
 $('url-cancel').addEventListener('click', hideUrlModal);
@@ -4987,7 +5063,11 @@ async function copyAsCurl() {
     parts.push('-H ' + q(auth.header + ': ' + (auth.value || auth.token || '')));
   }
 
-  if (hasBody) parts.push('--data-raw ' + q(o.body));
+  for (const f of (o.form || [])) {
+    if (!f || !f.name) continue;
+    parts.push('-F ' + q(f.filePath != null ? (f.name + '=@' + f.filePath) : (f.name + '=' + (f.value || ''))));
+  }
+  if (hasBody && !(o.form && o.form.length)) parts.push('--data-raw ' + q(o.body));
 
   await copyText(parts.join(' \\\n  '), 'cURL command');
 }
