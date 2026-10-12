@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('oxj', {
   appVersion: () => ipcRenderer.invoke('app-version'),
   setTableTheme: (name) => ipcRenderer.invoke('set-table-theme', name),
   onRecentsChanged: (cb) => ipcRenderer.on('recents-changed', () => cb()),
+  onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, m) => cb(m)),
   pathForFile: (file) => webUtils.getPathForFile(file),
   onProgress: (cb) => ipcRenderer.on('ingest-progress', (_e, m) => cb(m)),
   onDocReady: (cb) => ipcRenderer.on('doc-ready', (_e, m) => cb(m)),

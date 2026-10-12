@@ -556,6 +556,43 @@ function toast(msg, info, ms) {
   toast._t = setTimeout(() => t.classList.add('hidden'), ms || (info ? 3500 : 6000));
 }
 function hideToast() { $('toast').classList.add('hidden'); clearTimeout(toast._t); }
+
+// Update download progress card (driven by main's autoUpdater download-progress).
+(function wireUpdateProgress() {
+  if (!window.oxj || !window.oxj.onUpdateStatus) return;
+  let el = null;
+  const ensure = () => {
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'update-progress hidden';
+    el.innerHTML = '<div class="up-label"></div><div class="up-bar"><div class="up-fill"></div></div><div class="up-sub"></div>';
+    document.body.appendChild(el);
+    return el;
+  };
+  window.oxj.onUpdateStatus((m) => {
+    const box = ensure();
+    const fill = box.querySelector('.up-fill');
+    const label = box.querySelector('.up-label');
+    const sub = box.querySelector('.up-sub');
+    if (m.phase === 'downloading') {
+      const pct = Math.max(0, Math.min(100, m.percent || 0));
+      box.classList.remove('hidden');
+      fill.style.width = pct.toFixed(0) + '%';
+      label.textContent = 'Downloading update… ' + pct.toFixed(0) + '%';
+      sub.textContent = m.total
+        ? fmtBytes(m.transferred || 0) + ' / ' + fmtBytes(m.total) + (m.bytesPerSecond ? '  ·  ' + fmtBytes(m.bytesPerSecond) + '/s' : '')
+        : '';
+    } else if (m.phase === 'done') {
+      box.classList.remove('hidden');
+      fill.style.width = '100%';
+      label.textContent = 'Update downloaded';
+      sub.textContent = 'Ready to restart and install.';
+      setTimeout(() => box.classList.add('hidden'), 5000);
+    } else {
+      box.classList.add('hidden');
+    }
+  });
+})();
 // Styled, roomy replacement for window.confirm(). Returns a Promise<boolean>.
 function confirmDialog(opts) {
   const { title = 'Are you sure?', body = '', okLabel = 'OK', cancelLabel = 'Cancel' } = opts || {};

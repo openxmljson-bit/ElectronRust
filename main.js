@@ -121,6 +121,19 @@ function engineLog(line) {
 let updaterWired = false;
 let updateBusy = false;
 
+// Push an update status message to the focused window (for the progress bar) and
+// reflect the download on the dock/taskbar icon.
+function sendUpdateStatus(msg) {
+  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('update-status', msg); } catch {}
+    try {
+      if (msg.phase === 'downloading') win.setProgressBar(Math.max(0, Math.min(1, (msg.percent || 0) / 100)));
+      else win.setProgressBar(-1);
+    } catch {}
+  }
+}
+
 function wireUpdater() {
   if (updaterWired) return;
   updaterWired = true;
@@ -134,11 +147,21 @@ function wireUpdater() {
   autoUpdater.disableDifferentialDownload = true;
   autoUpdater.on('error', (err) => {
     updateBusy = false;
+    sendUpdateStatus({ phase: 'error' });
     const win = BrowserWindow.getFocusedWindow();
     dialog.showMessageBox(win, {
       type: 'error',
       message: 'Update check failed',
       detail: String((err && err.message) || err),
+    });
+  });
+  autoUpdater.on('download-progress', (p) => {
+    sendUpdateStatus({
+      phase: 'downloading',
+      percent: p.percent || 0,
+      transferred: p.transferred || 0,
+      total: p.total || 0,
+      bytesPerSecond: p.bytesPerSecond || 0,
     });
   });
   autoUpdater.on('update-not-available', () => {
@@ -160,11 +183,14 @@ function wireUpdater() {
       message: 'Update available',
       detail: 'Version ' + info.version + ' is available (you have ' + app.getVersion() + '). Download it now?',
     });
-    if (res.response === 0) autoUpdater.downloadUpdate();
-    else updateBusy = false;
+    if (res.response === 0) {
+      sendUpdateStatus({ phase: 'downloading', percent: 0, total: info.files && info.files[0] && info.files[0].size || 0 });
+      autoUpdater.downloadUpdate();
+    } else updateBusy = false;
   });
   autoUpdater.on('update-downloaded', async (info) => {
     updateBusy = false;
+    sendUpdateStatus({ phase: 'done' });
     const win = BrowserWindow.getFocusedWindow();
     const res = await dialog.showMessageBox(win, {
       type: 'info',
