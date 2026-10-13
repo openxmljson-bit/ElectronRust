@@ -293,7 +293,22 @@ export function projectExpr(name: string, transforms?: Record<string, ColumnTran
 export function isIdentityView(view: ViewSpec): boolean {
   const activeFilters = view.filters.filter((f) => f.enabled);
   const searchFilters = !!(view.search?.asFilter && view.search.query);
-  return activeFilters.length === 0 && !searchFilters && view.sort.length === 0 && !hasTransforms(view);
+  const dups = !!(view.duplicates && view.duplicates.columns && view.duplicates.columns.length);
+  return activeFilters.length === 0 && !searchFilters && view.sort.length === 0 && !hasTransforms(view) && !dups;
+}
+
+/**
+ * SQL condition that keeps only rows whose value(s) in the chosen columns are
+ * duplicated across the dataset. `fromExpr` is the base table expression (the
+ * read_parquet(...) of the source). Returns '' when no duplicate columns are set.
+ */
+export function duplicatesClause(view: ViewSpec, fromExpr: string, columns: ColumnInfo[]): string {
+  const want = view.duplicates?.columns;
+  if (!want || !want.length) return '';
+  const names = want.filter((n) => columns.some((c) => c.name === n));
+  if (!names.length) return '';
+  const quoted = names.map((n) => quoteIdent(n)).join(', ');
+  return `(${quoted}) IN (SELECT ${quoted} FROM ${fromExpr} GROUP BY ${quoted} HAVING count(*) > 1)`;
 }
 
 /** Stable key for a (dataset, view) pair — used to name and reuse derived Parquet files. */
@@ -316,6 +331,7 @@ export function viewKey(datasetId: string, view: ViewSpec, columns: ColumnInfo[]
         : null,
     sort: view.sort.map((s) => [s.column, s.dir, !!s.nullsFirst]),
     select: view.select ? view.select.slice().sort() : null,
+    duplicates: view.duplicates?.columns?.length ? view.duplicates.columns.slice().sort() : null,
     transforms: view.transforms
       ? Object.entries(view.transforms)
           .filter(([, v]) => transformActive(v))

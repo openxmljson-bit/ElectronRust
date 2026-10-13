@@ -1257,7 +1257,7 @@ async function openDuckTable(t, path, tableInfo, allTables) {
   t.tablePages = new Map();
   t.tableInflight = new Set();
   t.colWidths = null; t.colOrder = null; t.colHidden = null; t.colPinned = null;
-  t.tableSel = null; t.tableRowSet = null; t.tableColSet = null; t.tableSort = null; t.tableFilters = [];
+  t.tableSel = null; t.tableRowSet = null; t.tableColSet = null; t.tableSort = null; t.tableFilters = []; t.tableDuplicates = null;
   t.pageIdx = 0;
   t.view = 'table';
   t.loadMs = man.ingestMs != null ? man.ingestMs : (vi.buildMs != null ? vi.buildMs : null);
@@ -2682,7 +2682,9 @@ function duckViewSpec(t) {
   const sort = t.tableSort ? [{ column: t.tableHeaders[t.tableSort.col], dir: t.tableSort.dir }] : [];
   const q = t.duck && t.duck.searchQuery;
   const search = q ? { query: q, mode: (t.duck.searchMode || 'contains'), columns: null, caseSensitive: false, includeNested: false, asFilter: true } : null;
-  return { filters, combine: 'and', search, sort, select: null, transforms: t.tableTransforms || {} };
+  const dupCols = (t.tableDuplicates && t.tableDuplicates.cols) || [];
+  const duplicates = dupCols.length ? { columns: dupCols.map((c) => t.tableHeaders[c]).filter(Boolean) } : null;
+  return { filters, combine: 'and', search, sort, select: null, transforms: t.tableTransforms || {}, duplicates };
 }
 
 async function applyTableViewDuck(t) {
@@ -3454,6 +3456,49 @@ function openFilterDialog(t, presetCol) {
   box.appendChild(actions);
 }
 
+// Pick one or more columns; the view then keeps only rows whose value(s) in
+// those columns are duplicated across the dataset. Mirrors the Filter dialog.
+function openDuplicatesDialog(t) {
+  const { back, box } = simpleModal('Find duplicates');
+  const hint = document.createElement('div');
+  hint.className = 'modal-sub';
+  hint.textContent = 'Keep rows whose value in the chosen column(s) appears more than once. Add columns to match on a combination.';
+  box.appendChild(hint);
+  const working = ((t.tableDuplicates && t.tableDuplicates.cols) || []).slice();
+  if (!working.length) working.push(visCols(t)[0]);
+  const list = document.createElement('div');
+  list.className = 'filter-list';
+  const render = () => {
+    list.textContent = '';
+    working.forEach((col, i) => {
+      const r = document.createElement('div');
+      r.className = 'filter-row';
+      const cs = colSelect(t, col); cs.onchange = () => { working[i] = parseInt(cs.value, 10); };
+      const rm = document.createElement('button'); rm.className = 'link-btn'; rm.textContent = '✕';
+      rm.onclick = () => { working.splice(i, 1); if (!working.length) working.push(visCols(t)[0]); render(); };
+      r.append(cs, rm);
+      list.appendChild(r);
+    });
+  };
+  render();
+  box.appendChild(list);
+  const add = document.createElement('button'); add.className = 'link-btn'; add.textContent = '+ Add column';
+  add.onclick = () => { working.push(visCols(t)[0]); render(); };
+  box.appendChild(add);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button'); cancel.className = 'btn-secondary'; cancel.textContent = 'Cancel'; cancel.onclick = () => back.remove();
+  const ok = document.createElement('button'); ok.className = 'btn-primary'; ok.textContent = 'Find Duplicates';
+  ok.onclick = () => {
+    const cols = [...new Set(working.filter((c) => c != null))];
+    t.tableDuplicates = cols.length ? { cols } : null;
+    back.remove();
+    applyTableView(t);
+  };
+  actions.append(cancel, ok);
+  box.appendChild(actions);
+}
+
 // Table "Actions ▾" dropdown: filter, sort, clear filters, profile, SQL.
 $('btn-tbl-actions').addEventListener('click', (ev) => {
   const t = cur; if (!t) return;
@@ -3461,11 +3506,14 @@ $('btn-tbl-actions').addEventListener('click', (ev) => {
   const r = ev.currentTarget.getBoundingClientRect();
   const filterActive = !!(t.tableFilters && t.tableFilters.length);
   const transformActive = !!(t.tableTransforms && Object.keys(t.tableTransforms).length);
+  const dupActive = !!(t.tableDuplicates && t.tableDuplicates.cols && t.tableDuplicates.cols.length);
   const items = [
     { label: 'Filter…', action: () => openFilterDialog(t) },
+    { label: 'Find Duplicates…', action: () => openDuplicatesDialog(t) },
     { label: 'Sort…', action: () => openSortDialog(t) },
     { label: 'Transform Column…', action: () => openTransformDialog(t) },
     { label: 'Clear Filters', disabled: !filterActive, action: () => { t.tableFilters = []; applyTableView(t); } },
+    { label: 'Clear Duplicates', disabled: !dupActive, action: () => { t.tableDuplicates = null; applyTableView(t); } },
     { label: 'Clear Sort', disabled: !t.tableSort, action: () => { t.tableSort = null; applyTableView(t); } },
     { label: 'Clear Transforms', disabled: !transformActive, action: () => { t.tableTransforms = {}; applyTableView(t); } },
     { sep: true },

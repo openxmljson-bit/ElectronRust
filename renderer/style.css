@@ -177,6 +177,7 @@ body.light .tab-add:hover { border-color: #7c8496; color: var(--fg); }
   border-radius: 6px; padding: 6px 8px; font-size: 12px; outline: none;
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.modal-sub { color: var(--fg-dim); font-size: 12px; margin-top: -4px; }
 
 /* Roomy, styled replacement for native confirm dialogs */
 .confirm-modal {

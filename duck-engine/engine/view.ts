@@ -25,6 +25,7 @@ import {
   SOURCE_ROWNUM,
   displayExpr,
   isIdentityView,
+  duplicatesClause,
   orderByClause,
   projectExpr,
   quoteIdent,
@@ -151,7 +152,14 @@ export class ViewManager {
     const tmp = `${outPath}.building`;
     await rm(tmp, { force: true });
 
-    const where = whereClause(view, manifest.columns);
+    const baseFrom = `read_parquet(${quotePath(manifest.parquetPath)})`;
+    const dupCond = duplicatesClause(view, baseFrom, manifest.columns);
+    // Parenthesise each part so an OR inside the filter clause can't bind loosely
+    // against the AND with the duplicates condition.
+    const where = [whereClause(view, manifest.columns), dupCond]
+      .filter(Boolean)
+      .map((c) => `(${c})`)
+      .join(' AND ');
     const order = orderByClause(view.sort, manifest.columns);
     // Prefix/suffix transforms are applied here, in the same SELECT that the
     // grid and Export both read — so what's shown is exactly what's exported.

@@ -266,6 +266,8 @@ export interface ViewSpec {
   select: string[] | null;
   /** Column name -> prefix/suffix applied to the whole column (skips NULL/empty). */
   transforms?: Record<string, ColumnTransform>;
+  /** Keep only rows whose value(s) in these columns are duplicated in the dataset. */
+  duplicates?: { columns: string[] } | null;
 }
 
 export const EMPTY_VIEW: ViewSpec = {
