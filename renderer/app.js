@@ -4014,12 +4014,17 @@ async function updateSource() {
   if (!e || e.pseudo) return;
   $('source-title').textContent = 'Source — loading…';
   try {
-    const res = await window.oxj.query(t.id, { op: 'subtree', node: e.id, budget: 50000 });
+    // Byte ceiling for the Source panel — 256 MB for every document (kept under
+    // V8's string limit so the IPC hops don't overflow).
+    const budget = 256 * 1024 * 1024;
+    const res = await window.oxj.query(t.id, { op: 'subtree', node: e.id, budget });
     if (t !== cur) return;
-    // Always pretty-print JSON in the Source pane — minified sources (e.g. API
-    // responses) are sliced raw by the engine, so reformat here.
+    // Pretty-print JSON — but only for reasonably sized text. The engine already
+    // pretty-prints reconstructed/minified subtrees, so for very large source we
+    // show it as-is rather than JSON.parse+stringify (which would spike memory
+    // and freeze the renderer).
     let text = res.text;
-    if (res.language === 'json' && !res.truncated) {
+    if (res.language === 'json' && !res.truncated && text.length < 8 * 1024 * 1024) {
       try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
     }
     $('source-title').textContent = 'Source — ' + (e.label || '') + ' (' + res.language.toUpperCase() + ')';

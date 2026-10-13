@@ -489,14 +489,15 @@ fn op_search(doc: &Doc, req: &Value) -> Result<Value, String> {
     Ok(json!({"items": page, "hasMore": has_more, "indexed": true, "total": total}))
 }
 
-const SUBTREE_MAX_BYTES: u32 = 30 * 1024 * 1024;
+// `budget` is now a BYTE ceiling on the reconstructed output, not a node count,
+// so the Source panel limit maps to what actually costs (bytes in the editor).
+// Each builder checks the growing output length against it.
 
 // XML: element windows only cover the tag name, so markup must be rebuilt
 // from the index. Raw windows are used for text/attribute values, keeping
 // the original escaping intact.
 fn build_xml_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
-    *budget -= 1;
-    if *budget < 0 {
+    if (out.len() as i64) > *budget {
         return Err(String::from("subtree too large to render as source"));
     }
     if indent > 512 {
@@ -519,7 +520,7 @@ fn build_xml_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &m
             for ch in doc.index.children(id) {
                 let c = doc.index.node(ch);
                 if c.kind == NodeKind::Attribute {
-                    *budget -= 1;
+                    if (out.len() as i64) > *budget { return Err(String::from("subtree too large to render as source")); }
                     let av = c.first_child;
                     out.push(' ');
                     out.push_str(&doc.raw_text(ch));
@@ -592,8 +593,7 @@ fn build_xml_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &m
 // CSV: record windows are the raw line, so rows are presented as JSON
 // objects ({header: value}) exactly like DB mode.
 fn build_csv_json(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
-    *budget -= 1;
-    if *budget < 0 {
+    if (out.len() as i64) > *budget {
         return Err(String::from("subtree too large to render as source"));
     }
     let n = doc.index.node(id);
@@ -626,7 +626,7 @@ fn build_csv_json(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &
             }
             out.push_str("{\n");
             for (i, k) in kids.iter().enumerate() {
-                *budget -= 1;
+                if (out.len() as i64) > *budget { return Err(String::from("subtree too large to render as source")); }
                 out.push_str(&pad);
                 out.push_str(&serde_json::to_string(&doc.key_name(*k)).unwrap_or_default());
                 out.push_str(": ");
@@ -660,8 +660,7 @@ fn build_csv_json(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &
 // Pretty-print JSON from the index using raw token windows: key order,
 // escapes and number formatting stay exactly as authored.
 fn build_json_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &mut i64) -> Result<(), String> {
-    *budget -= 1;
-    if *budget < 0 {
+    if (out.len() as i64) > *budget {
         return Err(String::from("subtree too large to render as source"));
     }
     if indent > 512 {
@@ -697,7 +696,7 @@ fn build_json_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &
             }
             out.push_str("{\n");
             for (i, k) in kids.iter().enumerate() {
-                *budget -= 1;
+                if (out.len() as i64) > *budget { return Err(String::from("subtree too large to render as source")); }
                 out.push_str(&pad);
                 out.push_str(&doc.raw_text(*k)); // key window includes quotes
                 out.push_str(": ");
@@ -749,7 +748,10 @@ fn build_json_mem(doc: &Doc, id: u32, out: &mut String, indent: usize, budget: &
 
 fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
     let node = node_arg(doc, req, "node")?;
-    let mut budget = geti(req, "budget", 50_000).clamp(100, 300_000);
+    // `budget` is a BYTE ceiling for the Source panel. The caller picks it
+    // (100 MB for local docs, higher/ungated for URL responses); the clamp's
+    // upper bound is near V8's single-string limit so one string never overflows.
+    let mut budget = geti(req, "budget", 30 * 1024 * 1024).clamp(4096, 256 * 1024 * 1024);
 
     // On budget exhaustion, show what was built plus a marker rather than
     // failing or dumping raw bytes — a formatted preview beats a wall of text.
@@ -790,7 +792,7 @@ fn op_subtree(doc: &Doc, req: &Value) -> Result<Value, String> {
         _ => node,
     };
     let t = doc.index.node(target);
-    if t.len > SUBTREE_MAX_BYTES {
+    if (t.len as i64) > budget {
         // Too big to show raw — containers still get a formatted preview.
         if matches!(t.kind, NodeKind::Object | NodeKind::Array | NodeKind::Document) {
             let mut out = String::new();
