@@ -5,6 +5,8 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeTheme, shell
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const readline = require('readline');
@@ -1311,46 +1313,82 @@ function buildMultipart(form) {
   return { body: Buffer.concat(chunks), contentType: 'multipart/form-data; boundary=' + boundary };
 }
 
-function httpRequest({ method, url, headers, body, form }) {
+// Send via Node's http/https stack (like curl/Postman) rather than Electron's
+// Chromium `net`, which rejects browser-copied requests (forbidden headers, some
+// bodies) with a generic ERR_FAILED. Node accepts any header and body, so a
+// cURL pasted from a browser's "copy as cURL" just works.
+function httpRequest({ method, url, headers, body, form }, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     const meth = String(method || 'GET').toUpperCase();
     const started = Date.now();
-    const tmp = path.join(downloadsDir(), 'url_' + Date.now());
-    const out = fs.createWriteStream(tmp);
-    // Multipart file upload: build the body and override Content-Type/Length.
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error('Invalid URL')); }
+    const lib = u.protocol === 'http:' ? http : https;
+
     let sendBody = body;
-    const hdrs = { ...(headers || {}) };
+    // Drop only hop-by-hop headers Node sets itself; everything else is sent
+    // verbatim (origin, sec-*, user-agent… are harmless and match the browser).
+    const hopByHop = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'keep-alive']);
+    const hdrs = {};
+    for (const [k, v] of Object.entries(headers || {})) if (!hopByHop.has(String(k).toLowerCase())) hdrs[k] = v;
     if (Array.isArray(form) && form.length) {
       let mp;
       try { mp = buildMultipart(form); } catch (e) { return reject(e); }
       sendBody = mp.body;
-      // Chromium's net manages Content-Length itself; setting it manually (or any
-      // forbidden header) triggers ERR_INVALID_ARGUMENT. Only set Content-Type.
-      for (const k of Object.keys(hdrs)) if (k.toLowerCase() === 'content-type' || k.toLowerCase() === 'content-length') delete hdrs[k];
+      for (const k of Object.keys(hdrs)) if (k.toLowerCase() === 'content-type') delete hdrs[k];
       hdrs['Content-Type'] = mp.contentType;
     }
-    let req;
-    try { req = net.request({ method: meth, url, redirect: 'follow' }); }
-    catch (e) { return reject(e); }
-    for (const [k, v] of Object.entries(hdrs)) { try { req.setHeader(k, v); } catch {} }
+    const hasBody = sendBody != null && sendBody.length !== 0 && meth !== 'GET' && meth !== 'HEAD';
+    if (hasBody) hdrs['Content-Length'] = Buffer.byteLength(sendBody);
+
+    const tmp = path.join(downloadsDir(), 'url_' + Date.now());
+    const out = fs.createWriteStream(tmp);
     let settled = false;
     const fail = (e) => { if (settled) return; settled = true; clearTimeout(timer); try { out.destroy(); } catch {} try { fs.unlinkSync(tmp); } catch {} reject(e); };
-    const timer = setTimeout(() => { try { req.abort(); } catch {} fail(new Error('request timed out')); }, 60000);
-    req.on('response', (res) => {
-      res.on('data', (d) => out.write(d));
-      res.on('error', fail);
-      res.on('end', () => out.end(() => {
-        if (settled) return; settled = true; clearTimeout(timer);
-        const ext = extForResponse(hdr1(res.headers, 'content-type'), tmp, '.txt');
-        const final = tmp + ext;
-        try { fs.renameSync(tmp, final); } catch {}
-        let size = 0;
-        try { size = fs.statSync(final).size; } catch {}
-        resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
-      }));
-    });
+
+    let req;
+    try {
+      req = lib.request({
+        method: meth,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'http:' ? 80 : 443),
+        path: u.pathname + u.search,
+        headers: hdrs,
+      }, (res) => {
+        // Follow redirects (POST → GET on 301/302/303, per browsers/curl).
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          try { out.destroy(); } catch {}
+          try { fs.unlinkSync(tmp); } catch {}
+          settled = true; clearTimeout(timer);
+          const nextUrl = new URL(res.headers.location, u).toString();
+          const toGet = res.statusCode === 303 || ((res.statusCode === 301 || res.statusCode === 302) && meth === 'POST');
+          resolve(httpRequest({
+            method: toGet ? 'GET' : meth,
+            url: nextUrl,
+            headers,
+            body: toGet ? '' : body,
+            form: toGet ? null : form,
+          }, redirectsLeft - 1));
+          return;
+        }
+        res.on('data', (d) => out.write(d));
+        res.on('error', fail);
+        res.on('end', () => out.end(() => {
+          if (settled) return; settled = true; clearTimeout(timer);
+          const ext = extForResponse(hdr1(res.headers, 'content-type'), tmp, '.txt');
+          const final = tmp + ext;
+          try { fs.renameSync(tmp, final); } catch {}
+          let size = 0;
+          try { size = fs.statSync(final).size; } catch {}
+          resolve({ file: final, status: res.statusCode, statusText: res.statusMessage || '', timeMs: Date.now() - started, headers: res.headers, size });
+        }));
+      });
+    } catch (e) { return fail(e); }
+
+    const timer = setTimeout(() => { try { req.destroy(); } catch {} fail(new Error('request timed out')); }, 60000);
     req.on('error', fail);
-    if (sendBody != null && sendBody.length !== 0 && meth !== 'GET' && meth !== 'HEAD') req.write(sendBody);
+    if (hasBody) req.write(sendBody);
     req.end();
   });
 }

@@ -4808,12 +4808,40 @@ async function performRequest(reqState, target) {
       toast('HTTP ' + res.status + ' ' + (res.statusText || '').trim(), false);
     }
   } catch (e) {
-    // Transport-level failure (bad URL, DNS, timeout…): keep everything in place.
-    setReqStatus('Request failed: ' + cleanErr(e) + ' — check the URL and resend.', 'err');
-    toast('Request failed: ' + cleanErr(e));
+    // Transport-level failure (bad URL, DNS, TLS, timeout…): keep everything in
+    // place, and offer the full details in a read-only tab.
+    const msg = cleanErr(e);
+    setReqStatus('Request failed: ' + msg + ' — edit and resend, or ', 'err', {
+      label: 'view details',
+      onClick: () => openRequestErrorTab(method, canonUrl, sendHeaders, body, e),
+    });
+    toast('Request failed: ' + msg);
   } finally {
     if (sendBtn) sendBtn.disabled = false;
   }
+}
+
+// Open a read-only tab describing a failed request (error + what was sent),
+// so a transport failure isn't just a one-line toast.
+async function openRequestErrorTab(method, url, headers, body, err) {
+  try {
+    const em = (err && (err.message || err.code)) ? ((err.code ? err.code + ': ' : '') + (err.message || '')) : String(err);
+    const lines = [
+      'REQUEST FAILED',
+      '',
+      (method || 'GET') + ' ' + url,
+      '',
+      'Error: ' + em,
+      '',
+      'Headers sent:',
+      ...((headers || []).length ? headers.map((h) => '  ' + h.key + ': ' + (h.value != null ? h.value : '')) : ['  (none)']),
+      '',
+      body ? ('Body (' + String(body).length + ' chars):\n' + (String(body).length > 2000 ? String(body).slice(0, 2000) + '\n… (truncated)' : String(body))) : '(no body)',
+    ];
+    const file = await window.oxj.textToFile('request-error', 'txt', lines.join('\n'));
+    const nt = newTab(true);
+    if (nt) openPath(file, nt);
+  } catch (e) { toast(cleanErr(e)); }
 }
 
 async function sendRequest() {
